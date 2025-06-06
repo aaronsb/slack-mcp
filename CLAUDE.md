@@ -144,7 +144,7 @@ Tools implement **self-deprecating recommendations** - basic tools actively sugg
 **Act Phase Tools**:
 - `find-discussion`: Deep thread exploration and search functionality
 - `mark-as-read`: Bulk read state management with scope controls
-- Future: `write-message` - Message composition and sending tools
+- `write-message`: Send messages to channels, DMs, or threads with smart user/channel resolution
 
 ### OODA Loop Workflow Examples
 
@@ -152,7 +152,7 @@ Tools implement **self-deprecating recommendations** - basic tools actively sugg
 1. **Observe**: `check-unreads` → detects unread DMs and mentions
 2. **Orient**: Enhanced tool shows actual message content with count-based windowing
 3. **Decide**: `decide-next-action` → analyzes context and suggests response approach
-4. **Act**: `write-message` → compose and send appropriate response (planned)
+4. **Act**: `write-message` → compose and send appropriate response
 
 **Count-based Reading Policy**:
 - **1-3 unread**: Read full content + context → Auto-mark as read (full consumption)
@@ -161,6 +161,13 @@ Tools implement **self-deprecating recommendations** - basic tools actively sugg
 - **50+ unread**: Overview + pagination → Keep unread (surface-level awareness)
 
 This policy ensures reading correlates with actual content consumption and prevents accidentally "clearing" conversations that haven't been fully processed.
+
+**Write-Message Features**:
+- **Smart Resolution**: Works with channel names (`#general`), usernames (`clayton.chancey`), or IDs
+- **DM Support**: Automatically opens DM conversations when given usernames
+- **Thread Support**: Reply to existing threads with `threadTs` parameter
+- **Contextual Next Actions**: Suggests follow-up actions like checking for responses
+- **Security**: Uses cached channel mappings to avoid exposing internal IDs
 
 ### Environment Variables
 
