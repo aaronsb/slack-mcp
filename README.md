@@ -400,4 +400,9 @@ curl -H "Authorization: Bearer YOUR_API_KEY" https://localhost:3001/sse
 
 ## License
 
-Licensed under MIT - see [LICENSE](LICENSE) file. This is not an official Slack product.
+This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+
+- Original slack-mcp-server: Copyright (c) 2025 Dmitrii Korotovskii
+- Semantic OODA loop enhancements: Copyright (c) 2025 Aaron Bockelie
+
+This is not an official Slack product.
