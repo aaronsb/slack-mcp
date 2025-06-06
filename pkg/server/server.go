@@ -2,8 +2,8 @@ package server
 
 import (
 	"fmt"
-	"github.com/korotovsky/slack-mcp-server/pkg/handler"
-	"github.com/korotovsky/slack-mcp-server/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/handler"
+	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -50,6 +50,10 @@ func NewMCPServer(provider *provider.ApiProvider) *MCPServer {
 		),
 		mcp.WithString("sort",
 			mcp.Description("Type of sorting. Allowed values: 'popularity' - sort by number of members/participants in each channel."),
+		),
+		mcp.WithNumber("limit",
+			mcp.DefaultNumber(100),
+			mcp.Description("Maximum number of channels to return (default: 100, max: 1000)."),
 		),
 	), channelsHandler.ChannelsHandler)
 

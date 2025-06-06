@@ -1,4 +1,4 @@
-module github.com/korotovsky/slack-mcp-server
+module github.com/aaronsb/slack-mcp
 
 go 1.23.0
 
@@ -7,6 +7,7 @@ toolchain go1.23.5
 require (
 	github.com/bbalet/stopwords v1.0.0
 	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1
+	github.com/joho/godotenv v1.5.1
 	github.com/mark3labs/mcp-go v0.20.0
 	github.com/slack-go/slack v0.16.0
 )

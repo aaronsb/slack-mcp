@@ -8,7 +8,7 @@ PACKAGE = $(shell go list -m)
 GIT_COMMIT_HASH = $(shell git rev-parse HEAD)
 GIT_VERSION = $(shell git describe --tags --always --dirty)
 BUILD_TIME = $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
-BINARY_NAME = slack-mcp-server
+BINARY_NAME = slack-mcp
 LD_FLAGS = -s -w \
 	-X '$(PACKAGE)/pkg/version.CommitHash=$(GIT_COMMIT_HASH)' \
 	-X '$(PACKAGE)/pkg/version.Version=$(GIT_VERSION)' \
@@ -45,7 +45,7 @@ clean: ## Clean up all build artifacts
 
 .PHONY: build
 build: clean tidy format ## Build the project
-	go build $(COMMON_BUILD_ARGS) -o ./build/$(BINARY_NAME) ./cmd/slack-mcp-server
+	go build $(COMMON_BUILD_ARGS) -o ./build/$(BINARY_NAME) ./cmd/slack-mcp
 
 
 .PHONY: build-all-platforms

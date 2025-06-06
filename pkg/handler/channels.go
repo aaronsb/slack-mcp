@@ -3,8 +3,8 @@ package handler
 import (
 	"context"
 	"fmt"
+	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/gocarina/gocsv"
-	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/slack-go/slack"
 	"log"
@@ -36,6 +36,18 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 	sortType := request.Params.Arguments["sort"]
 	if sortType == "" || sortType == nil {
 		sortType = "popularity"
+	}
+
+	// Get limit parameter
+	limit := 100
+	if limitParam, ok := request.Params.Arguments["limit"].(float64); ok {
+		limit = int(limitParam)
+		if limit > 1000 {
+			limit = 1000
+		}
+		if limit < 1 {
+			limit = 1
+		}
 	}
 
 	types, ok := request.Params.Arguments["channel_types"].([]interface{})
@@ -76,15 +88,25 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 		)
 
 		chans, nextcur, err = api.GetConversationsContext(ctx, params)
+		if err != nil {
+			return nil, err
+		}
 
-		if nextcur == "" {
-			log.Printf("channels fetch complete %v", total)
+		channels = append(channels, chans...)
+		total += len(chans)
+
+		// Stop if we've collected enough channels or no more pages
+		if len(channels) >= limit || nextcur == "" {
+			log.Printf("channels fetch complete, collected %d channels", len(channels))
 			break
 		}
 
 		params.Cursor = nextcur
+	}
 
-		channels = append(channels, chans...)
+	// Trim to limit if we got more than requested
+	if len(channels) > limit {
+		channels = channels[:limit]
 	}
 
 	var channelList []Channel

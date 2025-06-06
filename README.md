@@ -6,22 +6,31 @@ Model Context Protocol (MCP) server for Slack Workspaces. This integration suppo
 
 ![ezgif-316311ee04f444](https://github.com/user-attachments/assets/35dc9895-e695-4e56-acdc-1a46d6520ba0)
 
-## Tools
+## Semantic Tools
 
-1. `conversations_history`
-  - Get messages from the channel by channelID
-  - Required inputs:
-    - `channel_id` (string): ID of the channel in format Cxxxxxxxxxx.
-    - `cursor` (string): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
-    - `limit` (number, default: 28): Limit of messages to fetch.
-  - Returns: List of messages with timestamps, user IDs, and text content
+This server implements a semantic, intent-based interface for Slack. Instead of raw API operations, it provides natural tools that understand what users want to accomplish:
 
-2. `channels_list`
-  - Get list of channels
-  - Required inputs:
-    - `channel_types` (array): Possible channel types. Allowed values: 'mpim', 'im', 'public_channel', 'private_channel'.
-    - `sort` (string): Type of sorting. Allowed values: 'popularity' - sort by number of members/participants in each channel.
-  - Returns: List of channels
+1. **`check-unreads`** - "What do I need to pay attention to?"
+   - Shows unread DMs, mentions, and channel activity
+   - Uses internal Slack endpoints for accurate counts
+   - Groups results by importance
+
+2. **`catch-up-on-channel`** - "Show me what happened in [channel]"
+   - Accepts channel names (not just IDs)
+   - Time-based filtering (e.g., "7d", "24h")
+   - Highlights important messages (reactions, threads, mentions)
+
+3. **`check-my-mentions`** - "Where am I mentioned?"
+   - Scans channels for your mentions
+   - Categorizes by urgency
+   - Shows if you've already responded
+
+4. **`find-discussion`** - "Find conversations about [topic]"
+   - Natural language search across messages
+   - Returns relevant threads and decisions
+   - (Currently in development)
+
+For technical details about the semantic architecture, see [docs/semantic-tool-architecture.md](docs/semantic-tool-architecture.md).
 
 ## Setup Guide
 

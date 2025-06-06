@@ -5,21 +5,25 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"github.com/korotovsky/slack-mcp-server/pkg/transport"
+	"github.com/aaronsb/slack-mcp/pkg/transport"
 	"github.com/slack-go/slack"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 )
 
 type ApiProvider struct {
-	boot   func() *slack.Client
-	client *slack.Client
+	boot           func() *slack.Client
+	client         *slack.Client
+	internalClient *InternalClient
 
-	users      map[string]slack.User
-	usersCache string
+	users         map[string]slack.User
+	usersCache    string
+	channels      map[string]slack.Channel  // Channel ID -> Channel info
+	channelsMutex sync.RWMutex
 }
 
 func New() *ApiProvider {
@@ -57,8 +61,10 @@ func New() *ApiProvider {
 
 			return api
 		},
-		users:      make(map[string]slack.User),
-		usersCache: cache,
+		internalClient: NewInternalClient(token, cookie),
+		users:          make(map[string]slack.User),
+		usersCache:     cache,
+		channels:       make(map[string]slack.Channel),
 	}
 }
 
@@ -118,6 +124,50 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 
 func (ap *ApiProvider) ProvideUsersMap() map[string]slack.User {
 	return ap.users
+}
+
+func (ap *ApiProvider) ProvideInternalClient() *InternalClient {
+	return ap.internalClient
+}
+
+// GetChannelInfo gets channel info with caching
+func (ap *ApiProvider) GetChannelInfo(ctx context.Context, channelID string) (*slack.Channel, error) {
+	// Check cache first
+	ap.channelsMutex.RLock()
+	if ch, ok := ap.channels[channelID]; ok {
+		ap.channelsMutex.RUnlock()
+		return &ch, nil
+	}
+	ap.channelsMutex.RUnlock()
+
+	// Not in cache, fetch from API
+	client, err := ap.Provide()
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := client.GetConversationInfo(&slack.GetConversationInfoInput{
+		ChannelID: channelID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	ap.channelsMutex.Lock()
+	ap.channels[channelID] = *info
+	ap.channelsMutex.Unlock()
+
+	return info, nil
+}
+
+// ResolveChannelName resolves a channel ID to a name using cache
+func (ap *ApiProvider) ResolveChannelName(ctx context.Context, channelID string) string {
+	info, err := ap.GetChannelInfo(ctx, channelID)
+	if err != nil {
+		return channelID // Return ID if can't resolve
+	}
+	return info.Name
 }
 
 func withHTTPClientOption(cookie string) func(c *slack.Client) {

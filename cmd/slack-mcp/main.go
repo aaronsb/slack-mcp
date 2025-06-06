@@ -2,8 +2,9 @@ package main
 
 import (
 	"flag"
-	"github.com/korotovsky/slack-mcp-server/pkg/provider"
-	"github.com/korotovsky/slack-mcp-server/pkg/server"
+	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/server"
+	"github.com/joho/godotenv"
 	"log"
 	"os"
 	"strconv"
@@ -13,6 +14,12 @@ var defaultSseHost = "127.0.0.1"
 var defaultSsePort = 13080
 
 func main() {
+	// Load .env file if it exists
+	if err := godotenv.Load(); err != nil {
+		// It's okay if .env doesn't exist
+		log.Println("No .env file found, using environment variables")
+	}
+
 	var transport string
 	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio or sse)")
 	flag.StringVar(&transport, "transport", "stdio", "Transport type (stdio or sse)")
@@ -20,9 +27,7 @@ func main() {
 
 	p := provider.New()
 
-	s := server.NewMCPServer(
-		p,
-	)
+	s := server.NewSemanticMCPServer(p)
 
 	go func() {
 		log.Println("Booting provider...")
