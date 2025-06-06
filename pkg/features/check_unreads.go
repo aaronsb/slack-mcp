@@ -33,7 +33,7 @@ var CheckUnreads = &Feature{
 			},
 		},
 	},
-	Handler: checkUnreadsSimple,
+	Handler: checkUnreadsReal,
 }
 
 func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {

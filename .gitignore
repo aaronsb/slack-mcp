@@ -1,6 +1,7 @@
 .idea
 .env
 .users_cache.json
+.channels_cache.json
 /build/slack-mcp-server-*
 /npm/slack-mcp-server-*/bin/slack-mcp-server-*
 /npm/slack-mcp-server-*/.npmrc

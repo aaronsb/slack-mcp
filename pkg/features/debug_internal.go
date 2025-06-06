@@ -16,7 +16,7 @@ var DebugInternal = &Feature{
 		"properties": map[string]interface{}{
 			"endpoint": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"counts", "boot", "both"},
+				"enum":        []string{"counts", "boot", "both", "channels"},
 				"description": "Which internal endpoint to test",
 				"default":     "counts",
 			},
@@ -67,32 +67,45 @@ func debugInternalHandler(ctx context.Context, params map[string]interface{}) (*
 			totalChannelUnreads := 0
 			totalMentions := 0
 			totalDMs := 0
-			
+
 			for _, ch := range counts.Channels {
 				if ch.HasUnreads {
 					totalChannelUnreads++
 				}
 				totalMentions += ch.MentionCount
 			}
-			
+
 			for _, im := range counts.IMs {
 				if im.HasUnreads && im.MentionCount > 0 {
 					totalDMs++
 				}
 			}
-			
+
 			result.Data.(map[string]interface{})["counts"] = map[string]interface{}{
-				"ok":                  counts.OK,
-				"error":               counts.Error,
-				"total_channels":      len(counts.Channels),
+				"ok":                    counts.OK,
+				"error":                 counts.Error,
+				"total_channels":        len(counts.Channels),
 				"channels_with_unreads": totalChannelUnreads,
-				"total_mentions":      totalMentions,
-				"total_dms":           totalDMs,
-				"thread_unreads":      counts.Threads.UnreadCount,
-				"thread_mentions":     counts.Threads.MentionCount,
-				"channel_badges":      counts.ChannelBadges,
-				"sample_channels":     getSampleChannels(counts),
+				"total_mentions":        totalMentions,
+				"total_dms":             totalDMs,
+				"thread_unreads":        counts.Threads.UnreadCount,
+				"thread_mentions":       counts.Threads.MentionCount,
+				"channel_badges":        counts.ChannelBadges,
+				"sample_channels":       getSampleChannels(counts),
 			}
+		}
+	}
+
+	// Test channel name mappings
+	if endpoint == "channels" {
+		log.Println("Testing channel name mappings...")
+
+		// Check if strgy_ford is in the mapping
+		channelID := apiProvider.ResolveChannelID("strgy_ford")
+
+		result.Data.(map[string]interface{})["channel_debug"] = map[string]interface{}{
+			"strgy_ford_resolves_to": channelID,
+			"mapping_exists":         channelID != "strgy_ford",
 		}
 	}
 
@@ -107,14 +120,14 @@ func debugInternalHandler(ctx context.Context, params map[string]interface{}) (*
 			// Count channels with unreads
 			channelsWithUnreads := 0
 			totalUnreads := 0
-			
+
 			for _, ch := range boot.Channels {
 				if ch.UnreadCount > 0 {
 					channelsWithUnreads++
 					totalUnreads += ch.UnreadCount
 				}
 			}
-			
+
 			result.Data.(map[string]interface{})["boot"] = map[string]interface{}{
 				"ok":                    boot.OK,
 				"error":                 boot.Error,
@@ -143,7 +156,7 @@ func debugInternalHandler(ctx context.Context, params map[string]interface{}) (*
 func getSampleChannels(counts *provider.ClientCountsResponse) []map[string]interface{} {
 	samples := []map[string]interface{}{}
 	count := 0
-	
+
 	for _, ch := range counts.Channels {
 		if ch.HasUnreads && count < 5 {
 			samples = append(samples, map[string]interface{}{
@@ -154,6 +167,6 @@ func getSampleChannels(counts *provider.ClientCountsResponse) []map[string]inter
 			count++
 		}
 	}
-	
+
 	return samples
 }

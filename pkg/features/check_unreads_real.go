@@ -97,7 +97,31 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	if focus == "all" || focus == "dms" {
 		dmCount := 0
 		for _, im := range counts.IMs {
-			if im.HasUnreads && im.MentionCount > 0 && dmCount < limit {
+			if im.HasUnreads && dmCount < limit {
+				// Implement count-based windowing for DMs
+				var fetchCount int
+				shouldMarkAsRead := false
+
+				// Use mention count as proxy for unread count, default to 1 if no mentions
+				unreadCount := im.MentionCount
+				if unreadCount == 0 {
+					unreadCount = 1 // Assume at least 1 unread if HasUnreads is true
+				}
+
+				if unreadCount <= 3 {
+					fetchCount = 5 // Get context
+					shouldMarkAsRead = true
+				} else if unreadCount <= 15 {
+					fetchCount = 20 // Get full context
+					shouldMarkAsRead = true
+				} else if unreadCount <= 50 {
+					fetchCount = 25 // Sample only
+					shouldMarkAsRead = false
+				} else {
+					fetchCount = 15 // Surface level
+					shouldMarkAsRead = false
+				}
+
 				// Get channel info for user details
 				info, err := api.GetConversationInfo(&slack.GetConversationInfoInput{
 					ChannelID: im.ID,
@@ -107,10 +131,10 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					continue
 				}
 
-				// Get last message for preview
+				// Get messages based on count-based windowing
 				histParams := &slack.GetConversationHistoryParameters{
 					ChannelID: im.ID,
-					Limit:     1,
+					Limit:     fetchCount,
 				}
 				resp, err := api.GetConversationHistoryContext(ctx, histParams)
 				if err != nil {
@@ -119,9 +143,24 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				}
 
 				if len(resp.Messages) > 0 {
-					msg := resp.Messages[0]
 					authorName := getUserName(info.User, usersMap)
-					isUrgent := categorizeUrgency(msg.Text) == "high"
+
+					// Collect all messages for this DM
+					var messages []map[string]interface{}
+					var isUrgent bool
+
+					for _, msg := range resp.Messages {
+						msgUrgent := categorizeUrgency(msg.Text) == "high"
+						if msgUrgent {
+							isUrgent = true
+						}
+
+						messages = append(messages, map[string]interface{}{
+							"text":      msg.Text,
+							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
+							"user":      getUserName(msg.User, usersMap),
+						})
+					}
 
 					if isUrgent {
 						stats["urgent"] = stats["urgent"].(int) + 1
@@ -130,16 +169,33 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					dm := map[string]interface{}{
 						"type":        "dm",
 						"author":      authorName,
-						"message":     msg.Text,
-						"timestamp":   formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
-						"channelId":   im.ID,
-						"unreadCount": im.MentionCount,
+						"messages":    messages,
+						"unreadCount": unreadCount,
 						"urgent":      isUrgent,
+						"windowSize":  len(messages),
+						"readPolicy":  shouldMarkAsRead,
+					}
+
+					// Add summary for large message counts
+					if len(messages) > 15 {
+						dm["summary"] = fmt.Sprintf("Conversation with %d unread messages, showing recent %d", unreadCount, len(messages))
 					}
 
 					unreads["dms"] = append(unreads["dms"].([]map[string]interface{}), dm)
 					stats["totalDMs"] = stats["totalDMs"].(int) + 1
 					dmCount++
+
+					// Auto-mark as read if policy allows
+					if shouldMarkAsRead {
+						// Mark the DM as read up to the latest message
+						latestTimestamp := resp.Messages[0].Timestamp
+						err = api.MarkConversation(im.ID, latestTimestamp)
+						if err != nil {
+							log.Printf("Failed to mark DM as read for %s: %v", im.ID, err)
+						} else {
+							log.Printf("Auto-marked DM with %s as read (%d messages)", authorName, unreadCount)
+						}
+					}
 				}
 			}
 		}
@@ -148,7 +204,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	// Process channels with mentions
 	if focus == "all" || focus == "mentions" {
 		mentionCount := 0
-		
+
 		// First check MPIMs for mentions
 		for _, mpim := range counts.MPIMs {
 			if mpim.MentionCount > 0 && mentionCount < limit {
@@ -201,7 +257,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				}
 			}
 		}
-		
+
 		// Then check regular channels
 		for _, ch := range counts.Channels {
 			if ch.MentionCount > 0 && mentionCount < limit {

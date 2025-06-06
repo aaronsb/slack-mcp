@@ -107,7 +107,7 @@ func checkUnreadsSimple(ctx context.Context, params map[string]interface{}) (*Fe
 						dmName = info.Name
 					}
 				}
-				
+
 				dm := map[string]interface{}{
 					"type":        "dm",
 					"from":        dmName,
@@ -123,7 +123,7 @@ func checkUnreadsSimple(ctx context.Context, params map[string]interface{}) (*Fe
 	// Process mentions summary
 	if focus == "all" || focus == "mentions" {
 		mentionCount := 0
-		
+
 		// Channels with mentions
 		for _, ch := range counts.Channels {
 			if ch.MentionCount > 0 && mentionCount < 10 {
@@ -172,8 +172,8 @@ func checkUnreadsSimple(ctx context.Context, params map[string]interface{}) (*Fe
 		},
 		Message: fmt.Sprintf("Found %d DMs, %d mentions, %d channels with unreads",
 			stats["totalDMs"], stats["totalMentions"], stats["totalChannels"]),
-		ResultCount: len(unreads["dms"].([]map[string]interface{})) + 
-			len(unreads["mentions"].([]map[string]interface{})) + 
+		ResultCount: len(unreads["dms"].([]map[string]interface{})) +
+			len(unreads["mentions"].([]map[string]interface{})) +
 			len(unreads["channels"].([]map[string]interface{})),
 	}
 
@@ -205,13 +205,13 @@ func checkUnreadsSimple(ctx context.Context, params map[string]interface{}) (*Fe
 		// Get first channel name as example
 		firstMention := unreads["mentions"].([]map[string]interface{})[0]
 		channelName := firstMention["channel"].(string)
-		result.NextActions = append(result.NextActions, 
+		result.NextActions = append(result.NextActions,
 			fmt.Sprintf("Use 'catch-up-on-channel' with channel='%s' to see the messages", channelName))
 	}
 	if len(unreads["dms"].([]map[string]interface{})) > 0 {
 		firstDM := unreads["dms"].([]map[string]interface{})[0]
 		dmName := firstDM["from"].(string)
-		result.NextActions = append(result.NextActions, 
+		result.NextActions = append(result.NextActions,
 			fmt.Sprintf("Check DM from %s - they have %d unread messages", dmName, firstDM["unreadCount"]))
 	}
 

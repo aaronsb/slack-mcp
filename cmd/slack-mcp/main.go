@@ -29,20 +29,22 @@ func main() {
 
 	s := server.NewSemanticMCPServer(p)
 
+	// Boot provider asynchronously after server starts
 	go func() {
-		log.Println("Booting provider...")
+		log.Println("Booting provider in background...")
 
 		if os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo" {
-			log.Println("Demo credentials are set, skip.")
+			log.Println("Demo credentials are set, skip provider boot.")
 			return
 		}
 
 		_, err := p.Provide()
 		if err != nil {
-			log.Fatalf("Error booting provider: %v", err)
+			log.Printf("Warning: Provider boot failed: %v", err)
+			log.Println("Some features may be limited until cache is loaded")
+		} else {
+			log.Println("Provider booted successfully in background")
 		}
-
-		log.Println("Provider booted successfully.")
 	}()
 
 	switch transport {

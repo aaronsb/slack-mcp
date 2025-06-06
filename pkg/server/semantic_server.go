@@ -44,7 +44,10 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	registry.Register(features.CheckMyMentions)
 	registry.Register(features.FindDiscussion)
 	registry.Register(features.CheckUnreads)
-	
+	registry.Register(features.MarkAsRead)
+	registry.Register(features.ListChannels)
+	registry.Register(features.DecideNextAction)
+
 	// Debug tool (only in development)
 	if os.Getenv("SLACK_MCP_DEBUG") == "true" {
 		registry.Register(features.DebugInternal)

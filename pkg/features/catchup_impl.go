@@ -60,22 +60,16 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		}, nil
 	}
 
-	// Find channel by name or use ID directly
-	channelID := channel
-	if !strings.HasPrefix(channel, "C") && !strings.HasPrefix(channel, "D") && !strings.HasPrefix(channel, "G") {
-		// Try to find channel by name
-		channels, _, err := api.GetConversations(&slack.GetConversationsParameters{
-			Types: []string{"public_channel", "private_channel"},
-			Limit: 1000,
-		})
-		if err == nil {
-			for _, ch := range channels {
-				if ch.Name == channel || ch.Name == "#"+channel || ch.Name == strings.TrimPrefix(channel, "#") {
-					channelID = ch.ID
-					break
-				}
-			}
-		}
+	// Find channel by name using provider's cache or use ID directly
+	cleanName := strings.TrimPrefix(channel, "#")
+	channelID := provider.ResolveChannelID(cleanName)
+
+	// If the resolved ID is the same as input, it means the channel wasn't found in cache
+	if channelID == cleanName && !strings.HasPrefix(channelID, "C") && !strings.HasPrefix(channelID, "D") && !strings.HasPrefix(channelID, "G") {
+		return &FeatureResult{
+			Success: false,
+			Message: fmt.Sprintf("Channel '%s' not found. Use list-channels to see available channels.", channel),
+		}, nil
 	}
 
 	// Fetch messages from channel
@@ -128,7 +122,6 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		Success: true,
 		Data: map[string]interface{}{
 			"channel":        channel,
-			"channelId":      channelID,
 			"period":         since,
 			"importantItems": importantItems,
 			"statistics":     stats,

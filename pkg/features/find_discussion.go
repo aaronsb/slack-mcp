@@ -47,7 +47,7 @@ var FindDiscussion = &Feature{
 		},
 		"required": []string{},
 	},
-	Handler: findDiscussionHandler, // TODO: Switch to findDiscussionHandlerImpl
+	Handler: findDiscussionHandlerImpl,
 }
 
 func findDiscussionHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
