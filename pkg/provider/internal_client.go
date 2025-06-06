@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -168,7 +169,7 @@ type SearchModulesResponse struct {
 
 	Messages struct {
 		Total   int `json:"total"`
-		Results []struct {
+		Matches []struct {
 			Type    string `json:"type"`
 			Channel struct {
 				ID   string `json:"id"`
@@ -187,7 +188,7 @@ func (c *InternalClient) SearchMessages(ctx context.Context, query string, extra
 	params := url.Values{
 		"query":     {query},
 		"module":    {"messages"},
-		"count":     {"20"},
+		"count":     {"100"},
 		"highlight": {"1"},
 		"sort":      {"timestamp"},
 		"sort_dir":  {"desc"},
@@ -200,6 +201,13 @@ func (c *InternalClient) SearchMessages(ctx context.Context, query string, extra
 
 	result := &SearchModulesResponse{}
 	err := c.callInternalAPI(ctx, "/api/search.modules", params, result)
+	
+	// Debug logging
+	log.Printf("Search query: %s", query)
+	log.Printf("Search response - Total: %d, Matches: %d", result.Messages.Total, len(result.Messages.Matches))
+	if result.Error != "" {
+		log.Printf("Search error: %s", result.Error)
+	}
 	return result, err
 }
 

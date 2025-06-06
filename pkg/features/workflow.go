@@ -192,8 +192,13 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 			}
 		}
 
-		suggest("find-discussion query='[topic]'")
 		suggest("check-unreads")
+		// Search as a secondary option after primary OODA actions
+		if data, ok := result.Data.(map[string]interface{}); ok {
+			if channels, ok := data["channels"].([]map[string]interface{}); ok && len(channels) > 10 {
+				suggest("Can't find a channel? find-discussion query='[topic]' to search across all")
+			}
+		}
 	}
 
 	// Limit to 4 suggestions max

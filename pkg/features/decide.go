@@ -67,8 +67,8 @@ func decideNextActionHandler(ctx context.Context, params map[string]interface{})
 	if strings.Contains(contextLower, "thread") || strings.Contains(contextLower, "discussion") {
 		analysis = append(analysis, "• Active threads or discussions identified")
 		if focus == "all" || focus == "threads" {
-			recommendations = append(recommendations, "Explore specific threads for detailed context")
-			nextActions = append(nextActions, "find-discussion query='<specific_topic>'")
+			recommendations = append(recommendations, "Continue with OODA flow to gather context")
+			nextActions = append(nextActions, "catch-up-on-channel channel='<channel_with_thread>'")
 		}
 	}
 
@@ -101,6 +101,14 @@ func decideNextActionHandler(ctx context.Context, params map[string]interface{})
 	if len(recommendations) > 0 {
 		recommendations = append(recommendations, "Mark items as read after reviewing to maintain clean state")
 		nextActions = append(nextActions, "mark-as-read target='<specific_target>'")
+	}
+	
+	// Add contextual search hint when user mentions looking for something
+	if strings.Contains(contextLower, "looking for") || strings.Contains(contextLower, "find") || 
+	   strings.Contains(contextLower, "search") || strings.Contains(contextLower, "specific") {
+		analysis = append(analysis, "• Specific information need detected")
+		recommendations = append(recommendations, "Use search for targeted discovery")
+		nextActions = append(nextActions, "Alternative path: find-discussion query='<what_you_need>'")
 	}
 
 	// Build decision reflection

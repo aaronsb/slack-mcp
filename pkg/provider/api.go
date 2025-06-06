@@ -55,13 +55,22 @@ func New() *ApiProvider {
 			api := slack.New(token,
 				withHTTPClientOption(cookie),
 			)
-			res, err := api.AuthTest()
+			
+			// Create a context with timeout for auth test
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			
+			res, err := api.AuthTestContext(ctx)
 			if err != nil {
-				panic(err)
-			} else {
-				log.Printf("Authenticated as: %s\n", res)
+				log.Printf("ERROR: Slack authentication failed: %v", err)
+				log.Printf("Please check your SLACK_MCP_XOXC_TOKEN and SLACK_MCP_XOXD_TOKEN")
+				// Return the API client anyway - some operations might still work
+				return api
 			}
+			
+			log.Printf("Authenticated as: %s\n", res)
 
+			// Create new client with team-specific endpoint
 			api = slack.New(token,
 				withHTTPClientOption(cookie),
 				withTeamEndpointOption(res.URL),

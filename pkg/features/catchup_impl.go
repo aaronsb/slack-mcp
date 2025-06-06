@@ -150,15 +150,16 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 			}
 		}
 		
-		if hasThreads || len(importantItems) < 3 {
-			result.NextActions = append(result.NextActions,
-				"Search for related discussions: find-discussion query='<topic>' in:"+channel)
-		}
-		
-		// Standard next actions
+		// Primary OODA flow actions first
 		result.NextActions = append(result.NextActions,
 			"Check mentions across channels: check-my-mentions",
 			"Plan your response: decide-next-action context='Caught up on "+channel+"'")
+		
+		// If we found specific topics worth exploring, suggest contextual search
+		if hasThreads || len(importantItems) < 3 {
+			result.NextActions = append(result.NextActions,
+				"For specific topics: find-discussion query='<topic>' in:"+channel)
+		}
 		
 		// If there are active threads, suggest responding
 		if hasThreads {
@@ -168,9 +169,9 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	} else {
 		result.Guidance = "✅ No important activity in this time period"
 		result.NextActions = []string{
-			"Search for specific topics: find-discussion query='<topic>' in:"+channel,
 			"Try a longer timeframe: catch-up-on-channel channel='"+channel+"' since='1w'",
 			"Check other channels: list-channels filter='with-unreads'",
+			"Search for older discussions: find-discussion query='<topic>' in:"+channel+" timeframe='1m'",
 		}
 	}
 

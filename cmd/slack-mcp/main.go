@@ -5,6 +5,7 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/server"
 	"github.com/joho/godotenv"
+	"io/ioutil"
 	"log"
 	"os"
 	"strconv"
@@ -14,16 +15,28 @@ var defaultSseHost = "127.0.0.1"
 var defaultSsePort = 13080
 
 func main() {
+	var transport string
+	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio or sse)")
+	flag.StringVar(&transport, "transport", "stdio", "Transport type (stdio or sse)")
+	flag.Parse()
+
+	// For stdio transport, redirect logs to a file to avoid interfering with protocol
+	if transport == "stdio" {
+		logFile, err := os.OpenFile("/tmp/slack-mcp.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err == nil {
+			log.SetOutput(logFile)
+			defer logFile.Close()
+		} else {
+			// If we can't open log file, disable logging entirely for stdio
+			log.SetOutput(ioutil.Discard)
+		}
+	}
+
 	// Load .env file if it exists
 	if err := godotenv.Load(); err != nil {
 		// It's okay if .env doesn't exist
 		log.Println("No .env file found, using environment variables")
 	}
-
-	var transport string
-	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio or sse)")
-	flag.StringVar(&transport, "transport", "stdio", "Transport type (stdio or sse)")
-	flag.Parse()
 
 	p := provider.New()
 
