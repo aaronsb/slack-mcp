@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// catchUpHandlerImpl provides the real implementation with pagination
+// catchUpHandlerImpl provides the real implementation with auto-pagination for recent timeframes
 func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
 	// Extract parameters
 	channel := params["channel"].(string)
@@ -72,48 +72,90 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		}, nil
 	}
 
-	// Fetch messages from channel
-	histParams := &slack.GetConversationHistoryParameters{
-		ChannelID: channelID,
-		Oldest:    fmt.Sprintf("%d", oldest.Unix()),
-		Limit:     limit,
-		Cursor:    cursor,
-	}
-
-	resp, err := api.GetConversationHistoryContext(ctx, histParams)
-	if err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to fetch channel history: %v", err),
-		}, nil
-	}
-
-	// Analyze messages for importance
+	// Determine if we should auto-follow cursors
+	shouldAutoCursor := shouldAutoFollowCursor(since, cursor)
+	
+	// Collect all messages if auto-cursoring
+	allMessages := []slack.Message{}
 	importantItems := []map[string]interface{}{}
 	stats := map[string]interface{}{
-		"totalMessages": len(resp.Messages),
+		"totalMessages": 0,
 		"threads":       0,
 		"mentions":      0,
 		"reactions":     0,
 	}
-
+	
 	usersMap := provider.ProvideUsersMap()
+	currentCursor := cursor
+	hasMore := true
+	pageCount := 0
+	maxPages := 10
+	
+	// For recent timeframes, be more aggressive
+	if isRecentTimeframe(since) && cursor == "" {
+		maxPages = 20
+	}
 
-	for _, msg := range resp.Messages {
-		item := analyzeMessage(msg, usersMap)
-		if item != nil {
-			importantItems = append(importantItems, item)
+	for hasMore && pageCount < maxPages {
+		// Fetch messages from channel
+		histParams := &slack.GetConversationHistoryParameters{
+			ChannelID: channelID,
+			Oldest:    fmt.Sprintf("%d", oldest.Unix()),
+			Limit:     limit,
+			Cursor:    currentCursor,
 		}
 
-		// Update stats
-		if msg.ReplyCount > 0 {
-			stats["threads"] = stats["threads"].(int) + 1
+		resp, err := api.GetConversationHistoryContext(ctx, histParams)
+		if err != nil {
+			return &FeatureResult{
+				Success: false,
+				Message: fmt.Sprintf("Failed to fetch channel history: %v", err),
+			}, nil
 		}
-		if strings.Contains(msg.Text, "<@") {
-			stats["mentions"] = stats["mentions"].(int) + 1
+
+		// Process messages
+		for _, msg := range resp.Messages {
+			allMessages = append(allMessages, msg)
+			
+			// Analyze each message
+			item := analyzeMessage(msg, usersMap)
+			if item != nil {
+				importantItems = append(importantItems, item)
+			}
+
+			// Update stats
+			if msg.ReplyCount > 0 {
+				stats["threads"] = stats["threads"].(int) + 1
+			}
+			if strings.Contains(msg.Text, "<@") {
+				stats["mentions"] = stats["mentions"].(int) + 1
+			}
+			if len(msg.Reactions) > 0 {
+				stats["reactions"] = stats["reactions"].(int) + 1
+			}
 		}
-		if len(msg.Reactions) > 0 {
-			stats["reactions"] = stats["reactions"].(int) + 1
+
+		stats["totalMessages"] = len(allMessages)
+		pageCount++
+
+		// Decide whether to continue
+		if !shouldAutoCursor || !resp.HasMore || cursor != "" {
+			// Stop if: not auto-cursoring, no more data, or user provided specific cursor
+			hasMore = false
+			currentCursor = resp.ResponseMetaData.NextCursor
+		} else {
+			// Check if we've gone back far enough for recent timeframes
+			if len(allMessages) > 0 && isRecentTimeframe(since) {
+				oldestFetched := allMessages[len(allMessages)-1]
+				msgTime := parseSlackTimestamp(oldestFetched.Timestamp)
+				if msgTime.Before(oldest) {
+					hasMore = false
+				}
+			}
+			currentCursor = resp.ResponseMetaData.NextCursor
+			if currentCursor == "" {
+				hasMore = false
+			}
 		}
 	}
 
@@ -126,22 +168,88 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 			"importantItems": importantItems,
 			"statistics":     stats,
 		},
-		Message:     fmt.Sprintf("Found %d messages in #%s from the last %s", len(resp.Messages), channel, since),
+		Message:     fmt.Sprintf("Found %d messages in #%s from the last %s", len(allMessages), channel, since),
 		ResultCount: len(importantItems),
 		Pagination: &Pagination{
 			Cursor:     cursor,
-			NextCursor: resp.ResponseMetaData.NextCursor,
-			HasMore:    resp.HasMore,
-			PageSize:   len(resp.Messages),
+			NextCursor: currentCursor,
+			HasMore:    hasMore && pageCount >= maxPages,
+			PageSize:   len(allMessages),
 		},
 	}
 
-	// Add contextual guidance
-	if len(importantItems) > 0 {
-		result.Guidance = "💡 Found important items that may need your attention"
+	// Add auto-cursor info if we did multiple pages
+	if pageCount > 1 && cursor == "" {
+		result.Data.(map[string]interface{})["pagesTraversed"] = pageCount
+		result.Message += fmt.Sprintf(" (auto-fetched %d pages)", pageCount)
+	}
+
+	// Apply count-based windowing rules
+	totalMsgCount := stats["totalMessages"].(int)
+	
+	// Add contextual guidance based on message count
+	if totalMsgCount == 0 {
+		result.Guidance = "✅ No activity in this time period"
+		result.NextActions = []string{
+			"Try a longer timeframe: catch-up-on-channel channel='"+channel+"' since='1w'",
+			"Check other channels: list-channels filter='with-unreads'",
+			"Search for older discussions: find-discussion query='<topic>' in:"+channel+" timeframe='1m'",
+		}
+	} else if totalMsgCount <= 3 {
+		// 1-3 messages: Full consumption = auto-mark read
+		result.Guidance = "💬 Full content displayed - marking as read"
+		result.NextActions = []string{
+			"Messages auto-marked as read (full consumption)",
+			"Check mentions across channels: check-my-mentions",
+			"Plan your response: decide-next-action context='Caught up on "+channel+"'",
+		}
+		// TODO: Actually mark as read
+	} else if totalMsgCount <= 15 {
+		// 4-15 messages: Thorough review = auto-mark read  
+		result.Guidance = "🔍 Thorough review complete - marking as read"
+		result.NextActions = []string{
+			"Messages auto-marked as read (thorough review)",
+			"Check mentions across channels: check-my-mentions",
+			"Plan your response: decide-next-action context='Caught up on "+channel+"'",
+		}
+		// TODO: Actually mark as read
+	} else if totalMsgCount <= 50 {
+		// 16-50 messages: Triage only = preserve unread
+		result.Guidance = "📋 Triage view - important items highlighted (unread preserved)"
+		result.NextActions = []string{
+			"Review highlighted items above",
+		}
+		if currentCursor != "" {
+			result.NextActions = append(result.NextActions,
+				fmt.Sprintf("Continue with more messages: catch-up-on-channel channel='%s' cursor='%s'", channel, currentCursor))
+		}
+		result.NextActions = append(result.NextActions,
+			"Mark specific items as read: mark-as-read channel='"+channel+"'")
+	} else {
+		// 50+ messages: Surface scan = preserve unread
+		result.Guidance = "📡 High volume detected - showing surface scan only"
 		result.NextActions = []string{}
 		
-		// If we found threads or specific topics, suggest search
+		if currentCursor != "" {
+			result.NextActions = append(result.NextActions,
+				fmt.Sprintf("🔄 Continue reading next batch: catch-up-on-channel channel='%s' cursor='%s'", channel, currentCursor))
+		}
+		
+		result.NextActions = append(result.NextActions,
+			"Filter by importance: catch-up-on-channel channel='"+channel+"' focus='important'",
+			"Search for specific topics: find-discussion query='<topic>' in:"+channel)
+		
+		// Add semantic prompt for high volume
+		if hasMore {
+			result.Data.(map[string]interface{})["semanticPrompt"] = fmt.Sprintf(
+				"High message volume (%d+ messages). To continue systematic review, use the cursor to fetch the next batch. "+
+				"The OODA loop recommends breaking large volumes into manageable chunks for proper orientation.",
+				totalMsgCount)
+		}
+	}
+	
+	// Add thread and mention suggestions if found
+	if len(importantItems) > 0 {
 		hasThreads := false
 		for _, item := range importantItems {
 			if item["type"] == "active_thread" || item["replyCount"] != nil {
@@ -150,37 +258,47 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 			}
 		}
 		
-		// Primary OODA flow actions first
-		result.NextActions = append(result.NextActions,
-			"Check mentions across channels: check-my-mentions",
-			"Plan your response: decide-next-action context='Caught up on "+channel+"'")
-		
-		// If we found specific topics worth exploring, suggest contextual search
+		// Add contextual search for any message count with important items
 		if hasThreads || len(importantItems) < 3 {
 			result.NextActions = append(result.NextActions,
 				"For specific topics: find-discussion query='<topic>' in:"+channel)
 		}
 		
-		// If there are active threads, suggest responding
 		if hasThreads {
 			result.NextActions = append(result.NextActions,
-				"Join the conversation: write-message channel='"+channel+"' threadTs='<thread>'")
+				"Join active conversation: write-message channel='"+channel+"' threadTs='<thread>'")
 		}
-	} else {
-		result.Guidance = "✅ No important activity in this time period"
-		result.NextActions = []string{
-			"Try a longer timeframe: catch-up-on-channel channel='"+channel+"' since='1w'",
-			"Check other channels: list-channels filter='with-unreads'",
-			"Search for older discussions: find-discussion query='<topic>' in:"+channel+" timeframe='1m'",
-		}
-	}
-
-	if resp.HasMore {
-		result.NextActions = append(result.NextActions,
-			fmt.Sprintf("Use cursor='%s' to see more messages", resp.ResponseMetaData.NextCursor))
 	}
 
 	return result, nil
+}
+
+// shouldAutoFollowCursor determines if we should automatically page through results
+func shouldAutoFollowCursor(timeframe string, manualCursor string) bool {
+	// Never auto-cursor if user provided a manual cursor
+	if manualCursor != "" {
+		return false
+	}
+	
+	// Auto-cursor for recent timeframes
+	return isRecentTimeframe(timeframe)
+}
+
+// isRecentTimeframe checks if the timeframe is recent enough to warrant auto-cursoring
+func isRecentTimeframe(timeframe string) bool {
+	// Auto-cursor for anything less than 1 day
+	if strings.HasSuffix(timeframe, "m") || strings.HasSuffix(timeframe, "h") {
+		return true
+	}
+	
+	// Check for "1d" or less
+	if strings.HasSuffix(timeframe, "d") {
+		days := 1
+		fmt.Sscanf(timeframe, "%dd", &days)
+		return days <= 1
+	}
+	
+	return false
 }
 
 func analyzeMessage(msg slack.Message, usersMap map[string]slack.User) map[string]interface{} {
