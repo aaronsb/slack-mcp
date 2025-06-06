@@ -6,31 +6,66 @@ Model Context Protocol (MCP) server for Slack Workspaces. This integration suppo
 
 ![ezgif-316311ee04f444](https://github.com/user-attachments/assets/35dc9895-e695-4e56-acdc-1a46d6520ba0)
 
-## Semantic Tools
+## Semantic Tools & OODA Loop
 
-This server implements a semantic, intent-based interface for Slack. Instead of raw API operations, it provides natural tools that understand what users want to accomplish:
+This server implements an **OODA Loop** (Observe-Orient-Decide-Act) pattern for intelligent Slack interaction. Tools are organized by their role in the decision cycle:
 
+### 🔍 Observe Phase - Situational Awareness
 1. **`check-unreads`** - "What do I need to pay attention to?"
-   - Shows unread DMs, mentions, and channel activity
-   - Uses internal Slack endpoints for accurate counts
-   - Groups results by importance
+   - Shows unread DMs, mentions, and channel activity with smart windowing
+   - Auto-marks messages as read based on consumption depth
+   - Groups results by importance and urgency
 
-2. **`catch-up-on-channel`** - "Show me what happened in [channel]"
-   - Accepts channel names (not just IDs)
-   - Time-based filtering (e.g., "7d", "24h")
-   - Highlights important messages (reactions, threads, mentions)
+2. **`list-channels`** - "What channels are available?"
+   - Shows all channels with membership status
+   - Supports filtering and search
+   - Uses two-phase caching for fast startup
 
 3. **`check-my-mentions`** - "Where am I mentioned?"
    - Scans channels for your mentions
    - Categorizes by urgency
    - Shows if you've already responded
 
-4. **`find-discussion`** - "Find conversations about [topic]"
+### 🎯 Orient Phase - Context Understanding
+4. **`catch-up-on-channel`** - "Show me what happened in [channel]"
+   - Accepts channel names (not just IDs)
+   - Time-based filtering (e.g., "7d", "24h")
+   - Highlights important messages (reactions, threads, mentions)
+
+5. **Enhanced `check-unreads`** - Reads actual message content
+   - 1-3 messages: Full content + auto-mark as read
+   - 4-15 messages: Full content with urgency analysis
+   - 16-50 messages: Summary only (preserves unread status)
+   - 50+ messages: High-level overview
+
+### 🤔 Decide Phase - Action Planning
+6. **`decide-next-action`** - "What should I do next?"
+   - Basic reflection tool for workflow guidance
+   - Suggests specialized tools when available
+   - Context-aware recommendations
+
+7. **`pace-conversation`** - "Should I respond now or wait?"
+   - Analyzes conversation timing without delays
+   - Uses thinking prompts for natural pacing
+   - Prevents spam loops with engagement modes
+
+### ⚡ Act Phase - Response Execution
+8. **`find-discussion`** - "Find conversations about [topic]"
    - Natural language search across messages
    - Returns relevant threads and decisions
-   - (Currently in development)
+   - Deep thread exploration
 
-For technical details about the semantic architecture, see [docs/semantic-tool-architecture.md](docs/semantic-tool-architecture.md).
+9. **`mark-as-read`** - "Clear my unreads"
+   - Bulk management of read states
+   - Supports various scopes and filters
+   - Channel name resolution
+
+10. **`write-message`** - "Send a message"
+    - Smart channel/user resolution
+    - Thread support for replies
+    - Semantic flow to next actions
+
+For technical details and flow diagrams, see [docs/ooda-loop-workflow.md](docs/ooda-loop-workflow.md).
 
 ## Setup Guide
 
