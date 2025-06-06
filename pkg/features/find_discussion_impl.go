@@ -199,36 +199,47 @@ func findDiscussionHandlerImpl(ctx context.Context, params map[string]interface{
 	if len(discussions) > 0 {
 		result.NextActions = []string{}
 
-		// Suggest viewing threads
+		// Primary action: catch up on channels with found content (Orient phase)
+		channelsSeen := map[string]bool{}
+		for _, d := range discussions {
+			ch := d["channel"].(string)
+			if !channelsSeen[ch] && len(channelsSeen) < 2 {
+				channelsSeen[ch] = true
+				result.NextActions = append(result.NextActions,
+					fmt.Sprintf("Orient - Read context: catch-up-on-channel channel='%s' since='1d'", ch))
+			}
+		}
+
+		// Secondary: view specific threads for deep dive
 		threadCount := 0
 		for _, d := range discussions {
-			if d["type"] == "thread" && threadCount < 2 {
+			if d["type"] == "thread" && threadCount < 1 {
 				if threadId := d["threadId"].(string); threadId != "" {
 					result.NextActions = append(result.NextActions,
-						fmt.Sprintf("View full thread: find-discussion threadId='%s'", threadId))
+						fmt.Sprintf("Orient - Deep dive: find-discussion threadId='%s'", threadId))
 					threadCount++
 				}
 			}
 		}
 
-		// Suggest catching up on active channels
-		channelsSeen := map[string]bool{}
-		for _, d := range discussions {
-			ch := d["channel"].(string)
-			if !channelsSeen[ch] && len(result.NextActions) < 4 {
-				channelsSeen[ch] = true
-				result.NextActions = append(result.NextActions,
-					fmt.Sprintf("Catch up on #%s: catch-up-on-channel channel='%s'", ch, ch))
-			}
+		// Decide phase suggestion
+		result.NextActions = append(result.NextActions,
+			fmt.Sprintf("Decide - Plan response: decide-next-action context='Found %d discussions about %s'", len(discussions), query))
+
+		// Act phase if immediate action seems warranted
+		if len(discussions) <= 3 {
+			result.NextActions = append(result.NextActions,
+				"Act - Join conversation: write-message channel='<channel>' threadTs='<thread>'")
 		}
 
-		result.Guidance = "💡 Click on permalinks to view messages in Slack, or use threadId to see full conversations"
+		result.Guidance = "🔍 Search complete. Follow the OODA flow: Orient with context → Decide on action → Act if needed"
 	} else {
-		result.Guidance = "🔍 Try broadening your search or checking different timeframes"
+		result.Guidance = "🔍 No results found. Try different search strategies or check current activity"
 		result.NextActions = []string{
-			"Try a broader search term",
-			"Check unreads instead: check-unreads",
-			"Browse recent activity: catch-up-on-channel channel='general'",
+			"Observe - Check current state: check-unreads",
+			"Observe - Browse channels: list-channels filter='member-only'",
+			"Orient - Recent activity: catch-up-on-channel channel='general' since='1d'",
+			"Search broader timeframe: find-discussion query='" + query + "' timeframe='1m'",
 		}
 	}
 

@@ -11,17 +11,23 @@ Model Context Protocol (MCP) server for Slack Workspaces. This integration suppo
 This server implements an **OODA Loop** (Observe-Orient-Decide-Act) pattern for intelligent Slack interaction. Tools are organized by their role in the decision cycle:
 
 ### 🔍 Observe Phase - Situational Awareness
-1. **`check-unreads`** - "What do I need to pay attention to?"
+1. **`find-discussion`** - "Search for specific topics or conversations"
+   - Uses Slack's internal search API for comprehensive results
+   - Natural language queries across all accessible messages
+   - Filters by channel, user, or timeframe
+   - Gateway to deeper exploration with semantic flow
+
+2. **`check-unreads`** - "What do I need to pay attention to?"
    - Shows unread DMs, mentions, and channel activity with smart windowing
    - Auto-marks messages as read based on consumption depth
    - Groups results by importance and urgency
 
-2. **`list-channels`** - "What channels are available?"
+3. **`list-channels`** - "What channels are available?"
    - Shows all channels with membership status
    - Supports filtering and search
    - Uses two-phase caching for fast startup
 
-3. **`check-my-mentions`** - "Where am I mentioned?"
+4. **`check-my-mentions`** - "Where am I mentioned?"
    - Scans channels for your mentions
    - Categorizes by urgency
    - Shows if you've already responded
@@ -50,17 +56,12 @@ This server implements an **OODA Loop** (Observe-Orient-Decide-Act) pattern for 
    - Prevents spam loops with engagement modes
 
 ### ⚡ Act Phase - Response Execution
-8. **`find-discussion`** - "Find conversations about [topic]"
-   - Natural language search across messages
-   - Returns relevant threads and decisions
-   - Deep thread exploration
-
-9. **`mark-as-read`** - "Clear my unreads"
+8. **`mark-as-read`** - "Clear my unreads"
    - Bulk management of read states
    - Supports various scopes and filters
    - Channel name resolution
 
-10. **`write-message`** - "Send a message"
+9. **`write-message`** - "Send a message"
     - Smart channel/user resolution
     - Thread support for replies
     - Semantic flow to next actions

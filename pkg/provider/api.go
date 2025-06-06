@@ -188,6 +188,7 @@ func (ap *ApiProvider) loadChannelsProgressive(ctx context.Context) error {
 	ap.channelsMutex.Lock()
 	ap.channels = make(map[string]slack.Channel)
 	ap.channelNames = make(map[string]string)
+	ap.lastChannelRefresh = time.Now() // Initialize to now to avoid zero time
 	ap.channelsMutex.Unlock()
 
 	// Load channels in background
