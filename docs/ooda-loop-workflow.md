@@ -33,10 +33,10 @@ graph TD
     Creative --> C1[Combine Tools]
     C1 --> C2[Break Patterns]
     
-    style Personality fill:#f9f,stroke:#333,stroke-width:4px
-    style Proactive fill:#bbf,stroke:#333,stroke-width:2px
-    style Reactive fill:#bfb,stroke:#333,stroke-width:2px
-    style Creative fill:#fbf,stroke:#333,stroke-width:2px
+    style Personality fill:#f9f,stroke:#333,stroke-width:4px,color:#000
+    style Proactive fill:#bbf,stroke:#333,stroke-width:2px,color:#000
+    style Reactive fill:#bfb,stroke:#333,stroke-width:2px,color:#000
+    style Creative fill:#fbf,stroke:#333,stroke-width:2px,color:#000
 ```
 
 ## Complete OODA Loop Flow
@@ -80,18 +80,18 @@ graph LR
     A2 --> A3
     A3 --> O1
     
-    style O1 fill:#e1f5ff,stroke:#0288d1
-    style O2 fill:#e1f5ff,stroke:#0288d1
-    style O3 fill:#e1f5ff,stroke:#0288d1
-    style OR1 fill:#fff3e0,stroke:#f57c00
-    style OR2 fill:#fff3e0,stroke:#f57c00
-    style OR3 fill:#fff3e0,stroke:#f57c00
-    style D1 fill:#f3e5f5,stroke:#7b1fa2
-    style D2 fill:#f3e5f5,stroke:#7b1fa2
-    style D3 fill:#f3e5f5,stroke:#7b1fa2
-    style A1 fill:#e8f5e9,stroke:#388e3c
-    style A2 fill:#e8f5e9,stroke:#388e3c
-    style A3 fill:#e8f5e9,stroke:#388e3c
+    style O1 fill:#e1f5ff,stroke:#0288d1,color:#000
+    style O2 fill:#e1f5ff,stroke:#0288d1,color:#000
+    style O3 fill:#e1f5ff,stroke:#0288d1,color:#000
+    style OR1 fill:#fff3e0,stroke:#f57c00,color:#000
+    style OR2 fill:#fff3e0,stroke:#f57c00,color:#000
+    style OR3 fill:#fff3e0,stroke:#f57c00,color:#000
+    style D1 fill:#f3e5f5,stroke:#7b1fa2,color:#000
+    style D2 fill:#f3e5f5,stroke:#7b1fa2,color:#000
+    style D3 fill:#f3e5f5,stroke:#7b1fa2,color:#000
+    style A1 fill:#e8f5e9,stroke:#388e3c,color:#000
+    style A2 fill:#e8f5e9,stroke:#388e3c,color:#000
+    style A3 fill:#e8f5e9,stroke:#388e3c,color:#000
 ```
 
 ## Transaction Flow Diagram
@@ -168,9 +168,9 @@ graph TD
     QuickReply --> Monitor[catch-up-on-channel]
     NextChannel --> Unreads
     
-    style Start fill:#ffd,stroke:#333,stroke-width:4px
-    style Count fill:#f9f,stroke:#333,stroke-width:2px
-    style Timing fill:#f9f,stroke:#333,stroke-width:2px
+    style Start fill:#ffd,stroke:#333,stroke-width:4px,color:#000
+    style Count fill:#f9f,stroke:#333,stroke-width:2px,color:#000
+    style Timing fill:#f9f,stroke:#333,stroke-width:2px,color:#000
 ```
 
 ### Example 2: Topic Search (Creative Flow)
@@ -192,8 +192,8 @@ graph TD
     Write --> WaitResponse[pace-conversation]
     WaitResponse --> CheckNew[find-discussion threadId='xxx']
     
-    style Query fill:#bbf,stroke:#333,stroke-width:4px
-    style Results fill:#f9f,stroke:#333,stroke-width:2px
+    style Query fill:#bbf,stroke:#333,stroke-width:4px,color:#000
+    style Results fill:#f9f,stroke:#333,stroke-width:2px,color:#000
 ```
 
 ## Conversation Pacing States
