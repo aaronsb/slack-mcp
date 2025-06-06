@@ -56,6 +56,13 @@ func decideNextActionHandler(ctx context.Context, params map[string]interface{})
 		}
 	}
 
+	// Detect active conversations
+	if strings.Contains(contextLower, "message") || strings.Contains(contextLower, "sent") || strings.Contains(contextLower, "respond") {
+		analysis = append(analysis, "• Active conversation detected")
+		recommendations = append(recommendations, "Consider conversation pace before responding")
+		nextActions = append(nextActions, "pace-conversation channel='<channel>' lastMessageTime='<timestamp>'")
+	}
+
 	// Detect threads
 	if strings.Contains(contextLower, "thread") || strings.Contains(contextLower, "discussion") {
 		analysis = append(analysis, "• Active threads or discussions identified")

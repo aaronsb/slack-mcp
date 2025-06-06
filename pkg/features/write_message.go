@@ -105,19 +105,23 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 		},
 	}
 
-	// Add next actions
+	// Add next actions with semantic flow
 	if threadTs == "" {
-		// New message
+		// New message - provide context-aware follow-ups
 		result.NextActions = []string{
-			fmt.Sprintf("Reply to thread: write-message channel='%s' threadTs='%s'", channel, timestamp),
-			fmt.Sprintf("Check for responses: find-discussion threadId='%s:%s'", channelID, timestamp),
+			fmt.Sprintf("Read conversation context: catch-up-on-channel channel='%s' since='1h'", channel),
+			fmt.Sprintf("Monitor for responses: find-discussion threadId='%s:%s'", channelID, timestamp),
+			fmt.Sprintf("Reply to your message: write-message channel='%s' threadTs='%s'", channel, timestamp),
 		}
+		result.Guidance = "💡 Your message was sent. Use catch-up to see recent context or monitor for responses."
 	} else {
-		// Thread reply
+		// Thread reply - focus on thread context
 		result.NextActions = []string{
-			fmt.Sprintf("View full thread: find-discussion threadId='%s:%s'", channelID, threadTs),
-			fmt.Sprintf("Continue conversation: write-message channel='%s' threadTs='%s'", channel, threadTs),
+			fmt.Sprintf("Read full thread: find-discussion threadId='%s:%s'", channelID, threadTs),
+			fmt.Sprintf("Continue thread: write-message channel='%s' threadTs='%s'", channel, threadTs),
+			fmt.Sprintf("See channel context: catch-up-on-channel channel='%s' since='4h'", channel),
 		}
+		result.Guidance = "💬 Reply sent to thread. Check the full discussion for context."
 	}
 
 	return result, nil

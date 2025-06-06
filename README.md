@@ -64,12 +64,92 @@ Token value is printed right after the executed command (it starts with
 
 Choose one of these installation methods:
 
+- [Local Development](#local-development) (recommended for testing/development)
 - [npx](#Using-npx)
 - [Docker](#Using-Docker)
 
-### 3. Configuration and Usage
+### 3. Adding to MCP Clients
+
+This server can be used with any MCP-compatible client:
+
+#### Claude Desktop App
+
+1. Find your Claude Desktop configuration file:
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+   - **Linux**: `~/.config/claude/claude_desktop_config.json`
+
+2. Add the Slack MCP server to your configuration (see examples below)
+
+3. Restart Claude Desktop
+
+4. Look for the 🔌 icon in Claude to verify the server is connected
+
+#### Claude Code (VS Code Extension)
+
+1. Open the command palette (Cmd/Ctrl + Shift + P)
+2. Run "Claude Code: Edit MCP Settings"
+3. Add the Slack MCP server configuration
+4. Reload VS Code window
+
+#### Other MCP-Compatible Agents
+
+Any agent that supports the Model Context Protocol can use this server. Consult your agent's documentation for:
+- How to add MCP servers
+- Whether stdio or SSE transport is preferred
+- How to pass environment variables
+
+### 4. Configuration Examples
 
 You can configure the MCP server using command line arguments and environment variables.
+
+#### Local Development
+
+Running from source is recommended for development and testing, especially to understand the caching behavior:
+
+1. **Clone and build:**
+   ```bash
+   git clone https://github.com/korotovsky/slack-mcp-server.git
+   cd slack-mcp-server
+   go build ./cmd/slack-mcp
+   ```
+
+2. **Configure Claude Desktop** (`claude_desktop_config.json`):
+   ```json
+   {
+     "mcpServers": {
+       "slack": {
+         "command": "/absolute/path/to/slack-mcp-server/slack-mcp",
+         "args": ["--transport", "stdio"],
+         "env": {
+           "SLACK_MCP_XOXC_TOKEN": "xoxc-...",
+           "SLACK_MCP_XOXD_TOKEN": "xoxd-..."
+         }
+       }
+     }
+   }
+   ```
+
+3. **Important notes about caching:**
+   - The server uses a **two-phase channel cache**:
+     - Phase 1: Loads your member channels immediately (fast startup)
+     - Phase 2: Loads all workspace channels in background
+   - Channel cache persists across restarts
+   - User cache is saved to `.users_cache.json` in the working directory
+   - When testing, you may need to delete cache files to force refresh
+
+4. **Development workflow:**
+   ```bash
+   # Build and test
+   make build
+   make test
+   
+   # Run directly for testing
+   go run cmd/slack-mcp/main.go --transport stdio
+   
+   # Clean cache if needed
+   rm .users_cache.json
+   ```
 
 #### Using npx
 
@@ -234,14 +314,48 @@ docker-compose up -d
 | `SLACK_MCP_SERVER_CA`          | No         | `nil`       | Path to the CA certificate of the trust store                                 |
 | `SLACK_MCP_SERVER_CA_INSECURE` | No         | `false`     | Trust all insecure requests (NOT RECOMMENDED)                                 |
 
+## Troubleshooting
+
+### Common Issues
+
+1. **Server not showing in Claude**
+   - Check the 🔌 icon in Claude - it should show "slack" when connected
+   - Verify your configuration file syntax (must be valid JSON)
+   - Check Claude logs: `~/Library/Logs/Claude/mcp*.log` (macOS)
+   - Ensure tokens are correctly set in the env section
+
+2. **Authentication errors**
+   - Tokens expire when you log out of Slack - get fresh tokens
+   - Make sure both `xoxc` and `xoxd` tokens are set
+   - Verify tokens don't have extra quotes or spaces
+
+3. **Channels not found**
+   - The server caches channels in two phases - wait a few seconds for full load
+   - Use `list-channels` to see available channels
+   - Private channels require you to be a member
+
+4. **SSE transport issues**
+   - Ensure your SSE endpoint is HTTPS (use ngrok if needed)
+   - Check that `SLACK_MCP_SSE_API_KEY` matches in server and client config
+   - Verify firewall/network allows connection to your SSE port
+
 ### Debugging Tools
 
 ```bash
-# Run the inspector with stdio transport
-npx @modelcontextprotocol/inspector go run mcp/mcp-server.go --transport stdio
+# Test the server directly
+npx slack-mcp-server --transport stdio
 
-# View logs
+# Run the MCP inspector
+npx @modelcontextprotocol/inspector npx slack-mcp-server --transport stdio
+
+# View Claude logs (macOS)
 tail -n 20 -f ~/Library/Logs/Claude/mcp*.log
+
+# View Claude logs (Windows)
+# Check: %APPDATA%\Claude\logs\
+
+# Test with curl (SSE mode)
+curl -H "Authorization: Bearer YOUR_API_KEY" https://localhost:3001/sse
 ```
 
 ## Security
