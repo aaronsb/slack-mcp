@@ -11,16 +11,17 @@ Model Context Protocol (MCP) server for Slack Workspaces. This integration suppo
 This server implements an **OODA Loop** (Observe-Orient-Decide-Act) pattern for intelligent Slack interaction. Tools are organized by their role in the decision cycle:
 
 ### 🔍 Observe Phase - Situational Awareness
-1. **`find-discussion`** - "Search for specific topics or conversations"
-   - Uses Slack's internal search API for comprehensive results
-   - Natural language queries across all accessible messages
-   - Filters by channel, user, or timeframe
-   - Gateway to deeper exploration with semantic flow
-
-2. **`check-unreads`** - "What do I need to pay attention to?"
+1. **`check-unreads`** - "What do I need to pay attention to?"
    - Shows unread DMs, mentions, and channel activity with smart windowing
    - Auto-marks messages as read based on consumption depth
    - Groups results by importance and urgency
+   - Natural entry point to the OODA loop
+
+2. **`catch-up-on-channel`** - "Show me what happened in [channel]"
+   - Primary tool for exploring specific channels
+   - Time-based filtering (e.g., "7d", "24h") 
+   - Highlights important messages (reactions, threads, mentions)
+   - Flows naturally into Orient phase for deeper understanding
 
 3. **`list-channels`** - "What channels are available?"
    - Shows all channels with membership status
@@ -32,13 +33,14 @@ This server implements an **OODA Loop** (Observe-Orient-Decide-Act) pattern for 
    - Categorizes by urgency
    - Shows if you've already responded
 
-### 🎯 Orient Phase - Context Understanding
-4. **`catch-up-on-channel`** - "Show me what happened in [channel]"
-   - Accepts channel names (not just IDs)
-   - Time-based filtering (e.g., "7d", "24h")
-   - Highlights important messages (reactions, threads, mentions)
+5. **`find-discussion`** - "Search for specific topics or conversations"
+   - Uses Slack's internal search API for comprehensive results
+   - Natural language queries across all accessible messages
+   - Filters by channel, user, or timeframe
+   - Specialized tool for targeted discovery
 
-5. **Enhanced `check-unreads`** - Reads actual message content
+### 🎯 Orient Phase - Context Understanding
+6. **Enhanced `check-unreads`** - Reads actual message content
    - 1-3 messages: Full content + auto-mark as read
    - 4-15 messages: Full content with urgency analysis
    - 16-50 messages: Summary only (preserves unread status)

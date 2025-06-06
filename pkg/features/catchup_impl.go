@@ -139,9 +139,38 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	// Add contextual guidance
 	if len(importantItems) > 0 {
 		result.Guidance = "💡 Found important items that may need your attention"
+		result.NextActions = []string{}
+		
+		// If we found threads or specific topics, suggest search
+		hasThreads := false
+		for _, item := range importantItems {
+			if item["type"] == "active_thread" || item["replyCount"] != nil {
+				hasThreads = true
+				break
+			}
+		}
+		
+		if hasThreads || len(importantItems) < 3 {
+			result.NextActions = append(result.NextActions,
+				"Search for related discussions: find-discussion query='<topic>' in:"+channel)
+		}
+		
+		// Standard next actions
+		result.NextActions = append(result.NextActions,
+			"Check mentions across channels: check-my-mentions",
+			"Plan your response: decide-next-action context='Caught up on "+channel+"'")
+		
+		// If there are active threads, suggest responding
+		if hasThreads {
+			result.NextActions = append(result.NextActions,
+				"Join the conversation: write-message channel='"+channel+"' threadTs='<thread>'")
+		}
+	} else {
+		result.Guidance = "✅ No important activity in this time period"
 		result.NextActions = []string{
-			"Use 'find-discussion' to explore specific threads",
-			"Use 'check-my-mentions' to see mentions across all channels",
+			"Search for specific topics: find-discussion query='<topic>' in:"+channel,
+			"Try a longer timeframe: catch-up-on-channel channel='"+channel+"' since='1w'",
+			"Check other channels: list-channels filter='with-unreads'",
 		}
 	}
 
