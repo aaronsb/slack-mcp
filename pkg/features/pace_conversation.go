@@ -9,7 +9,7 @@ import (
 
 // PaceConversation helps the AI match human conversation pace and decide engagement level
 var PaceConversation = &Feature{
-	Name:        "pace-conversation",
+	Name:        "check-timing",
 	Description: "Analyze conversation timing and decide whether to actively engage or wait. Uses thinking time as natural pacing.",
 	Schema: map[string]interface{}{
 		"type": "object",
@@ -75,8 +75,8 @@ func paceConversationHandler(ctx context.Context, params map[string]interface{})
 		guidance = "⚡ Active conversation detected. Quick responses expected."
 		thinkingPrompt = fmt.Sprintf("Think briefly about: %s. The conversation is active, so a timely response is important.", thinkingFocus)
 		nextActions = []string{
-			fmt.Sprintf("Check for new messages: catch-up-on-channel channel='%s' since='30s'", channel),
-			fmt.Sprintf("Send quick response: write-message channel='%s'", channel),
+			fmt.Sprintf("Check for new messages: catch-up channel='%s' since='30s'", channel),
+			fmt.Sprintf("Send quick response: send-message channel='%s'", channel),
 		}
 
 	case timeSinceLastMessage < 30*time.Second:
@@ -85,9 +85,9 @@ func paceConversationHandler(ctx context.Context, params map[string]interface{})
 		guidance = "💭 Conversation is active but thoughtful. Take a moment to consider your response."
 		thinkingPrompt = fmt.Sprintf("Think about: %s. Consider the context: %s. The pace allows for a thoughtful response.", thinkingFocus, conversationContext)
 		nextActions = []string{
-			fmt.Sprintf("Read recent context: catch-up-on-channel channel='%s' since='2m'", channel),
-			fmt.Sprintf("Monitor before responding: find-discussion channel='%s'", channel),
-			fmt.Sprintf("Craft response: write-message channel='%s'", channel),
+			fmt.Sprintf("Read recent context: catch-up channel='%s' since='2m'", channel),
+			fmt.Sprintf("Monitor before responding: search channel='%s'", channel),
+			fmt.Sprintf("Craft response: send-message channel='%s'", channel),
 		}
 
 	case timeSinceLastMessage < 60*time.Second:
@@ -96,9 +96,9 @@ func paceConversationHandler(ctx context.Context, params map[string]interface{})
 		guidance = "🤔 Conversation pace is slowing. Consider if immediate response is needed."
 		thinkingPrompt = fmt.Sprintf("Reflect on: %s. The conversation may be winding down. Consider: %s. Is a response still timely?", thinkingFocus, conversationContext)
 		nextActions = []string{
-			fmt.Sprintf("Check full context: catch-up-on-channel channel='%s' since='5m'", channel),
-			fmt.Sprintf("Wait and monitor: find-discussion channel='%s'", channel),
-			fmt.Sprintf("Consider if response is still needed: decide-next-action context='Conversation in %s has slowed - last message %v ago'", channel, timeSinceLastMessage),
+			fmt.Sprintf("Check full context: catch-up channel='%s' since='5m'", channel),
+			fmt.Sprintf("Wait and monitor: search channel='%s'", channel),
+			fmt.Sprintf("Check if response is still needed: check-unreads focus='%s'", channel),
 		}
 
 	case timeSinceLastMessage < 5*time.Minute:
@@ -108,7 +108,7 @@ func paceConversationHandler(ctx context.Context, params map[string]interface{})
 		thinkingPrompt = fmt.Sprintf("The conversation has gone quiet. Reflect on: %s. Context: %s. It may be best to wait for them to respond rather than sending more messages.", thinkingFocus, conversationContext)
 		nextActions = []string{
 			"Monitor for activity: check-unreads",
-			fmt.Sprintf("Check back later: catch-up-on-channel channel='%s' since='1h'", channel),
+			fmt.Sprintf("Check back later: catch-up channel='%s' since='1h'", channel),
 			"Focus on other conversations: check-unreads focus='all'",
 		}
 

@@ -6,7 +6,7 @@ import (
 
 // FindDiscussion searches for conversations using natural language
 var FindDiscussion = &Feature{
-	Name:        "find-discussion",
+	Name:        "search",
 	Description: "Search for conversations using natural language - finds threads, decisions, and related discussions",
 	Schema: map[string]interface{}{
 		"type": "object",

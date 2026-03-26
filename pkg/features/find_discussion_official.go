@@ -131,22 +131,18 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 			if !channelsSeen[ch] && len(channelsSeen) < 2 {
 				channelsSeen[ch] = true
 				result.NextActions = append(result.NextActions,
-					fmt.Sprintf("Orient - Read context: catch-up-on-channel channel='%s' since='1d'", ch))
+					fmt.Sprintf("Read context: catch-up channel='%s' since='1d'", ch))
 			}
 		}
 
-		// Decide phase suggestion
-		result.NextActions = append(result.NextActions,
-			fmt.Sprintf("Decide - Plan response: decide-next-action context='Found %d discussions about %s'", len(discussions), query))
-
-		result.Guidance = "🔍 Found what you're looking for? Return to OODA flow: Orient with context → Decide on action → Act if needed"
+		result.Guidance = fmt.Sprintf("Found %d discussions about '%s'", len(discussions), query)
 	} else {
-		result.Guidance = "🔍 No results found. Return to systematic discovery through OODA flow"
+		result.Guidance = "No results found. Try different search terms or browse channels."
 		result.NextActions = []string{
-			"Observe - Start fresh: check-unreads",
-			"Observe - Browse channels: list-channels filter='member-only'",
-			"Orient - Recent activity: catch-up-on-channel channel='general' since='1d'",
-			"Try different search: find-discussion query='<different_terms>'",
+			"check-unreads",
+			"list-channels filter='member-only'",
+			"catch-up channel='general' since='1d'",
+			"search query='<different_terms>'",
 		}
 	}
 

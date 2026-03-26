@@ -261,10 +261,10 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 	// Add next actions
 	result.NextActions = []string{}
 	if stats["totalDMs"].(int) > 0 {
-		result.NextActions = append(result.NextActions, "Use 'catch-up-on-channel' with a DM channel ID to see full conversation")
+		result.NextActions = append(result.NextActions, "Use 'catch-up' with a DM channel ID to see full conversation")
 	}
 	if stats["totalMentions"].(int) > 0 {
-		result.NextActions = append(result.NextActions, "Use 'find-discussion' with threadId to see full thread context")
+		result.NextActions = append(result.NextActions, "Use 'search' with threadId to see full thread context")
 	}
 
 	return result, nil

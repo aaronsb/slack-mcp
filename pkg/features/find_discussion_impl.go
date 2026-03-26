@@ -128,9 +128,9 @@ func getThreadContextImpl(ctx context.Context, params map[string]interface{}, th
 
 	// Add next actions
 	result.NextActions = []string{
-		fmt.Sprintf("Reply to thread: write-message channel='%s' threadTs='%s'", channelName, threadTs),
-		fmt.Sprintf("View channel context: catch-up-on-channel channel='%s'", channelName),
-		"Mark thread as read: mark-as-read channel='" + channelName + "'",
+		fmt.Sprintf("Reply to thread: send-message channel='%s' threadTs='%s'", channelName, threadTs),
+		fmt.Sprintf("View channel context: catch-up channel='%s'", channelName),
+		"Mark thread as read: mark-read channel='" + channelName + "'",
 	}
 	result.Guidance = "💬 Thread loaded. You can reply or explore the channel context."
 

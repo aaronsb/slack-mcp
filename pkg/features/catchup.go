@@ -9,7 +9,7 @@ import (
 
 // CatchUpOnChannel provides intelligent channel catch-up functionality
 var CatchUpOnChannel = &Feature{
-	Name:        "catch-up-on-channel",
+	Name:        "catch-up",
 	Description: "Get a summary of what you missed in a channel - shows important messages, mentions, and key discussions",
 	Schema: map[string]interface{}{
 		"type": "object",
@@ -96,8 +96,8 @@ func catchUpHandler(ctx context.Context, params map[string]interface{}) (*Featur
 		},
 		Message: fmt.Sprintf("Found 2 important items in #%s from the last %s", channel, since),
 		NextActions: []string{
-			"Use 'find-discussion' to see the full API v2 thread",
-			"Use 'check-my-mentions' to see all pending mentions",
+			"Use 'search' to see the full API v2 thread",
+			"Use 'check-mentions' to see all pending mentions",
 		},
 		Guidance:    "💡 The API v2 discussion has 8 replies - this seems to be an active decision thread you might want to review",
 		ResultCount: 2,

@@ -83,7 +83,7 @@ func checkUnreadsSimple(ctx context.Context, params map[string]interface{}) (*Fe
 	// Add thread mentions
 	stats["totalMentions"] = stats["totalMentions"].(int) + counts.Threads.MentionCount
 
-	// Store channel ID mapping for catch-up-on-channel
+	// Store channel ID mapping for catch-up
 	channelMapping := make(map[string]string) // name -> ID
 
 	// Process DMs summary
@@ -206,7 +206,7 @@ func checkUnreadsSimple(ctx context.Context, params map[string]interface{}) (*Fe
 		firstMention := unreads["mentions"].([]map[string]interface{})[0]
 		channelName := firstMention["channel"].(string)
 		result.NextActions = append(result.NextActions,
-			fmt.Sprintf("Use 'catch-up-on-channel' with channel='%s' to see the messages", channelName))
+			fmt.Sprintf("Use 'catch-up' with channel='%s' to see the messages", channelName))
 	}
 	if len(unreads["dms"].([]map[string]interface{})) > 0 {
 		firstDM := unreads["dms"].([]map[string]interface{})[0]

@@ -265,7 +265,7 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 		}
 
 		result.NextActions = []string{
-			"Catch up on a channel: catch-up-on-channel channel='[name]'",
+			"Catch up on a channel: catch-up channel='[name]'",
 			"Search for specific channels: list-channels search='engineering'",
 			"Refresh cache: list-channels forceRefresh=true",
 		}
