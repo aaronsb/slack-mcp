@@ -2,19 +2,29 @@ package main
 
 import (
 	"flag"
-	"github.com/aaronsb/slack-mcp/pkg/provider"
-	"github.com/aaronsb/slack-mcp/pkg/server"
-	"github.com/joho/godotenv"
 	"io"
 	"log"
 	"os"
 	"strconv"
+
+	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/server"
+	"github.com/aaronsb/slack-mcp/pkg/setup"
+	"github.com/joho/godotenv"
 )
 
 var defaultSseHost = "127.0.0.1"
 var defaultSsePort = 13080
 
 func main() {
+	// Check for subcommands before flag parsing
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		if err := setup.RunSetup(); err != nil {
+			log.Fatalf("Setup failed: %v", err)
+		}
+		return
+	}
+
 	var transport string
 	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio or sse)")
 	flag.StringVar(&transport, "transport", "stdio", "Transport type (stdio or sse)")
