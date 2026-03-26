@@ -185,17 +185,8 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					stats["totalDMs"] = stats["totalDMs"].(int) + 1
 					dmCount++
 
-					// Auto-mark as read if policy allows
-					if shouldMarkAsRead {
-						// Mark the DM as read up to the latest message
-						latestTimestamp := resp.Messages[0].Timestamp
-						err = api.MarkConversation(im.ID, latestTimestamp)
-						if err != nil {
-							log.Printf("Failed to mark DM as read for %s: %v", im.ID, err)
-						} else {
-							log.Printf("Auto-marked DM with %s as read (%d messages)", authorName, unreadCount)
-						}
-					}
+					// Stealth: never auto-mark as read from check-unreads
+					// Use mark-read tool explicitly when ready
 				}
 			}
 		}
