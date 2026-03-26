@@ -1,0 +1,36 @@
+# Build artifacts
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+vendor/
+
+# Node
+node_modules/
+package-lock.json
+
+# Environment and secrets
+.env
+*.env.local
+.config/
+
+# Caches
+.users_cache.json
+.channels_cache.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reference repos (temporary)
+slack-mcp-original/
+slack-stealth-mcp/

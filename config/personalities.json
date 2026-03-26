@@ -1,0 +1,43 @@
+{
+  "slack-user": {
+    "name": "Slack User",
+    "description": "Read-only Slack user focused on consumption and discovery",
+    "features": [
+      "catch-up-on-channel",
+      "check-my-mentions",
+      "find-discussion",
+      "browse-team-activity",
+      "search-shared-files",
+      "get-channel-insights"
+    ],
+    "context": {
+      "access_level": "read_only",
+      "workflow_stage": "consumption",
+      "can_post": false,
+      "can_edit": false,
+      "default_timeframe": "1d"
+    }
+  },
+  "slack-contributor": {
+    "name": "Slack Contributor",
+    "description": "Can read and post messages (future feature)",
+    "features": [
+      "catch-up-on-channel",
+      "check-my-mentions",
+      "find-discussion",
+      "browse-team-activity",
+      "search-shared-files",
+      "get-channel-insights",
+      "post-message",
+      "reply-to-thread",
+      "react-to-message"
+    ],
+    "context": {
+      "access_level": "read_write",
+      "workflow_stage": "collaboration",
+      "can_post": true,
+      "can_edit": true,
+      "default_timeframe": "1d"
+    }
+  }
+}
