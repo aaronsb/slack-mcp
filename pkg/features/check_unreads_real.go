@@ -146,12 +146,18 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				if len(resp.Messages) > 0 {
 					authorName := getUserName(info.User, usersMap)
 
+					// Check if DM partner is a bot
+					authorIsBot := false
+					if user, ok := usersMap[info.User]; ok {
+						authorIsBot = user.IsBot
+					}
+
 					// Collect all messages for this DM
 					var messages []map[string]interface{}
 					var isUrgent bool
 
 					for _, msg := range resp.Messages {
-						msgUrgent := categorizeUrgency(msg.Text) == "high"
+						msgUrgent := categorizeUrgencyForUser(msg.Text, authorIsBot) == "high"
 						if msgUrgent {
 							isUrgent = true
 						}
@@ -224,7 +230,11 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				for _, msg := range resp.Messages {
 					if strings.Contains(msg.Text, mentionPattern) {
 						authorName := getUserName(msg.User, usersMap)
-						isUrgent := categorizeUrgency(msg.Text) == "high"
+						msgIsBot := false
+						if u, ok := usersMap[msg.User]; ok {
+							msgIsBot = u.IsBot
+						}
+						isUrgent := categorizeUrgencyForUser(msg.Text, msgIsBot) == "high"
 
 						if isUrgent {
 							stats["urgent"] = stats["urgent"].(int) + 1
@@ -279,7 +289,11 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				for _, msg := range resp.Messages {
 					if strings.Contains(msg.Text, mentionPattern) {
 						authorName := getUserName(msg.User, usersMap)
-						isUrgent := categorizeUrgency(msg.Text) == "high"
+						msgIsBot := false
+						if u, ok := usersMap[msg.User]; ok {
+							msgIsBot = u.IsBot
+						}
+						isUrgent := categorizeUrgencyForUser(msg.Text, msgIsBot) == "high"
 
 						if isUrgent {
 							stats["urgent"] = stats["urgent"].(int) + 1

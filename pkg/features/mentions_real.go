@@ -139,18 +139,20 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 
 			// Get author info
 			authorName := "unknown"
+			msgIsBot := false
 			if user, ok := usersMap[msg.User]; ok {
 				authorName = user.Name
 				if user.RealName != "" {
 					authorName = user.RealName
 				}
+				msgIsBot = user.IsBot
 			}
 
 			// Parse timestamp
 			msgTime := parseSlackTimestamp(msg.Timestamp)
 
 			// Determine urgency and type
-			urgency := categorizeUrgency(msg.Text)
+			urgency := categorizeUrgencyForUser(msg.Text, msgIsBot)
 			msgType := categorizeMessageType(msg.Text)
 
 			if urgency == "high" {
@@ -258,11 +260,39 @@ func checkIfUserReplied(api *slack.Client, channelID, threadTS, userID string) b
 }
 
 func categorizeUrgency(text string) string {
+	return categorizeUrgencyForUser(text, false)
+}
+
+func categorizeUrgencyForUser(text string, isBot bool) string {
 	lowText := strings.ToLower(text)
 
-	// High urgency keywords
-	highKeywords := []string{"urgent", "asap", "blocking", "critical", "emergency", "immediately", "eod", "end of day", "today", "now"}
-	for _, keyword := range highKeywords {
+	// Genuinely urgent keywords (applies to both humans and bots)
+	criticalKeywords := []string{"urgent", "asap", "blocking", "critical", "emergency", "immediately"}
+	for _, keyword := range criticalKeywords {
+		if strings.Contains(lowText, keyword) {
+			// Bots: only escalate for incident-related urgency patterns
+			if isBot {
+				return "medium"
+			}
+			return "high"
+		}
+	}
+
+	// Bot incident patterns that ARE genuinely urgent
+	if isBot {
+		incidentPatterns := []string{"incident", "outage", "pagerduty", "deploy fail", "build broke", "pipeline fail", "alert firing"}
+		for _, pattern := range incidentPatterns {
+			if strings.Contains(lowText, pattern) {
+				return "high"
+			}
+		}
+		// All other bot messages are low urgency
+		return "low"
+	}
+
+	// Human-only time-pressure keywords (too broad for bots)
+	timeKeywords := []string{"eod", "end of day", "by today", "need today"}
+	for _, keyword := range timeKeywords {
 		if strings.Contains(lowText, keyword) {
 			return "high"
 		}
