@@ -89,7 +89,7 @@ func main() {
 		}
 
 		sseServer := s.ServeSSE(":" + port)
-		log.Printf("SSE server listening on " + host + ":" + port)
+		log.Printf("SSE server listening on %s:%s", host, port)
 		if err := sseServer.Start(host + ":" + port); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
