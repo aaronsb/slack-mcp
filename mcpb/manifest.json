@@ -1,0 +1,106 @@
+{
+  "manifest_version": "0.3",
+  "name": "slack-mcp",
+  "display_name": "Slack MCP",
+  "version": "1.2.0",
+  "description": "MCP server for Slack workspaces using session tokens. Automatic browser-based token extraction, stealth reads, channel caching.",
+  "author": {
+    "name": "aaronsb",
+    "url": "https://github.com/aaronsb"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaronsb/slack-mcp.git"
+  },
+  "homepage": "https://github.com/aaronsb/slack-mcp#readme",
+  "support": "https://github.com/aaronsb/slack-mcp/issues",
+  "license": "MIT",
+  "keywords": [
+    "slack",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "claude"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "bin/slack-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/bin/slack-mcp",
+      "args": [],
+      "env": {
+        "SLACK_XOXC_TOKEN": "${user_config.xoxc_token}",
+        "SLACK_XOXD_TOKEN": "${user_config.xoxd_token}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "check-unreads",
+      "description": "Unread messages across DMs, channels, and mentions"
+    },
+    {
+      "name": "catch-up",
+      "description": "Recent channel activity with time filtering"
+    },
+    {
+      "name": "list-channels",
+      "description": "Browse available channels and membership"
+    },
+    {
+      "name": "check-mentions",
+      "description": "Your @-mentions grouped by urgency"
+    },
+    {
+      "name": "search",
+      "description": "Find messages using full Slack query syntax"
+    },
+    {
+      "name": "get-context",
+      "description": "Thread history and conversation context"
+    },
+    {
+      "name": "check-timing",
+      "description": "Conversation pacing analysis"
+    },
+    {
+      "name": "send-message",
+      "description": "Post to channel, DM, or thread"
+    },
+    {
+      "name": "mark-read",
+      "description": "Mark conversations as read"
+    },
+    {
+      "name": "react",
+      "description": "Add or remove emoji reactions"
+    },
+    {
+      "name": "auth-setup",
+      "description": "Browser-automated Slack token extraction"
+    }
+  ],
+  "user_config": {
+    "xoxc_token": {
+      "type": "string",
+      "title": "Slack xoxc Token",
+      "description": "Session token from Slack. Run the auth-setup tool to extract automatically, or leave blank to use the built-in setup flow.",
+      "sensitive": true,
+      "required": false
+    },
+    "xoxd_token": {
+      "type": "string",
+      "title": "Slack xoxd Cookie",
+      "description": "Session cookie from Slack. Run the auth-setup tool to extract automatically, or leave blank to use the built-in setup flow.",
+      "sensitive": true,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

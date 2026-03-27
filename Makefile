@@ -27,6 +27,7 @@ CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./build/$(BINARY_N
 CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(NPM_PKG_PREFIX)-$(os)-$(arch)/bin/))
 CLEAN_TARGETS += ./npm/$(NPM_PKG_PREFIX)/.npmrc ./npm/$(NPM_PKG_PREFIX)/LICENSE ./npm/$(NPM_PKG_PREFIX)/README.md
 CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(NPM_PKG_PREFIX)-$(os)-$(arch)/.npmrc))
+CLEAN_TARGETS += mcpb/bin $(BINARY_NAME)-*.mcpb
 
 # The help will print out all targets with their descriptions organized bellow their categories. The categories are represented by `##@` and the target descriptions by `##`.
 # The awk commands is responsible to read the entire set of makefiles included in this invocation, looking for lines of the file as xyz: ## something, and then pretty-format the target and help. Then, if there's a line with ##@ something, that gets pretty-printed as a category.
@@ -103,6 +104,30 @@ format: ## Format the code
 .PHONY: tidy
 tidy: ## Tidy up the go modules
 	go mod tidy
+
+MCPB_PLATFORMS = darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64
+
+# Map mcpb platform names to our build artifact names
+# mcpb: darwin-arm64 → build: slack-mcp-darwin-arm64
+mcpb_to_binary = $(BINARY_NAME)-$(subst x64,amd64,$(subst windows,windows,$(1)))$(if $(findstring windows,$(1)),.exe,)
+
+.PHONY: mcpb
+mcpb: ## Build .mcpb for a single platform. Usage: make mcpb PLATFORM=linux-x64
+	@if [ -z "$(PLATFORM)" ]; then echo "Usage: make mcpb PLATFORM=linux-x64"; exit 1; fi
+	@echo "Building mcpb for $(PLATFORM)..."
+	rm -rf mcpb/bin
+	mkdir -p mcpb/bin
+	cp ./build/$(call mcpb_to_binary,$(PLATFORM)) mcpb/bin/$(BINARY_NAME)$(if $(findstring windows,$(PLATFORM)),.exe,)
+	mcpb pack mcpb $(BINARY_NAME)-$(PLATFORM).mcpb
+	@echo "Built: $(BINARY_NAME)-$(PLATFORM).mcpb ($$(du -h $(BINARY_NAME)-$(PLATFORM).mcpb | cut -f1))"
+
+.PHONY: mcpb-all
+mcpb-all: build-all-platforms ## Build .mcpb for all platforms
+	@for plat in $(MCPB_PLATFORMS); do \
+		echo ""; \
+		echo "=== $$plat ==="; \
+		$(MAKE) mcpb PLATFORM=$$plat; \
+	done
 
 .PHONY: release
 release: ## Create release tag. Usage: make tag TAG=v1.2.3

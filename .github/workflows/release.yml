@@ -19,13 +19,27 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install mcpb CLI
+        run: npm install -g @anthropic-ai/mcpb
+
+      - name: Set version in mcpb manifest
+        run: |
+          VERSION=$(git describe --tags --always | sed 's/^v//' | cut -d- -f1)
+          jq --arg v "$VERSION" '.version = $v' mcpb/manifest.json > mcpb/tmp.json && mv mcpb/tmp.json mcpb/manifest.json
+
       - name: Build all platforms
         run: make build-all-platforms
 
+      - name: Build mcpb bundles
+        run: make mcpb-all
+
       - name: Generate checksums
         run: |
-          cd build
-          sha256sum slack-mcp-* > checksums.txt
+          sha256sum build/slack-mcp-* slack-mcp-*.mcpb > checksums.txt
           cat checksums.txt
 
       - name: Create release
@@ -35,4 +49,4 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/}"
           gh release view "$TAG" 2>/dev/null || \
             gh release create "$TAG" --title "$TAG" --generate-notes
-          gh release upload "$TAG" build/slack-mcp-* build/checksums.txt --clobber
+          gh release upload "$TAG" build/slack-mcp-* slack-mcp-*.mcpb checksums.txt --clobber

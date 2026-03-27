@@ -1,0 +1,15 @@
+# Exclude everything except the binary and manifest
+.github/
+.claude/
+docs/
+cmd/
+pkg/
+npm/
+build/
+*.go
+*.md
+*.sum
+*.mod
+Makefile
+LICENSE
+CREDITS.md
