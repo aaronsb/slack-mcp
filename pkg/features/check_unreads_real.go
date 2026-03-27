@@ -87,10 +87,11 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	}
 
 	stats := map[string]interface{}{
-		"totalDMs":      0,
-		"totalMentions": 0,
-		"totalChannels": 0,
-		"urgent":        0,
+		"totalDMs":             0,
+		"totalMentions":        0,
+		"totalChannels":        0,
+		"totalChannelMessages": 0,
+		"urgent":               0,
 	}
 
 	// Process DMs from internal counts
