@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/slack-go/slack"
@@ -151,27 +150,24 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 
 // parseTimeframeToDateFilter converts our timeframe format to Slack's date filter
 func parseTimeframeToDateFilter(timeframe string) string {
-	// Parse common formats
+	timeframe = strings.TrimSpace(timeframe)
+
 	if strings.HasSuffix(timeframe, "d") {
-		days := strings.TrimSuffix(timeframe, "d")
-		if d, err := time.ParseDuration(days + "h"); err == nil {
-			days := int(d.Hours() / 24)
-			return fmt.Sprintf("after:-%dd", days)
+		var d int
+		if _, err := fmt.Sscanf(timeframe, "%dd", &d); err == nil && d > 0 {
+			return fmt.Sprintf("after:-%dd", d)
 		}
 	} else if strings.HasSuffix(timeframe, "w") {
-		weeks := strings.TrimSuffix(timeframe, "w")
-		if w, err := time.ParseDuration(weeks + "h"); err == nil {
-			days := int(w.Hours()/24/7) * 7
-			return fmt.Sprintf("after:-%dd", days)
+		var w int
+		if _, err := fmt.Sscanf(timeframe, "%dw", &w); err == nil && w > 0 {
+			return fmt.Sprintf("after:-%dd", w*7)
 		}
 	} else if strings.HasSuffix(timeframe, "m") {
-		months := strings.TrimSuffix(timeframe, "m")
-		if m, err := time.ParseDuration(months + "h"); err == nil {
-			days := int(m.Hours()/24/30) * 30
-			return fmt.Sprintf("after:-%dd", days)
+		var m int
+		if _, err := fmt.Sscanf(timeframe, "%dm", &m); err == nil && m > 0 {
+			return fmt.Sprintf("after:-%dd", m*30)
 		}
 	}
 
-	// Default to 30 days
 	return "after:-30d"
 }

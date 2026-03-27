@@ -407,18 +407,39 @@ func formatSearch(result *FeatureResult) string {
 	}
 
 	var b strings.Builder
-	messages := asList(data["messages"])
 	query := str(data, "query")
 
-	b.WriteString(fmt.Sprintf("## Search: \"%s\" (%d results)\n\n", query, len(messages)))
+	// Search results are in "discussions" (from find_discussion_official.go)
+	discussions := asList(data["discussions"])
+	// Also check "messages" for thread context results
+	if len(discussions) == 0 {
+		discussions = asList(data["messages"])
+	}
 
-	for _, msg := range messages {
+	b.WriteString(fmt.Sprintf("## Search: \"%s\" (%d results)\n\n", query, len(discussions)))
+
+	// Show search metadata if available
+	if meta, ok := data["searchMeta"].(map[string]interface{}); ok {
+		total := num(meta, "totalMatches")
+		returned := num(meta, "returned")
+		if total > returned {
+			b.WriteString(fmt.Sprintf("Showing %d of %d total matches.\n\n", returned, total))
+		}
+	}
+
+	for _, msg := range discussions {
 		channel := str(msg, "channel")
 		user := str(msg, "user")
 		text := truncate(str(msg, "text"), 120)
 		ts := str(msg, "timestamp")
+		msgType := str(msg, "type")
 
-		b.WriteString(fmt.Sprintf("#%s | %s | %s\n  %s\n\n", channel, user, ts, text))
+		threadTag := ""
+		if msgType == "thread" {
+			threadTag = " [thread]"
+		}
+
+		b.WriteString(fmt.Sprintf("#%s | %s | %s%s\n  %s\n\n", channel, user, ts, threadTag, text))
 	}
 
 	b.WriteString(footer(result))

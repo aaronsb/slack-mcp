@@ -27,8 +27,8 @@ var FindDiscussion = &Feature{
 			},
 			"timeframe": map[string]interface{}{
 				"type":        "string",
-				"description": "Time period to search (e.g., 'last week', '1m', 'january')",
-				"default":     "1m",
+				"description": "Time period to search (e.g., '1w', '2w', '1m', '3d')",
+				"default":     "1w",
 			},
 			"threadId": map[string]interface{}{
 				"type":        "string",
