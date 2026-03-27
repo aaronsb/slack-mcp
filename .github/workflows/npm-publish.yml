@@ -47,8 +47,9 @@ jobs:
       - name: Set version in packages
         run: make npm-set-version NPM_VERSION=${{ steps.meta.outputs.version }}
 
-      - name: Publish test - single package
+      - name: Publish test - wrapper package only
         run: |
-          cd npm/slack-mcp-server-linux-amd64
+          cp LICENSE npm/slack-mcp-server/
+          cd npm/slack-mcp-server
           cat package.json
           npm publish --access public --provenance --tag ${{ steps.meta.outputs.tag }}
