@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "fix/*", "feature/*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - run: make test
+      - run: make check-network-isolation
+
+  build-all-platforms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make build-all-platforms
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: build/slack-mcp-*
+          retention-days: 7

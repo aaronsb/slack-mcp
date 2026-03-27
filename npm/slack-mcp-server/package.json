@@ -1,39 +1,37 @@
 {
-  "name": "slack-mcp-server",
-  "version": "1.1.0",
-  "description": "Model Context Protocol (MCP) server for Slack Workspaces. This integration supports both Stdio and SSE transports, proxy settings and does not require any permissions or bots being created or approved by Workspace admins",
+  "name": "@aaronsb/slack-mcp",
+  "version": "1.2.0",
+  "description": "MCP server for Slack workspaces using session tokens. Automatic browser-based token extraction, stealth reads, channel caching.",
   "main": "bin/index.js",
   "bin": {
-    "slack-mcp-server": "bin/index.js"
+    "slack-mcp": "bin/index.js"
   },
   "optionalDependencies": {
-    "slack-mcp-server-darwin-amd64": "1.1.0",
-    "slack-mcp-server-darwin-arm64": "1.1.0",
-    "slack-mcp-server-linux-amd64": "1.1.0",
-    "slack-mcp-server-linux-arm64": "1.1.0",
-    "slack-mcp-server-windows-amd64": "1.1.0",
-    "slack-mcp-server-windows-arm64": "1.1.0"
+    "@aaronsb/slack-mcp-darwin-amd64": "1.2.0",
+    "@aaronsb/slack-mcp-darwin-arm64": "1.2.0",
+    "@aaronsb/slack-mcp-linux-amd64": "1.2.0",
+    "@aaronsb/slack-mcp-linux-arm64": "1.2.0",
+    "@aaronsb/slack-mcp-windows-amd64": "1.2.0",
+    "@aaronsb/slack-mcp-windows-arm64": "1.2.0"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/korotovsky/slack-mcp-server.git"
+    "url": "git+https://github.com/aaronsb/slack-mcp.git"
   },
   "keywords": [
     "mcp",
     "slack",
-    "slack-api",
-    "model context protocol",
-    "model",
-    "context",
-    "protocol"
+    "model-context-protocol",
+    "ai",
+    "claude"
   ],
   "author": {
-    "name": "Dmitrii Korotovskii",
-    "url": "https://www.linkedin.com/in/korotovsky/"
+    "name": "Aaron Bockelie",
+    "url": "https://github.com/aaronsb"
   },
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/korotovsky/slack-mcp-server/issues"
+    "url": "https://github.com/aaronsb/slack-mcp/issues"
   },
-  "homepage": "https://github.com/korotovsky/slack-mcp-server#readme"
+  "homepage": "https://github.com/aaronsb/slack-mcp#readme"
 }

@@ -1,0 +1,67 @@
+name: Publish to npm
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Build all platforms
+        run: make build-all-platforms
+
+      - name: Copy binaries to npm packages
+        run: make npm-copy-binaries
+
+      - name: Determine version and npm tag
+        id: meta
+        run: |
+          VERSION=$(git describe --tags --always | sed 's/^v//' | cut -d- -f1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if echo "$VERSION" | grep -qE 'alpha|beta|rc'; then
+            TAG=$(echo "$VERSION" | grep -oE 'alpha|beta|rc')
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set version in packages
+        run: make npm-set-version NPM_VERSION=${{ steps.meta.outputs.version }}
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for dir in npm/slack-mcp-server-*/; do
+            echo "Publishing $(basename $dir)..."
+            cd "$dir"
+            npm publish --access public --provenance --tag ${{ steps.meta.outputs.tag }}
+            cd ../..
+          done
+
+      - name: Publish wrapper package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cp LICENSE npm/slack-mcp-server/
+          cd npm/slack-mcp-server
+          npm publish --access public --provenance --tag ${{ steps.meta.outputs.tag }}

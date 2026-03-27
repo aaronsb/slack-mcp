@@ -17,15 +17,16 @@ LD_FLAGS = -s -w \
 COMMON_BUILD_ARGS = -ldflags "$(LD_FLAGS)"
 
 NPM_VERSION = $(shell git describe --tags --always | sed 's/^v//' | cut -d- -f1)
+NPM_PKG_PREFIX = slack-mcp-server
 OSES = darwin linux windows
 ARCHS = amd64 arm64
 
 CLEAN_TARGETS :=
 CLEAN_TARGETS += '$(BINARY_NAME)'
 CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./build/$(BINARY_NAME)-$(os)-$(arch)$(if $(findstring windows,$(os)),.exe,)))
-CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(BINARY_NAME)-$(os)-$(arch)/bin/))
-CLEAN_TARGETS += ./npm/slack-mcp-server/.npmrc ./npm/slack-mcp-server/LICENSE ./npm/slack-mcp-server/README.md
-CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(BINARY_NAME)-$(os)-$(arch)/.npmrc))
+CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(NPM_PKG_PREFIX)-$(os)-$(arch)/bin/))
+CLEAN_TARGETS += ./npm/$(NPM_PKG_PREFIX)/.npmrc ./npm/$(NPM_PKG_PREFIX)/LICENSE ./npm/$(NPM_PKG_PREFIX)/README.md
+CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(NPM_PKG_PREFIX)-$(os)-$(arch)/.npmrc))
 
 # The help will print out all targets with their descriptions organized bellow their categories. The categories are represented by `##@` and the target descriptions by `##`.
 # The awk commands is responsible to read the entire set of makefiles included in this invocation, looking for lines of the file as xyz: ## something, and then pretty-format the target and help. Then, if there's a line with ##@ something, that gets pretty-printed as a category.
@@ -58,26 +59,29 @@ build-all-platforms: clean tidy format ## Build the project for all platforms
 npm-copy-binaries: build-all-platforms ## Copy the binaries to each npm package
 	$(foreach os,$(OSES),$(foreach arch,$(ARCHS), \
 		EXECUTABLE=$(BINARY_NAME)-$(os)-$(arch)$(if $(findstring windows,$(os)),.exe,); \
-		DIRNAME=$(BINARY_NAME)-$(os)-$(arch); \
+		DIRNAME=$(NPM_PKG_PREFIX)-$(os)-$(arch); \
 		mkdir -p ./npm/$$DIRNAME/bin; \
 		cp ./build/$$EXECUTABLE ./npm/$$DIRNAME/bin/; \
 	))
 
-.PHONY: npm-publish
-npm-publish: npm-copy-binaries ## Publish the npm packages
+.PHONY: npm-set-version
+npm-set-version: ## Set version in all npm package.json files
+	@if [ -z "$(NPM_VERSION)" ]; then echo "NPM_VERSION not set (tag the repo first)"; exit 1; fi
 	$(foreach os,$(OSES),$(foreach arch,$(ARCHS), \
-		DIRNAME="$(BINARY_NAME)-$(os)-$(arch)"; \
-		cd npm/$$DIRNAME; \
-		echo '//registry.npmjs.org/:_authToken=$(NPM_TOKEN)' >> .npmrc; \
-		jq '.version = "$(NPM_VERSION)"' package.json > tmp.json && mv tmp.json package.json; \
-		npm publish; \
-		cd ../..; \
+		DIRNAME="$(NPM_PKG_PREFIX)-$(os)-$(arch)"; \
+		jq '.version = "$(NPM_VERSION)"' npm/$$DIRNAME/package.json > npm/$$DIRNAME/tmp.json && mv npm/$$DIRNAME/tmp.json npm/$$DIRNAME/package.json; \
 	))
-	cp README.md LICENSE ./npm/slack-mcp-server/
-	echo '//registry.npmjs.org/:_authToken=$(NPM_TOKEN)' >> ./npm/slack-mcp-server/.npmrc
-	jq '.version = "$(NPM_VERSION)"' ./npm/slack-mcp-server/package.json > tmp.json && mv tmp.json ./npm/slack-mcp-server/package.json; \
-	jq '.optionalDependencies |= with_entries(.value = "$(NPM_VERSION)")' ./npm/slack-mcp-server/package.json > tmp.json && mv tmp.json ./npm/slack-mcp-server/package.json; \
-	cd npm/slack-mcp-server && npm publish
+	jq '.version = "$(NPM_VERSION)"' npm/$(NPM_PKG_PREFIX)/package.json > npm/$(NPM_PKG_PREFIX)/tmp.json && mv npm/$(NPM_PKG_PREFIX)/tmp.json npm/$(NPM_PKG_PREFIX)/package.json
+	jq '.optionalDependencies |= with_entries(.value = "$(NPM_VERSION)")' npm/$(NPM_PKG_PREFIX)/package.json > npm/$(NPM_PKG_PREFIX)/tmp.json && mv npm/$(NPM_PKG_PREFIX)/tmp.json npm/$(NPM_PKG_PREFIX)/package.json
+
+.PHONY: npm-publish
+npm-publish: npm-copy-binaries npm-set-version ## Publish all npm packages (requires NPM_TOKEN or npm login)
+	cp README.md LICENSE ./npm/$(NPM_PKG_PREFIX)/
+	$(foreach os,$(OSES),$(foreach arch,$(ARCHS), \
+		DIRNAME="$(NPM_PKG_PREFIX)-$(os)-$(arch)"; \
+		cd npm/$$DIRNAME && npm publish --access public $(NPM_PUBLISH_FLAGS) && cd ../..; \
+	))
+	cd npm/$(NPM_PKG_PREFIX) && npm publish --access public $(NPM_PUBLISH_FLAGS)
 
 .PHONY: check-network-isolation
 check-network-isolation: ## Verify no rod auto-download calls exist in source
