@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -46,28 +47,31 @@ func main() {
 		log.Println("No .env file found, using environment variables")
 	}
 
-	// Build provider: try config file first, fall back to env vars
-	p := loadProvider()
+	// Build provider: try config file, then env vars, then start without auth
+	p, authErr := loadProvider()
 
 	s := server.NewSemanticMCPServer(p)
 
+	if authErr != nil {
+		// Register the server but log that auth is needed
+		log.Printf("No Slack credentials found: %v", authErr)
+		log.Printf("Tools will return auth errors. Run 'slack-mcp setup' to configure.")
+	}
+
 	// Boot provider asynchronously after server starts
-	go func() {
-		log.Println("Booting provider in background...")
+	if authErr == nil {
+		go func() {
+			log.Println("Booting provider in background...")
 
-		if os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo" {
-			log.Println("Demo credentials are set, skip provider boot.")
-			return
-		}
-
-		_, err := p.Provide()
-		if err != nil {
-			log.Printf("Warning: Provider boot failed: %v", err)
-			log.Println("Some features may be limited until cache is loaded")
-		} else {
-			log.Println("Provider booted successfully in background")
-		}
-	}()
+			_, err := p.Provide()
+			if err != nil {
+				log.Printf("Warning: Provider boot failed: %v", err)
+				log.Println("Some features may be limited until cache is loaded")
+			} else {
+				log.Println("Provider booted successfully in background")
+			}
+		}()
+	}
 
 	switch transport {
 	case "stdio":
@@ -94,15 +98,16 @@ func main() {
 	}
 }
 
-// loadProvider creates a provider from config file or env vars
-func loadProvider() *provider.ApiProvider {
+// loadProvider creates a provider from config file or env vars.
+// Returns a provider and nil error on success, or a nil provider and error
+// describing what's missing. The server can still start without a provider —
+// tools will return helpful auth errors telling the agent to run setup.
+func loadProvider() (*provider.ApiProvider, error) {
 	// Try config file first
 	cfg, err := setup.LoadConfig()
 	if err == nil && len(cfg.Workspaces) > 0 {
-		// Use default workspace from config
 		wsName := cfg.DefaultWorkspace
 		if wsName == "" {
-			// Pick first workspace
 			for name := range cfg.Workspaces {
 				wsName = name
 				break
@@ -111,11 +116,23 @@ func loadProvider() *provider.ApiProvider {
 
 		if ws, ok := cfg.Workspaces[wsName]; ok {
 			log.Printf("Using workspace %q from config file", wsName)
-			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken)
+			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken), nil
 		}
 	}
 
-	// Fall back to env vars (this will panic if not set — same as before)
-	log.Println("No config file found, using environment variables")
-	return provider.New()
+	// Try env vars
+	token := os.Getenv("SLACK_MCP_XOXC_TOKEN")
+	cookie := os.Getenv("SLACK_MCP_XOXD_TOKEN")
+
+	if token != "" && cookie != "" {
+		if token == "demo" && cookie == "demo" {
+			log.Println("Demo mode — provider will not boot")
+			return provider.NewWithTokens(token, cookie), nil
+		}
+		log.Println("Using tokens from environment variables")
+		return provider.NewWithTokens(token, cookie), nil
+	}
+
+	// No credentials found anywhere
+	return nil, fmt.Errorf("no Slack credentials found in config (%s) or environment", setup.ConfigPath())
 }

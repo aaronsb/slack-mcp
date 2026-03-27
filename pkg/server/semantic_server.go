@@ -98,6 +98,15 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 		}
 
 		// Add provider to params for features that need it
+		if s.provider == nil {
+			guidance := map[string]interface{}{
+				"status":  "setup_needed",
+				"message": "Slack credentials are not configured yet. To connect a workspace, run: slack-mcp setup",
+				"hint":    "This starts a local web page that walks through connecting your Slack account. Tokens are stored locally and never leave your machine.",
+			}
+			jsonData, _ := json.MarshalIndent(guidance, "", "  ")
+			return mcp.NewToolResultText(string(jsonData)), nil
+		}
 		params["_provider"] = s.provider
 
 		// Execute feature
