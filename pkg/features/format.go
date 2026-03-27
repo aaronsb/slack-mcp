@@ -48,10 +48,11 @@ func FormatResult(toolName string, result *FeatureResult) string {
 func truncate(s string, max int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.TrimSpace(s)
-	if len(s) <= max {
+	runes := []rune(s)
+	if len(runes) <= max {
 		return s
 	}
-	return s[:max] + "..."
+	return string(runes[:max]) + "..."
 }
 
 func dataMap(result *FeatureResult) map[string]interface{} {
@@ -197,6 +198,22 @@ func formatUnreads(result *FeatureResult) string {
 				urgent = " [URGENT]"
 			}
 			b.WriteString(fmt.Sprintf("#%s | %s | %s%s\n  %s\n\n", channel, author, ts, urgent, text))
+		}
+	}
+
+	// Channels
+	channels := asList(unreads["channels"])
+	if len(channels) > 0 {
+		b.WriteString(fmt.Sprintf("### Channels (%d)\n\n", len(channels)))
+		for _, ch := range channels {
+			name := str(ch, "channel")
+			lastMsg := truncate(str(ch, "lastMessage"), 100)
+			ts := str(ch, "timestamp")
+			if ts != "" {
+				b.WriteString(fmt.Sprintf("#%s | %s\n  %s\n\n", name, ts, lastMsg))
+			} else {
+				b.WriteString(fmt.Sprintf("#%s\n  %s\n\n", name, lastMsg))
+			}
 		}
 	}
 
@@ -439,7 +456,11 @@ func formatSearch(result *FeatureResult) string {
 			threadTag = " [thread]"
 		}
 
-		b.WriteString(fmt.Sprintf("#%s | %s | %s%s\n  %s\n\n", channel, user, ts, threadTag, text))
+		b.WriteString(fmt.Sprintf("#%s | %s | %s%s\n  %s\n", channel, user, ts, threadTag, text))
+		if link := str(msg, "permalink"); link != "" {
+			b.WriteString(fmt.Sprintf("  %s\n", link))
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString(footer(result))
@@ -481,15 +502,22 @@ func formatTiming(result *FeatureResult) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("## Conversation Timing\n\n")
+	channel := str(data, "channel")
+	b.WriteString(fmt.Sprintf("## Conversation Timing — %s\n\n", channel))
 
-	if analysis, ok := data["analysis"].(map[string]interface{}); ok {
-		for k, v := range analysis {
-			b.WriteString(fmt.Sprintf("**%s:** %v\n", k, v))
-		}
+	if mode := str(data, "mode"); mode != "" {
+		b.WriteString(fmt.Sprintf("**Mode:** %s\n", mode))
+	}
+	if since := str(data, "timeSinceLastMessage"); since != "" {
+		b.WriteString(fmt.Sprintf("**Since last message:** %s\n", since))
+	}
+	if rec := str(data, "recommendation"); rec != "" {
+		b.WriteString(fmt.Sprintf("**Recommendation:** %s\n", rec))
+	}
+	if prompt := str(data, "thinkingPrompt"); prompt != "" {
+		b.WriteString(fmt.Sprintf("\n%s\n", prompt))
 	}
 
-	b.WriteString("\n" + result.Message)
 	b.WriteString(footer(result))
 	return b.String()
 }
