@@ -50,6 +50,8 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	registry.Register(features.MarkAsRead)
 	registry.Register(features.GetContext)
 	registry.Register(features.React)
+	registry.Register(features.ListUsers)
+	registry.Register(features.AuthSetup)
 
 	semanticServer := &SemanticMCPServer{
 		server:   s,
@@ -62,6 +64,9 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	for _, feature := range registry.All() {
 		semanticServer.registerFeature(feature)
 	}
+
+	// Register help resources
+	semanticServer.registerResources()
 
 	log.Printf("Initialized Slack MCP Server with personality: %s", personality)
 
@@ -98,11 +103,11 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 		}
 
 		// Add provider to params for features that need it
-		if s.provider == nil {
+		if s.provider == nil && feature.Name != "auth-setup" {
 			guidance := map[string]interface{}{
 				"status":  "setup_needed",
-				"message": "Slack credentials are not configured yet. To connect a workspace, run: slack-mcp setup",
-				"hint":    "This starts a local web page that walks through connecting your Slack account. Tokens are stored locally and never leave your machine.",
+				"message": "Slack credentials are not configured yet. Use the auth-setup tool to connect a workspace.",
+				"hint":    "Call auth-setup to start a browser-based setup flow. Tokens are stored locally and never leave your machine.",
 			}
 			jsonData, _ := json.MarshalIndent(guidance, "", "  ")
 			return mcp.NewToolResultText(string(jsonData)), nil
@@ -180,6 +185,111 @@ func (s *SemanticMCPServer) createToolOption(name string, prop map[string]interf
 	}
 
 	return options
+}
+
+// registerResources adds MCP resources for help content
+func (s *SemanticMCPServer) registerResources() {
+	// Identity resource — tells the agent who it's operating as
+	s.server.AddResource(
+		mcp.Resource{
+			URI:         "slack-mcp://identity",
+			Name:        "Current User Identity",
+			Description: "The authenticated Slack user this server is operating as. Read this to know your name, team, and role before interacting with others.",
+			MIMEType:    "application/json",
+		},
+		func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+			if s.provider == nil {
+				return []mcp.ResourceContents{
+					mcp.TextResourceContents{
+						URI:      "slack-mcp://identity",
+						MIMEType: "application/json",
+						Text:     `{"status": "not_authenticated", "message": "Use auth-setup to connect a workspace"}`,
+					},
+				}, nil
+			}
+
+			identity := s.provider.ProvideIdentity()
+			if identity == nil {
+				return []mcp.ResourceContents{
+					mcp.TextResourceContents{
+						URI:      "slack-mcp://identity",
+						MIMEType: "application/json",
+						Text:     `{"status": "unknown", "message": "Identity not yet available — provider may still be booting"}`,
+					},
+				}, nil
+			}
+
+			data, _ := json.MarshalIndent(identity, "", "  ")
+			return []mcp.ResourceContents{
+				mcp.TextResourceContents{
+					URI:      "slack-mcp://identity",
+					MIMEType: "application/json",
+					Text:     string(data),
+				},
+			}, nil
+		},
+	)
+
+	s.server.AddResource(
+		mcp.Resource{
+			URI:         "slack-mcp://help/browser-setup",
+			Name:        "Browser Setup Guide",
+			Description: "Step-by-step instructions for extracting Slack tokens using Chrome or Firefox DevTools. Read this resource when the user needs help with the auth-setup browser flow.",
+			MIMEType:    "text/plain",
+		},
+		func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+			return []mcp.ResourceContents{
+				mcp.TextResourceContents{
+					URI:      "slack-mcp://help/browser-setup",
+					MIMEType: "text/plain",
+					Text: `Slack MCP Browser Token Setup Guide
+
+The auth-setup tool opens a local web page that guides you through connecting your Slack workspace.
+If you need to extract tokens manually, follow these steps:
+
+== Chrome ==
+
+1. Open Slack in your browser (app.slack.com)
+2. Make sure you're logged into the workspace you want to connect
+3. Open DevTools: F12 or Ctrl+Shift+I (Cmd+Option+I on Mac)
+4. Go to the Application tab
+5. In the left sidebar, expand "Local Storage" and click on "https://app.slack.com"
+6. Find the key "localConfig_v2" — the xoxc token is in this JSON blob
+7. For the xoxd cookie: In the same Application tab, expand "Cookies" > "https://app.slack.com"
+8. Find the cookie named "d" — this is your xoxd token value
+
+== Firefox ==
+
+1. Open Slack in your browser (app.slack.com)
+2. Open DevTools: F12 or Ctrl+Shift+I
+3. Go to the Storage tab
+4. Expand "Local Storage" > "https://app.slack.com"
+5. Find "localConfig_v2" for the xoxc token
+6. Expand "Cookies" > "https://app.slack.com" for the "d" cookie (xoxd token)
+
+== Using the Setup Page ==
+
+The easier approach: when auth-setup opens the browser page, it provides a
+JavaScript snippet to paste into the browser console. The snippet automatically
+extracts both tokens and sends them to the local setup server.
+
+1. Open any Slack tab in your browser
+2. Open the browser console (F12 > Console tab)
+3. Paste the snippet shown on the setup page
+4. Press Enter
+5. The setup page will confirm when tokens are received and validated
+
+== Security Notes ==
+
+- Tokens are sent directly from your browser to localhost — they never leave your machine
+- The setup server runs on a high port (51837+) and auto-shuts down after receiving tokens
+- Config is saved to ~/.config/slack-mcp/config.json with 0600 permissions
+- These are session tokens tied to your browser session, not permanent API keys
+`,
+				},
+			}, nil
+		},
+	)
 }
 
 // ServeSSE starts the SSE server

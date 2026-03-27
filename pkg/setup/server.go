@@ -39,10 +39,9 @@ type setupResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-// RunSetup starts the local HTTP server for token extraction
+// RunSetup starts the local HTTP server for token extraction (CLI entry point)
 func RunSetup() error {
-	// Find an available port
-	port, listener, err := findPort()
+	port, listener, err := FindPort()
 	if err != nil {
 		return fmt.Errorf("could not find available port: %w", err)
 	}
@@ -51,6 +50,31 @@ func RunSetup() error {
 	fmt.Printf("  ──────────────\n")
 	fmt.Printf("  Starting setup server on localhost:%d...\n\n", port)
 
+	// Open browser
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		url := fmt.Sprintf("http://localhost:%d", port)
+		fmt.Printf("  Opening browser to %s\n", url)
+		fmt.Printf("  Follow the instructions there to connect your Slack workspace.\n\n")
+		fmt.Printf("  Waiting for tokens... (Ctrl+C to cancel)\n\n")
+		OpenBrowserURL(url)
+	}()
+
+	team, user, err := RunSetupServer(listener, port)
+	if err != nil {
+		fmt.Printf("  ✗ Setup failed: %s\n\n", err)
+		return nil
+	}
+
+	fmt.Printf("  ✓ Got tokens for workspace %q (user: %s)\n", team, user)
+	fmt.Printf("  ✓ Saved to %s\n\n", ConfigPath())
+	return nil
+}
+
+// RunSetupServer runs the setup HTTP server on the given listener.
+// It blocks until the user completes the browser flow.
+// Returns the workspace team name and user on success.
+func RunSetupServer(listener net.Listener, port int) (team, user string, err error) {
 	var (
 		mu     sync.Mutex
 		result *setupResult
@@ -72,7 +96,6 @@ func RunSetup() error {
 
 	// Receive tokens from the browser snippet
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		// CORS headers must be set before any response — including preflight
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -89,7 +112,7 @@ func RunSetup() error {
 
 		w.Header().Set("Content-Type", "application/json")
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB max
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "failed to read body"})
 			return
@@ -112,49 +135,46 @@ func RunSetup() error {
 			return
 		}
 
-		// Validate tokens with Slack
-		team, user, userID, err := validateTokens(payload.Xoxc, payload.Xoxd)
-		if err != nil {
+		vTeam, vUser, vUserID, vErr := validateTokens(payload.Xoxc, payload.Xoxd)
+		if vErr != nil {
 			mu.Lock()
-			result = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("token validation failed: %v", err)}
+			result = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("token validation failed: %v", vErr)}
 			mu.Unlock()
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": result.Error})
 			return
 		}
 
-		// Save to config
-		cfg, err := LoadConfig()
-		if err != nil {
+		cfg, cfgErr := LoadConfig()
+		if cfgErr != nil {
 			cfg = &Config{Workspaces: make(map[string]WorkspaceConfig)}
 		}
 
-		cfg.Workspaces[team] = WorkspaceConfig{
+		cfg.Workspaces[vTeam] = WorkspaceConfig{
 			XoxcToken: payload.Xoxc,
 			XoxdToken: payload.Xoxd,
-			TeamName:  team,
-			UserName:  user,
-			UserID:    userID,
+			TeamName:  vTeam,
+			UserName:  vUser,
+			UserID:    vUserID,
 		}
 
 		if cfg.DefaultWorkspace == "" {
-			cfg.DefaultWorkspace = team
+			cfg.DefaultWorkspace = vTeam
 		}
 
-		if err := SaveConfig(cfg); err != nil {
+		if saveErr := SaveConfig(cfg); saveErr != nil {
 			mu.Lock()
-			result = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("failed to save config: %v", err)}
+			result = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("failed to save config: %v", saveErr)}
 			mu.Unlock()
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": result.Error})
 			return
 		}
 
 		mu.Lock()
-		result = &setupResult{Done: true, OK: true, Team: team, User: user}
+		result = &setupResult{Done: true, OK: true, Team: vTeam, User: vUser}
 		mu.Unlock()
 
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "team": team, "user": user})
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "team": vTeam, "user": vUser})
 
-		// Signal completion after a brief delay so the response gets sent
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			close(done)
@@ -175,48 +195,35 @@ func RunSetup() error {
 
 	server := &http.Server{Handler: mux}
 
-	// Open browser
 	go func() {
-		time.Sleep(300 * time.Millisecond)
-		url := fmt.Sprintf("http://localhost:%d", port)
-		fmt.Printf("  Opening browser to %s\n", url)
-		fmt.Printf("  Follow the instructions there to connect your Slack workspace.\n\n")
-		fmt.Printf("  Waiting for tokens... (Ctrl+C to cancel)\n\n")
-		openBrowser(url)
-	}()
-
-	// Start server
-	go func() {
-		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v", err)
+		if srvErr := server.Serve(listener); srvErr != nil && srvErr != http.ErrServerClosed {
+			log.Printf("Server error: %v", srvErr)
 		}
 	}()
 
-	// Wait for completion or interrupt
+	// Wait for completion
 	<-done
 
-	// Print result
 	mu.Lock()
 	r := result
 	mu.Unlock()
-
-	if r != nil && r.OK {
-		fmt.Printf("  ✓ Got tokens for workspace %q (user: %s)\n", r.Team, r.User)
-		fmt.Printf("  ✓ Saved to %s\n\n", ConfigPath())
-	} else if r != nil {
-		fmt.Printf("  ✗ Setup failed: %s\n\n", r.Error)
-	}
 
 	// Shutdown server
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	server.Shutdown(ctx)
 
-	return nil
+	if r != nil && r.OK {
+		return r.Team, r.User, nil
+	}
+	if r != nil {
+		return "", "", fmt.Errorf("%s", r.Error)
+	}
+	return "", "", fmt.Errorf("setup completed without result")
 }
 
-// findPort tries ports starting from startPort, incrementing on collision
-func findPort() (int, net.Listener, error) {
+// FindPort tries ports starting from startPort, incrementing on collision
+func FindPort() (int, net.Listener, error) {
 	for i := 0; i < maxRetries; i++ {
 		port := startPort + i
 		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -249,7 +256,7 @@ func validateTokens(xoxc, xoxd string) (team, user, userID string, err error) {
 		return "", "", "", fmt.Errorf("failed to read response: %w", err)
 	}
 
-	var result struct {
+	var authResult struct {
 		OK     bool   `json:"ok"`
 		Error  string `json:"error"`
 		Team   string `json:"team"`
@@ -257,19 +264,19 @@ func validateTokens(xoxc, xoxd string) (team, user, userID string, err error) {
 		UserID string `json:"user_id"`
 	}
 
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.Unmarshal(body, &authResult); err != nil {
 		return "", "", "", fmt.Errorf("invalid response: %w", err)
 	}
 
-	if !result.OK {
-		return "", "", "", fmt.Errorf("Slack API error: %s", result.Error)
+	if !authResult.OK {
+		return "", "", "", fmt.Errorf("Slack API error: %s", authResult.Error)
 	}
 
-	return result.Team, result.User, result.UserID, nil
+	return authResult.Team, authResult.User, authResult.UserID, nil
 }
 
-// openBrowser opens the default browser to the given URL
-func openBrowser(url string) {
+// OpenBrowserURL opens the default browser to the given URL
+func OpenBrowserURL(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

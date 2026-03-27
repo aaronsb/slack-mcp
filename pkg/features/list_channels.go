@@ -13,18 +13,18 @@ import (
 // ListChannels provides channel listing with smart caching
 var ListChannels = &Feature{
 	Name:        "list-channels",
-	Description: "List available channels from cache - use forceRefresh to update the cache",
+	Description: "Search for channels by name, or list channels you belong to. Without a search query, returns only your member channels. Use filter='all' to see everything in the workspace.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"filter": map[string]interface{}{
 				"type":        "string",
-				"description": "Filter channels by type: 'all', 'public', 'private', 'dm', 'group-dm', 'member-only', 'with-unreads'",
-				"default":     "all",
+				"description": "Filter channels by type: 'member' (default — your channels only), 'all', 'public', 'private', 'dm', 'group-dm'",
+				"default":     "member",
 			},
 			"search": map[string]interface{}{
 				"type":        "string",
-				"description": "Search for channels by name (partial match)",
+				"description": "Search for channels by name or purpose (partial match). When provided, searches all channels regardless of filter.",
 			},
 			"forceRefresh": map[string]interface{}{
 				"type":        "boolean",
@@ -38,8 +38,8 @@ var ListChannels = &Feature{
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
-				"description": "Maximum channels to return (default: 100, max: 500)",
-				"default":     100,
+				"description": "Maximum channels to return (default: 50, max: 500)",
+				"default":     50,
 			},
 		},
 		"required": []string{},
@@ -58,14 +58,19 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 	}
 
 	// Parse parameters
-	filter := "all"
+	filter := "member"
 	if f, ok := params["filter"].(string); ok {
 		filter = f
 	}
 
 	search := ""
 	if s, ok := params["search"].(string); ok {
-		search = strings.ToLower(s)
+		search = strings.ToLower(strings.TrimSpace(s))
+	}
+
+	// When searching, look across all channels unless explicitly filtered
+	if search != "" && filter == "member" {
+		filter = "all"
 	}
 
 	forceRefresh := false
@@ -78,7 +83,7 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 		includeArchived = i
 	}
 
-	limit := 100
+	limit := 50
 	if l, ok := params["limit"].(float64); ok {
 		limit = int(l)
 		if limit > 500 {
@@ -147,6 +152,8 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 		// Apply type filter
 		skip := false
 		switch filter {
+		case "member":
+			skip = !ch.IsMember
 		case "public":
 			skip = ch.IsPrivate || ch.IsIM || ch.IsMpIM
 		case "private":
@@ -155,11 +162,8 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 			skip = !ch.IsIM
 		case "group-dm":
 			skip = !ch.IsMpIM
-		case "member-only":
-			skip = !ch.IsMember
-		case "with-unreads":
-			// This would require checking unread counts
-			// For now, we'll include all (can be enhanced later)
+		case "all":
+			// no filter
 		}
 
 		if skip {
