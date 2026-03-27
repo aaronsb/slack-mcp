@@ -52,6 +52,9 @@ func StartCDPExtraction(browserPath, userDataDir, profileDir string) (*CDPExtrac
 
 	ctx, cancel := context.WithTimeout(context.Background(), cdpExtractTimeout)
 
+	// Detect display server if not set (Claude Desktop doesn't propagate these)
+	ensureDisplay()
+
 	log.Printf("CDP: launching %s (port=%d, tmpDir=%s, profile=%s)", browserPath, debugPort, tmpDir, profileDir)
 	log.Printf("CDP: DISPLAY=%q WAYLAND_DISPLAY=%q", os.Getenv("DISPLAY"), os.Getenv("WAYLAND_DISPLAY"))
 

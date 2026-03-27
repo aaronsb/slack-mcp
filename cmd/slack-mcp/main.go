@@ -111,6 +111,10 @@ func looksLikeToken(v, prefix string) bool {
 //  1. Config file (~/.config/slack-mcp/config.json) — always checked first
 //  2. Env vars matching token format (xoxc-/xoxd-) — manual override
 //  3. Nothing → return error (server starts, tools prompt for auth-setup)
+//
+// All token sources are validated against auth.test before use.
+// Invalid tokens are rejected so the server starts in no-auth mode
+// with clear guidance, rather than silently failing on every tool call.
 func loadProvider() (*provider.ApiProvider, error) {
 	// Config file is the source of truth — shared across all MCP hosts
 	cfg, err := setup.LoadConfig()
@@ -124,7 +128,12 @@ func loadProvider() (*provider.ApiProvider, error) {
 		}
 
 		if ws, ok := cfg.Workspaces[wsName]; ok {
-			log.Printf("Using workspace %q from config file (%s)", wsName, setup.ConfigPath())
+			log.Printf("Validating workspace %q from config file...", wsName)
+			if _, _, _, err := setup.ValidateTokens(ws.XoxcToken, ws.XoxdToken); err != nil {
+				log.Printf("Config tokens for %q failed validation: %v", wsName, err)
+				return nil, fmt.Errorf("stored tokens for workspace %q are invalid (%v) — run auth-setup to re-authenticate", wsName, err)
+			}
+			log.Printf("Workspace %q authenticated successfully", wsName)
 			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken), nil
 		}
 	}
@@ -134,7 +143,12 @@ func loadProvider() (*provider.ApiProvider, error) {
 	cookie := os.Getenv("SLACK_MCP_XOXD_TOKEN")
 
 	if looksLikeToken(token, "xoxc-") && looksLikeToken(cookie, "xoxd-") {
-		log.Println("Using tokens from environment variables (matched xoxc-/xoxd- format)")
+		log.Println("Validating tokens from environment variables...")
+		if _, _, _, err := setup.ValidateTokens(token, cookie); err != nil {
+			log.Printf("Env var tokens failed validation: %v", err)
+			return nil, fmt.Errorf("environment tokens are invalid (%v) — run auth-setup to configure", err)
+		}
+		log.Println("Environment tokens authenticated successfully")
 		return provider.NewWithTokens(token, cookie), nil
 	}
 
