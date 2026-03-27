@@ -722,8 +722,22 @@ func (ap *ApiProvider) GetCacheInfo() CacheInfo {
 }
 
 // looksLikeChannelID returns true if the string looks like a Slack channel/DM/group ID
+// looksLikeChannelID returns true if the string looks like a Slack channel/DM/group ID.
+// Real IDs are a capital letter (C, D, G) followed by uppercase alphanumeric chars, no spaces.
 func looksLikeChannelID(s string) bool {
-	return strings.HasPrefix(s, "C") || strings.HasPrefix(s, "D") || strings.HasPrefix(s, "G")
+	if len(s) < 2 {
+		return false
+	}
+	if s[0] != 'C' && s[0] != 'D' && s[0] != 'G' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) {
+			return false
+		}
+	}
+	return true
 }
 
 func withHTTPClientOption(cookie string) func(c *slack.Client) {

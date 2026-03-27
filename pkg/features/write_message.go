@@ -127,15 +127,33 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	return result, nil
 }
 
+// isChannelID checks if a string looks like a Slack channel/DM/group ID
+// (capital letter followed by uppercase alphanumeric, no spaces)
+func isChannelID(s string) bool {
+	if len(s) < 2 {
+		return false
+	}
+	if s[0] != 'C' && s[0] != 'D' && s[0] != 'G' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) {
+			return false
+		}
+	}
+	return true
+}
+
 func resolveChannelForSending(apiProvider *provider.ApiProvider, api *slack.Client, channel string) string {
-	// First try provider's cache for channel names
+	// First try provider's resolver (includes on-demand display name resolution)
 	cleanName := strings.TrimPrefix(channel, "#")
-	if channelID := apiProvider.ResolveChannelID(cleanName); strings.HasPrefix(channelID, "C") || strings.HasPrefix(channelID, "D") || strings.HasPrefix(channelID, "G") {
+	if channelID := apiProvider.ResolveChannelID(cleanName); channelID != cleanName {
 		return channelID
 	}
 
-	// If it looks like a channel ID already, return it
-	if strings.HasPrefix(channel, "C") || strings.HasPrefix(channel, "D") || strings.HasPrefix(channel, "G") {
+	// If it already looks like a channel ID, return it
+	if isChannelID(channel) {
 		return channel
 	}
 
