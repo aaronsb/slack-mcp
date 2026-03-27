@@ -98,12 +98,24 @@ func main() {
 	}
 }
 
-// loadProvider creates a provider from config file or env vars.
-// Returns a provider and nil error on success, or a nil provider and error
-// describing what's missing. The server can still start without a provider —
-// tools will return helpful auth errors telling the agent to run setup.
+// loadProvider resolves Slack credentials with this priority:
+//
+//  1. Env vars set (from mcpb UI or manual export) → use directly
+//  2. Env vars empty/unset → load from config.json
+//  3. Nothing → return error (server starts, tools prompt for auth-setup)
+//
+// No validation here — the auth-setup state machine handles that.
 func loadProvider() (*provider.ApiProvider, error) {
-	// Try config file first
+	token := os.Getenv("SLACK_MCP_XOXC_TOKEN")
+	cookie := os.Getenv("SLACK_MCP_XOXD_TOKEN")
+
+	// Env vars provided — use directly
+	if token != "" && cookie != "" {
+		log.Println("Using tokens from environment variables")
+		return provider.NewWithTokens(token, cookie), nil
+	}
+
+	// Env vars empty — try config file
 	cfg, err := setup.LoadConfig()
 	if err == nil && len(cfg.Workspaces) > 0 {
 		wsName := cfg.DefaultWorkspace
@@ -115,22 +127,9 @@ func loadProvider() (*provider.ApiProvider, error) {
 		}
 
 		if ws, ok := cfg.Workspaces[wsName]; ok {
-			log.Printf("Using workspace %q from config file", wsName)
+			log.Printf("Using workspace %q from config file (%s)", wsName, setup.ConfigPath())
 			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken), nil
 		}
-	}
-
-	// Try env vars
-	token := os.Getenv("SLACK_MCP_XOXC_TOKEN")
-	cookie := os.Getenv("SLACK_MCP_XOXD_TOKEN")
-
-	if token != "" && cookie != "" {
-		if token == "demo" && cookie == "demo" {
-			log.Println("Demo mode — provider will not boot")
-			return provider.NewWithTokens(token, cookie), nil
-		}
-		log.Println("Using tokens from environment variables")
-		return provider.NewWithTokens(token, cookie), nil
 	}
 
 	// No credentials found anywhere

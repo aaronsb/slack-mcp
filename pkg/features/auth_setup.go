@@ -3,8 +3,10 @@ package features
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 
+	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/setup"
 )
 
@@ -96,7 +98,34 @@ func authSetupHandler(ctx context.Context, params map[string]interface{}) (*Feat
 		resp = flow.Advance(action)
 	}
 
-	return flowToFeatureResult(resp), nil
+	result := flowToFeatureResult(resp)
+
+	// After successful auth, hot-load the provider so tools work immediately
+	if resp.Done && resp.OK {
+		if setProvider, ok := params["_setProvider"].(func(*provider.ApiProvider)); ok {
+			cfg, err := setup.LoadConfig()
+			if err != nil {
+				log.Printf("Warning: auth succeeded but failed to load config for hot-load: %v", err)
+			} else if len(cfg.Workspaces) == 0 {
+				log.Println("Warning: auth succeeded but config has no workspaces after save")
+			} else {
+				wsName := cfg.DefaultWorkspace
+				if wsName == "" {
+					for name := range cfg.Workspaces {
+						wsName = name
+						break
+					}
+				}
+				if ws, ok := cfg.Workspaces[wsName]; ok {
+					p := provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken)
+					setProvider(p)
+					log.Printf("Provider hot-loaded for workspace %q after auth", wsName)
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func flowToFeatureResult(resp *setup.FlowResponse) *FeatureResult {

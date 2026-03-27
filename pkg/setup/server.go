@@ -151,7 +151,7 @@ func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	vTeam, vUser, vUserID, vErr := validateTokens(payload.Xoxc, payload.Xoxd)
+	vTeam, vUser, vUserID, vErr := ValidateTokens(payload.Xoxc, payload.Xoxd)
 	if vErr != nil {
 		cs.mu.Lock()
 		cs.sResult = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("token validation failed: %v", vErr)}
@@ -301,8 +301,8 @@ func FindPort() (int, net.Listener, error) {
 	return 0, nil, fmt.Errorf("no available port found in range %d-%d", startPort, startPort+maxRetries-1)
 }
 
-// validateTokens checks tokens against Slack's auth.test API
-func validateTokens(xoxc, xoxd string) (team, user, userID string, err error) {
+// ValidateTokens checks tokens against Slack's auth.test API
+func ValidateTokens(xoxc, xoxd string) (team, user, userID string, err error) {
 	req, err := http.NewRequest("POST", "https://slack.com/api/auth.test", nil)
 	if err != nil {
 		return "", "", "", err

@@ -4,19 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"sync/atomic"
+
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"log"
-	"os"
 )
 
 // SemanticMCPServer provides intent-based Slack operations
 type SemanticMCPServer struct {
 	server   *server.MCPServer
 	registry *features.Registry
-	provider *provider.ApiProvider
+	provider atomic.Pointer[provider.ApiProvider]
 }
 
 // NewSemanticMCPServer creates a new semantic MCP server
@@ -56,7 +58,9 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	semanticServer := &SemanticMCPServer{
 		server:   s,
 		registry: registry,
-		provider: provider,
+	}
+	if provider != nil {
+		semanticServer.provider.Store(provider)
 	}
 
 	// For now, register all features regardless of personality
@@ -102,8 +106,23 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 			params[k] = v
 		}
 
+		// Provide a callback so auth-setup can hot-load the provider after success
+		params["_setProvider"] = func(p *provider.ApiProvider) {
+			s.provider.Store(p)
+			log.Println("Provider hot-loaded after successful auth setup")
+			go func() {
+				log.Println("Booting provider in background after auth...")
+				if _, err := p.Provide(); err != nil {
+					log.Printf("Warning: post-auth provider boot failed: %v", err)
+				} else {
+					log.Println("Provider booted successfully after auth")
+				}
+			}()
+		}
+
 		// Add provider to params for features that need it
-		if s.provider == nil && feature.Name != "auth-setup" {
+		p := s.provider.Load()
+		if p == nil && feature.Name != "auth-setup" {
 			guidance := map[string]interface{}{
 				"status":  "setup_needed",
 				"message": "Slack credentials are not configured yet. Use the auth-setup tool to connect a workspace.",
@@ -112,7 +131,7 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 			jsonData, _ := json.MarshalIndent(guidance, "", "  ")
 			return mcp.NewToolResultText(string(jsonData)), nil
 		}
-		params["_provider"] = s.provider
+		params["_provider"] = p
 
 		// Execute feature
 		result, err := feature.Handler(ctx, params)
@@ -194,7 +213,8 @@ func (s *SemanticMCPServer) registerResources() {
 			MIMEType:    "application/json",
 		},
 		func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-			if s.provider == nil {
+			p := s.provider.Load()
+			if p == nil {
 				return []mcp.ResourceContents{
 					mcp.TextResourceContents{
 						URI:      "slack-mcp://identity",
@@ -204,7 +224,7 @@ func (s *SemanticMCPServer) registerResources() {
 				}, nil
 			}
 
-			identity := s.provider.ProvideIdentity()
+			identity := p.ProvideIdentity()
 			if identity == nil {
 				return []mcp.ResourceContents{
 					mcp.TextResourceContents{

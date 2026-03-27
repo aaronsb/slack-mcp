@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "slack-mcp",
-  "display_name": "Slack MCP",
+  "display_name": "Slack",
   "version": "1.2.0",
   "description": "MCP server for Slack workspaces using session tokens. Automatic browser-based token extraction, stealth reads, channel caching.",
   "author": {
@@ -29,8 +29,8 @@
       "command": "${__dirname}/bin/slack-mcp",
       "args": [],
       "env": {
-        "SLACK_XOXC_TOKEN": "${user_config.xoxc_token}",
-        "SLACK_XOXD_TOKEN": "${user_config.xoxd_token}"
+        "SLACK_MCP_XOXC_TOKEN": "${user_config.xoxc_token}",
+        "SLACK_MCP_XOXD_TOKEN": "${user_config.xoxd_token}"
       }
     }
   },
@@ -84,14 +84,14 @@
     "xoxc_token": {
       "type": "string",
       "title": "Slack xoxc Token",
-      "description": "Session token from Slack. Run the auth-setup tool to extract automatically, or leave blank to use the built-in setup flow.",
+      "description": "Session token from Slack. Auto-discovered from ~/.config/slack-mcp/config.json if blank. Run auth-setup tool to configure.",
       "sensitive": true,
       "required": false
     },
     "xoxd_token": {
       "type": "string",
       "title": "Slack xoxd Cookie",
-      "description": "Session cookie from Slack. Run the auth-setup tool to extract automatically, or leave blank to use the built-in setup flow.",
+      "description": "Session cookie from Slack. Auto-discovered from ~/.config/slack-mcp/config.json if blank. Run auth-setup tool to configure.",
       "sensitive": true,
       "required": false
     }
