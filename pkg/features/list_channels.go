@@ -131,7 +131,15 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 		if search != "" {
 			nameMatch := strings.Contains(strings.ToLower(ch.Name), search)
 			purposeMatch := strings.Contains(strings.ToLower(ch.Purpose.Value), search)
-			if !nameMatch && !purposeMatch {
+			// For DMs, also match against the user's name
+			dmNameMatch := false
+			if ch.IsIM && ch.User != "" {
+				if user, ok := apiProvider.ProvideUsersMap()[ch.User]; ok {
+					dmNameMatch = strings.Contains(strings.ToLower(user.RealName), search) ||
+						strings.Contains(strings.ToLower(user.Name), search)
+				}
+			}
+			if !nameMatch && !purposeMatch && !dmNameMatch {
 				continue
 			}
 		}

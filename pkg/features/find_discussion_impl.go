@@ -139,21 +139,21 @@ func getThreadContextImpl(ctx context.Context, params map[string]interface{}, th
 
 // Helper functions
 func parseTimeframeToSearchFilter(timeframe string) string {
-	// Convert to days
-	days := 30
+	days := 30 // default
 	if strings.HasSuffix(timeframe, "d") {
-		if d, err := fmt.Sscanf(timeframe, "%dd", &days); err == nil && d > 0 {
+		var d int
+		if _, err := fmt.Sscanf(timeframe, "%dd", &d); err == nil && d > 0 {
 			days = d
 		}
 	} else if strings.HasSuffix(timeframe, "w") {
-		var weeks int
-		if w, err := fmt.Sscanf(timeframe, "%dw", &weeks); err == nil && w > 0 {
-			days = weeks * 7
+		var w int
+		if _, err := fmt.Sscanf(timeframe, "%dw", &w); err == nil && w > 0 {
+			days = w * 7
 		}
 	} else if strings.HasSuffix(timeframe, "m") {
-		var months int
-		if m, err := fmt.Sscanf(timeframe, "%dm", &months); err == nil && m > 0 {
-			days = months * 30
+		var m int
+		if _, err := fmt.Sscanf(timeframe, "%dm", &m); err == nil && m > 0 {
+			days = m * 30
 		}
 	}
 
