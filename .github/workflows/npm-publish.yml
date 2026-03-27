@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
@@ -54,7 +53,7 @@ jobs:
           for dir in npm/slack-mcp-server-*/; do
             echo "Publishing $(basename $dir)..."
             cd "$dir"
-            npm publish --access public --provenance --tag ${{ steps.meta.outputs.tag }}
+            npm publish --access public --tag ${{ steps.meta.outputs.tag }}
             cd ../..
           done
 
@@ -64,4 +63,4 @@ jobs:
         run: |
           cp LICENSE npm/slack-mcp-server/
           cd npm/slack-mcp-server
-          npm publish --access public --provenance --tag ${{ steps.meta.outputs.tag }}
+          npm publish --access public --tag ${{ steps.meta.outputs.tag }}
