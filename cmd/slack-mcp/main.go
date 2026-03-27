@@ -37,18 +37,17 @@ func main() {
 			log.SetOutput(logFile)
 			defer logFile.Close()
 		} else {
-			// If we can't open log file, disable logging entirely for stdio
 			log.SetOutput(io.Discard)
 		}
 	}
 
 	// Load .env file if it exists
 	if err := godotenv.Load(); err != nil {
-		// It's okay if .env doesn't exist
 		log.Println("No .env file found, using environment variables")
 	}
 
-	p := provider.New()
+	// Build provider: try config file first, fall back to env vars
+	p := loadProvider()
 
 	s := server.NewSemanticMCPServer(p)
 
@@ -91,8 +90,32 @@ func main() {
 			log.Fatalf("Server error: %v", err)
 		}
 	default:
-		log.Fatalf("Invalid transport type: %s. Must be 'stdio' or 'sse'",
-			transport,
-		)
+		log.Fatalf("Invalid transport type: %s. Must be 'stdio' or 'sse'", transport)
 	}
+}
+
+// loadProvider creates a provider from config file or env vars
+func loadProvider() *provider.ApiProvider {
+	// Try config file first
+	cfg, err := setup.LoadConfig()
+	if err == nil && len(cfg.Workspaces) > 0 {
+		// Use default workspace from config
+		wsName := cfg.DefaultWorkspace
+		if wsName == "" {
+			// Pick first workspace
+			for name := range cfg.Workspaces {
+				wsName = name
+				break
+			}
+		}
+
+		if ws, ok := cfg.Workspaces[wsName]; ok {
+			log.Printf("Using workspace %q from config file", wsName)
+			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken)
+		}
+	}
+
+	// Fall back to env vars (this will panic if not set — same as before)
+	log.Println("No config file found, using environment variables")
+	return provider.New()
 }

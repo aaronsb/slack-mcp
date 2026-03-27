@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 )
 
+const appName = "slack-mcp"
+
 // WorkspaceConfig holds tokens for a single workspace
 type WorkspaceConfig struct {
 	XoxcToken string `json:"xoxc_token"`
@@ -22,13 +24,28 @@ type Config struct {
 	DefaultWorkspace string                     `json:"default_workspace,omitempty"`
 }
 
-// ConfigDir returns the config directory path
+// ConfigDir returns the XDG config directory: $XDG_CONFIG_HOME/slack-mcp
 func ConfigDir() string {
+	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
+		return filepath.Join(base, appName)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".config/slack-mcp"
+		return filepath.Join(".config", appName)
 	}
-	return filepath.Join(home, ".config", "slack-mcp")
+	return filepath.Join(home, ".config", appName)
+}
+
+// DataDir returns the XDG data directory: $XDG_DATA_HOME/slack-mcp
+func DataDir() string {
+	if base := os.Getenv("XDG_DATA_HOME"); base != "" {
+		return filepath.Join(base, appName)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".local", "share", appName)
+	}
+	return filepath.Join(home, ".local", "share", appName)
 }
 
 // ConfigPath returns the config file path

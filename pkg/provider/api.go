@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"github.com/aaronsb/slack-mcp/pkg/transport"
 	"github.com/slack-go/slack"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -34,6 +33,7 @@ type ApiProvider struct {
 	refreshResetTime   time.Time
 }
 
+// New creates a provider from environment variables (backward compatible)
 func New() *ApiProvider {
 	token := os.Getenv("SLACK_MCP_XOXC_TOKEN")
 	if token == "" {
@@ -45,6 +45,11 @@ func New() *ApiProvider {
 		panic("SLACK_MCP_XOXD_TOKEN environment variable is required")
 	}
 
+	return NewWithTokens(token, cookie)
+}
+
+// NewWithTokens creates a provider with explicit tokens
+func NewWithTokens(token, cookie string) *ApiProvider {
 	cache := os.Getenv("SLACK_MCP_USERS_CACHE")
 	if cache == "" {
 		cache = ".users_cache.json"
@@ -55,19 +60,19 @@ func New() *ApiProvider {
 			api := slack.New(token,
 				withHTTPClientOption(cookie),
 			)
-			
+
 			// Create a context with timeout for auth test
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			
+
 			res, err := api.AuthTestContext(ctx)
 			if err != nil {
 				log.Printf("ERROR: Slack authentication failed: %v", err)
-				log.Printf("Please check your SLACK_MCP_XOXC_TOKEN and SLACK_MCP_XOXD_TOKEN")
+				log.Printf("Please check your tokens")
 				// Return the API client anyway - some operations might still work
 				return api
 			}
-			
+
 			log.Printf("Authenticated as: %s\n", res)
 
 			// Create new client with team-specific endpoint
@@ -101,7 +106,7 @@ func (ap *ApiProvider) Provide() (*slack.Client, error) {
 
 func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 	// Load users cache
-	if data, err := ioutil.ReadFile(ap.usersCache); err == nil {
+	if data, err := os.ReadFile(ap.usersCache); err == nil {
 		var cachedUsers []slack.User
 		if err := json.Unmarshal(data, &cachedUsers); err != nil {
 			log.Printf("Failed to unmarshal %s: %v; will refetch", ap.usersCache, err)
@@ -133,7 +138,7 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 	if data, err := json.MarshalIndent(users, "", "  "); err != nil {
 		log.Printf("Failed to marshal users for cache: %v", err)
 	} else {
-		if err := ioutil.WriteFile(ap.usersCache, data, 0644); err != nil {
+		if err := os.WriteFile(ap.usersCache, data, 0644); err != nil {
 			log.Printf("Failed to write cache file %q: %v", ap.usersCache, err)
 		} else {
 			log.Printf("Wrote %d users to cache %q", len(users), ap.usersCache)
@@ -150,7 +155,7 @@ func (ap *ApiProvider) loadChannelsProgressive(ctx context.Context) error {
 
 	// Try to load from cache file first
 	cacheFile := ".channels_cache.json"
-	if data, err := ioutil.ReadFile(cacheFile); err == nil {
+	if data, err := os.ReadFile(cacheFile); err == nil {
 		var cachedChannels []slack.Channel
 		if err := json.Unmarshal(data, &cachedChannels); err == nil {
 			// Load from cache
@@ -347,7 +352,7 @@ func (ap *ApiProvider) refreshChannelsInBackground(ctx context.Context) {
 	if data, err := json.MarshalIndent(cachedChannels, "", "  "); err != nil {
 		log.Printf("Failed to marshal channels for cache: %v", err)
 	} else {
-		if err := ioutil.WriteFile(".channels_cache.json", data, 0644); err != nil {
+		if err := os.WriteFile(".channels_cache.json", data, 0644); err != nil {
 			log.Printf("Failed to write channel cache file: %v", err)
 		} else {
 			log.Printf("Wrote %d channels to cache", len(cachedChannels))
@@ -558,7 +563,7 @@ func withHTTPClientOption(cookie string) func(c *slack.Client) {
 		}
 
 		if localCertFile := os.Getenv("SLACK_MCP_SERVER_CA"); localCertFile != "" {
-			certs, err := ioutil.ReadFile(localCertFile)
+			certs, err := os.ReadFile(localCertFile)
 			if err != nil {
 				log.Fatalf("Failed to append %q to RootCAs: %v", localCertFile, err)
 			}
