@@ -1,0 +1,21 @@
+{
+  "manifest_version": 2,
+  "name": "Slack MCP Token Extract",
+  "version": "1.0",
+  "description": "Temporary helper — extracts Slack session tokens for MCP setup. Removed automatically when Firefox closes.",
+  "permissions": [
+    "cookies",
+    "activeTab",
+    "*://app.slack.com/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.slack.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
