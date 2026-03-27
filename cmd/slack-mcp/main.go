@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/server"
@@ -98,24 +99,20 @@ func main() {
 	}
 }
 
+// looksLikeToken returns true if the value matches Slack token format.
+// Env vars from mcpb may contain stale or placeholder values — only use
+// them when they look like real tokens.
+func looksLikeToken(v, prefix string) bool {
+	return strings.HasPrefix(v, prefix)
+}
+
 // loadProvider resolves Slack credentials with this priority:
 //
-//  1. Env vars set (from mcpb UI or manual export) → use directly
-//  2. Env vars empty/unset → load from config.json
+//  1. Config file (~/.config/slack-mcp/config.json) — always checked first
+//  2. Env vars matching token format (xoxc-/xoxd-) — manual override
 //  3. Nothing → return error (server starts, tools prompt for auth-setup)
-//
-// No validation here — the auth-setup state machine handles that.
 func loadProvider() (*provider.ApiProvider, error) {
-	token := os.Getenv("SLACK_MCP_XOXC_TOKEN")
-	cookie := os.Getenv("SLACK_MCP_XOXD_TOKEN")
-
-	// Env vars provided — use directly
-	if token != "" && cookie != "" {
-		log.Println("Using tokens from environment variables")
-		return provider.NewWithTokens(token, cookie), nil
-	}
-
-	// Env vars empty — try config file
+	// Config file is the source of truth — shared across all MCP hosts
 	cfg, err := setup.LoadConfig()
 	if err == nil && len(cfg.Workspaces) > 0 {
 		wsName := cfg.DefaultWorkspace
@@ -130,6 +127,19 @@ func loadProvider() (*provider.ApiProvider, error) {
 			log.Printf("Using workspace %q from config file (%s)", wsName, setup.ConfigPath())
 			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken), nil
 		}
+	}
+
+	// Env vars as fallback — only if they look like real Slack tokens
+	token := os.Getenv("SLACK_MCP_XOXC_TOKEN")
+	cookie := os.Getenv("SLACK_MCP_XOXD_TOKEN")
+
+	if looksLikeToken(token, "xoxc-") && looksLikeToken(cookie, "xoxd-") {
+		log.Println("Using tokens from environment variables (matched xoxc-/xoxd- format)")
+		return provider.NewWithTokens(token, cookie), nil
+	}
+
+	if token != "" || cookie != "" {
+		log.Println("Ignoring env var tokens — don't match expected format (xoxc-/xoxd-)")
 	}
 
 	// No credentials found anywhere

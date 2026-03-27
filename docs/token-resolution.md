@@ -22,14 +22,14 @@ flowchart TD
 
     DotEnv --> LoadProvider[loadProvider]
 
-    LoadProvider --> CheckEnv{Env vars<br>non-empty?}
-    CheckEnv -->|yes| UseEnv[Use env tokens]
-    CheckEnv -->|no| CheckConfig{Config file<br>has workspaces?}
+    LoadProvider --> CheckConfig{Config file<br>has workspaces?}
     CheckConfig -->|yes| UseConfig[Use config tokens]
-    CheckConfig -->|no| NoAuth[provider = nil]
+    CheckConfig -->|no| CheckEnv{Env vars match<br>xoxc- / xoxd-?}
+    CheckEnv -->|yes| UseEnv[Use env tokens]
+    CheckEnv -->|no| NoAuth[provider = nil]
 
-    UseEnv --> CreateServer[NewSemanticMCPServer]
-    UseConfig --> CreateServer
+    UseConfig --> CreateServer[NewSemanticMCPServer]
+    UseEnv --> CreateServer
     NoAuth --> CreateServer
 
     CreateServer --> RegisterTools[Register all tools<br>+ resources]
@@ -54,16 +54,16 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([loadProvider]) --> CheckEnv{Env vars set?<br>SLACK_MCP_XOXC_TOKEN<br>SLACK_MCP_XOXD_TOKEN}
-
-    CheckEnv -->|non-empty| UseEnv[Create provider<br>with env tokens]
-    CheckEnv -->|empty / unset| CheckConfig{Config file exists?<br>~/.config/slack-mcp/config.json}
+    Start([loadProvider]) --> CheckConfig{Config file?<br>~/.config/slack-mcp/config.json}
 
     CheckConfig -->|has workspaces| UseConfig[Create provider<br>from config file]
-    CheckConfig -->|empty / missing| NoAuth[Return nil provider<br>+ error]
+    CheckConfig -->|empty / missing| CheckEnv{Env vars match<br>xoxc- / xoxd- format?}
 
-    UseEnv --> Done([Provider ready])
-    UseConfig --> Done
+    CheckEnv -->|yes| UseEnv[Create provider<br>from env tokens]
+    CheckEnv -->|no| NoAuth[Return nil provider<br>+ error]
+
+    UseConfig --> Done([Provider ready])
+    UseEnv --> Done
     NoAuth --> Setup([Server starts without auth<br>tools prompt for auth-setup])
 ```
 
@@ -106,12 +106,12 @@ flowchart LR
         Browser[Browser extraction<br>via auth-setup]
     end
 
-    subgraph Resolution["loadProvider()"]
-        EnvCheck{env vars<br>non-empty?}
+    subgraph Storage["Shared Config (priority 1)"]
+        ConfigJSON[~/.config/slack-mcp/config.json]
     end
 
-    subgraph Storage["Shared Config"]
-        ConfigJSON[~/.config/slack-mcp/config.json]
+    subgraph Fallback["Env Vars (priority 2)"]
+        EnvCheck{match xoxc-<br>/ xoxd- format?}
     end
 
     subgraph Runtime["Server"]
@@ -119,15 +119,15 @@ flowchart LR
         Cache[Channel cache<br>~/.local/share/slack-mcp/]
     end
 
+    Browser --> ConfigJSON
+    ConfigJSON -->|has workspaces| Provider
+    ConfigJSON -->|empty| EnvCheck
+
     MCPB --> EnvCheck
     Manual --> EnvCheck
     DotEnv --> EnvCheck
 
     EnvCheck -->|yes| Provider
-    EnvCheck -->|no| ConfigJSON
-    ConfigJSON --> Provider
-
-    Browser --> ConfigJSON
 
     Provider --> Cache
 ```
