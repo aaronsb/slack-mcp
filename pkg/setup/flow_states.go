@@ -351,9 +351,29 @@ func (f *Flow) handleTokenResult(r *TokenResult) *FlowResponse {
 		}
 	}
 
+	// Save tokens to config
+	f.cfg.Workspaces[r.Team] = WorkspaceConfig{
+		XoxcToken: r.Xoxc,
+		XoxdToken: r.Xoxd,
+		TeamName:  r.Team,
+		UserName:  r.User,
+		UserID:    r.UserID,
+	}
+	if f.cfg.DefaultWorkspace == "" {
+		f.cfg.DefaultWorkspace = r.Team
+	}
+
 	f.cleanup()
 	f.state = StateComplete
-	f.cfg.ClearFlow()
+	f.cfg.SetupFlow = nil
+	if err := SaveConfig(f.cfg); err != nil {
+		f.state = StateFailed
+		return &FlowResponse{
+			State:   StateFailed,
+			Message: fmt.Sprintf("Tokens valid but failed to save config: %v", err),
+			Actions: []string{"retry", "reset"},
+		}
+	}
 
 	return &FlowResponse{
 		State:   StateComplete,
