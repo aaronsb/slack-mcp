@@ -27,6 +27,7 @@ const (
 )
 
 type ApiProvider struct {
+	bootOnce       sync.Once
 	boot           func() *slack.Client
 	client         *slack.Client
 	internalClient *InternalClient
@@ -119,18 +120,15 @@ func NewWithTokens(token, cookie string) *ApiProvider {
 }
 
 func (ap *ApiProvider) Provide() (*slack.Client, error) {
-	if ap.client == nil {
+	var bootErr error
+	ap.bootOnce.Do(func() {
 		ap.client = ap.boot()
-
-		// Capture identity
 		ap.captureIdentity()
-
-		err := ap.bootstrapDependencies(context.Background())
-		if err != nil {
-			return nil, err
-		}
+		bootErr = ap.bootstrapDependencies(context.Background())
+	})
+	if bootErr != nil {
+		return nil, bootErr
 	}
-
 	return ap.client, nil
 }
 
@@ -247,6 +245,11 @@ func (ap *ApiProvider) loadChannelsFromCache() {
 	ap.lastChannelRefresh = time.Now()
 	ap.channelsMutex.Unlock()
 
+	// Index DM mappings outside channelsMutex
+	for _, ch := range cachedChannels {
+		ap.indexChannelDM(ch)
+	}
+
 	// Load DM map
 	var dmMap map[string]string
 	if err := ap.store.Load(dmMapCacheFile, &dmMap); err == nil {
@@ -265,26 +268,40 @@ func (ap *ApiProvider) indexChannel(ch slack.Channel) {
 		ap.channelNames[strings.ToLower(ch.Name)] = ch.ID
 	}
 
-	// For DMs, map by user's real name and username
-	if ch.IsIM && ch.User != "" {
-		ap.usersMutex.RLock()
-		if user, ok := ap.users[ch.User]; ok {
-			if user.RealName != "" {
-				ap.channelNames[user.RealName] = ch.ID
-				ap.channelNames[strings.ToLower(user.RealName)] = ch.ID
-			}
-			if user.Name != "" {
-				ap.channelNames[user.Name] = ch.ID
-				ap.channelNames[strings.ToLower(user.Name)] = ch.ID
-			}
-		}
-		ap.usersMutex.RUnlock()
+	// For DMs, map by user's real name and username.
+	// Note: we do NOT acquire usersMutex or dmMapMutex here to avoid
+	// lock ordering violations. Callers should call indexChannelDM()
+	// separately after releasing channelsMutex.
+	// The name mappings for DMs are best-effort from cached user data.
+}
 
-		// Also update DM map
-		ap.dmMapMutex.Lock()
-		ap.dmMap[ch.User] = ch.ID
-		ap.dmMapMutex.Unlock()
+// indexChannelDM adds DM-specific mappings (user name → channel ID, DM map).
+// Must be called WITHOUT channelsMutex held to avoid lock ordering issues.
+func (ap *ApiProvider) indexChannelDM(ch slack.Channel) {
+	if !ch.IsIM || ch.User == "" {
+		return
 	}
+
+	ap.usersMutex.RLock()
+	user, ok := ap.users[ch.User]
+	ap.usersMutex.RUnlock()
+
+	if ok {
+		ap.channelsMutex.Lock()
+		if user.RealName != "" {
+			ap.channelNames[user.RealName] = ch.ID
+			ap.channelNames[strings.ToLower(user.RealName)] = ch.ID
+		}
+		if user.Name != "" {
+			ap.channelNames[user.Name] = ch.ID
+			ap.channelNames[strings.ToLower(user.Name)] = ch.ID
+		}
+		ap.channelsMutex.Unlock()
+	}
+
+	ap.dmMapMutex.Lock()
+	ap.dmMap[ch.User] = ch.ID
+	ap.dmMapMutex.Unlock()
 }
 
 // loadMemberChannels fetches channels the user is a member of (fast startup)
@@ -311,12 +328,16 @@ func (ap *ApiProvider) loadMemberChannels(ctx context.Context) {
 		}
 
 		ap.channelsMutex.Lock()
-		for _, ch := range channels {
-			ch.IsMember = true
-			ap.channels[ch.ID] = ch
-			ap.indexChannel(ch)
+		for i := range channels {
+			channels[i].IsMember = true
+			ap.channels[channels[i].ID] = channels[i]
+			ap.indexChannel(channels[i])
 		}
 		ap.channelsMutex.Unlock()
+
+		for _, ch := range channels {
+			ap.indexChannelDM(ch)
+		}
 
 		count += len(channels)
 
@@ -364,14 +385,22 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 			return
 		}
 
+		var newDMs []slack.Channel
 		ap.channelsMutex.Lock()
 		for _, ch := range channels {
 			if _, exists := ap.channels[ch.ID]; !exists {
 				ap.channels[ch.ID] = ch
 				ap.indexChannel(ch)
+				if ch.IsIM {
+					newDMs = append(newDMs, ch)
+				}
 			}
 		}
 		ap.channelsMutex.Unlock()
+
+		for _, ch := range newDMs {
+			ap.indexChannelDM(ch)
+		}
 
 		totalLoaded += len(channels)
 		batchCount++
@@ -451,10 +480,16 @@ func (ap *ApiProvider) flushCaches() error {
 	return nil
 }
 
+// ProvideUsersMap returns a snapshot copy of the users map.
+// Safe for callers to iterate without holding locks.
 func (ap *ApiProvider) ProvideUsersMap() map[string]slack.User {
 	ap.usersMutex.RLock()
 	defer ap.usersMutex.RUnlock()
-	return ap.users
+	copy := make(map[string]slack.User, len(ap.users))
+	for k, v := range ap.users {
+		copy[k] = v
+	}
+	return copy
 }
 
 // Identity returns information about the authenticated user
@@ -611,6 +646,7 @@ func (ap *ApiProvider) resolveByDisplayName(ctx context.Context, name string) (*
 	ap.channelNames[nameLower] = dmChannelID
 	ap.channelsMutex.Unlock()
 
+	ap.indexChannelDM(*dmChannel)
 	ap.markDirty()
 	return dmChannel, nil
 }
@@ -635,6 +671,7 @@ func (ap *ApiProvider) fetchAndCacheChannel(ctx context.Context, channelID strin
 	ap.indexChannel(*info)
 	ap.channelsMutex.Unlock()
 
+	ap.indexChannelDM(*info)
 	ap.markDirty()
 	return info, nil
 }

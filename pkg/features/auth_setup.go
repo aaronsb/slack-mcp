@@ -31,7 +31,6 @@ var (
 	setupMu      sync.Mutex
 	setupRunning bool
 	setupResult  *setupOutcome
-	setupCancel  context.CancelFunc
 )
 
 type setupOutcome struct {
