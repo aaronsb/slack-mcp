@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -51,6 +52,9 @@ func StartCDPExtraction(browserPath, userDataDir, profileDir string) (*CDPExtrac
 
 	ctx, cancel := context.WithTimeout(context.Background(), cdpExtractTimeout)
 
+	log.Printf("CDP: launching %s (port=%d, tmpDir=%s, profile=%s)", browserPath, debugPort, tmpDir, profileDir)
+	log.Printf("CDP: DISPLAY=%q WAYLAND_DISPLAY=%q", os.Getenv("DISPLAY"), os.Getenv("WAYLAND_DISPLAY"))
+
 	cmd := exec.CommandContext(ctx, browserPath,
 		fmt.Sprintf("--user-data-dir=%s", tmpDir),
 		fmt.Sprintf("--profile-directory=%s", profileDir),
@@ -60,11 +64,16 @@ func StartCDPExtraction(browserPath, userDataDir, profileDir string) (*CDPExtrac
 		"about:blank",
 	)
 
+	// Capture stderr so we can log browser launch failures
+	cmd.Stderr = log.Writer()
+
 	if err := cmd.Start(); err != nil {
 		cancel()
 		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("failed to start browser: %w", err)
 	}
+
+	log.Printf("CDP: browser started (pid=%d)", cmd.Process.Pid)
 
 	ext := &CDPExtractor{
 		cancel: cancel,
