@@ -47,17 +47,8 @@ jobs:
       - name: Set version in packages
         run: make npm-set-version NPM_VERSION=${{ steps.meta.outputs.version }}
 
-      - name: Publish platform packages
+      - name: Publish test - single package
         run: |
-          for dir in npm/slack-mcp-server-*/; do
-            echo "Publishing $(basename $dir)..."
-            cd "$dir"
-            npm publish --access public --provenance --tag ${{ steps.meta.outputs.tag }}
-            cd ../..
-          done
-
-      - name: Publish wrapper package
-        run: |
-          cp LICENSE npm/slack-mcp-server/
-          cd npm/slack-mcp-server
+          cd npm/slack-mcp-server-linux-amd64
+          cat package.json
           npm publish --access public --provenance --tag ${{ steps.meta.outputs.tag }}
