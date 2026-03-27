@@ -30,13 +30,206 @@ type tokenPayload struct {
 	Xoxd string `json:"xoxd"`
 }
 
-// setupResult holds the outcome of token validation
+// TokenResult holds extracted and validated tokens
+type TokenResult struct {
+	Xoxc   string
+	Xoxd   string
+	Team   string
+	User   string
+	UserID string
+	Err    error
+}
+
+// setupResult holds the outcome for the HTML status endpoint
 type setupResult struct {
 	Done  bool   `json:"done"`
 	OK    bool   `json:"ok"`
 	Team  string `json:"team,omitempty"`
 	User  string `json:"user,omitempty"`
 	Error string `json:"error,omitempty"`
+}
+
+// CallbackServer is a non-blocking localhost HTTP server that receives tokens
+// from browser snippets, Firefox extensions, or the manual setup page.
+type CallbackServer struct {
+	server   *http.Server
+	listener net.Listener
+	port     int
+
+	mu      sync.Mutex
+	result  *TokenResult
+	sResult *setupResult // for HTML status polling
+	done    chan struct{}
+}
+
+// NewCallbackServer creates a callback server on the given listener.
+// Call Start() to begin serving.
+func NewCallbackServer(listener net.Listener, port int) *CallbackServer {
+	cs := &CallbackServer{
+		listener: listener,
+		port:     port,
+		done:     make(chan struct{}),
+	}
+
+	mux := http.NewServeMux()
+
+	// Serve the manual setup page
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		page := strings.ReplaceAll(pageHTML, "{{PORT}}", fmt.Sprintf("%d", port))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, page)
+	})
+
+	// Receive tokens from browser snippet or extension
+	mux.HandleFunc("/callback", cs.handleCallback)
+
+	// Status endpoint for the page to poll
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		cs.mu.Lock()
+		defer cs.mu.Unlock()
+		if cs.sResult != nil {
+			json.NewEncoder(w).Encode(cs.sResult)
+		} else {
+			json.NewEncoder(w).Encode(setupResult{Done: false})
+		}
+	})
+
+	cs.server = &http.Server{Handler: mux}
+	return cs
+}
+
+func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "failed to read body"})
+		return
+	}
+
+	var payload tokenPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "invalid JSON"})
+		return
+	}
+
+	if payload.Xoxc == "" || payload.Xoxd == "" {
+		msg := "missing tokens"
+		if payload.Xoxc == "" {
+			msg = "could not extract xoxc token from localStorage — make sure you're on a Slack tab"
+		} else {
+			msg = "could not extract xoxd cookie — make sure you're logged into Slack"
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": msg})
+		return
+	}
+
+	vTeam, vUser, vUserID, vErr := validateTokens(payload.Xoxc, payload.Xoxd)
+	if vErr != nil {
+		cs.mu.Lock()
+		cs.sResult = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("token validation failed: %v", vErr)}
+		cs.result = &TokenResult{Err: vErr}
+		cs.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": cs.sResult.Error})
+		return
+	}
+
+	cfg, cfgErr := LoadConfig()
+	if cfgErr != nil {
+		cfg = &Config{Workspaces: make(map[string]WorkspaceConfig)}
+	}
+
+	cfg.Workspaces[vTeam] = WorkspaceConfig{
+		XoxcToken: payload.Xoxc,
+		XoxdToken: payload.Xoxd,
+		TeamName:  vTeam,
+		UserName:  vUser,
+		UserID:    vUserID,
+	}
+
+	if cfg.DefaultWorkspace == "" {
+		cfg.DefaultWorkspace = vTeam
+	}
+
+	if saveErr := SaveConfig(cfg); saveErr != nil {
+		cs.mu.Lock()
+		cs.sResult = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("failed to save config: %v", saveErr)}
+		cs.result = &TokenResult{Err: saveErr}
+		cs.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": cs.sResult.Error})
+		return
+	}
+
+	cs.mu.Lock()
+	cs.sResult = &setupResult{Done: true, OK: true, Team: vTeam, User: vUser}
+	cs.result = &TokenResult{
+		Xoxc: payload.Xoxc, Xoxd: payload.Xoxd,
+		Team: vTeam, User: vUser, UserID: vUserID,
+	}
+	cs.mu.Unlock()
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "team": vTeam, "user": vUser})
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-cs.done:
+		default:
+			close(cs.done)
+		}
+	}()
+}
+
+// Start begins serving in the background. Non-blocking.
+func (cs *CallbackServer) Start() {
+	go func() {
+		if err := cs.server.Serve(cs.listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("Callback server error: %v", err)
+		}
+	}()
+}
+
+// Port returns the port the server is listening on
+func (cs *CallbackServer) Port() int {
+	return cs.port
+}
+
+// Result returns the token result, or nil if tokens haven't been received yet
+func (cs *CallbackServer) Result() *TokenResult {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.result
+}
+
+// Done returns a channel that's closed when tokens are received
+func (cs *CallbackServer) Done() <-chan struct{} {
+	return cs.done
+}
+
+// Stop shuts down the callback server
+func (cs *CallbackServer) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cs.server.Shutdown(ctx)
 }
 
 // RunSetup starts the local HTTP server for token extraction (CLI entry point)
@@ -75,149 +268,19 @@ func RunSetup() error {
 // It blocks until the user completes the browser flow.
 // Returns the workspace team name and user on success.
 func RunSetupServer(listener net.Listener, port int) (team, user string, err error) {
-	var (
-		mu     sync.Mutex
-		result *setupResult
-		done   = make(chan struct{})
-	)
-
-	mux := http.NewServeMux()
-
-	// Serve the setup page
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		page := strings.ReplaceAll(pageHTML, "{{PORT}}", fmt.Sprintf("%d", port))
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, page)
-	})
-
-	// Receive tokens from the browser snippet
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "failed to read body"})
-			return
-		}
-
-		var payload tokenPayload
-		if err := json.Unmarshal(body, &payload); err != nil {
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "invalid JSON"})
-			return
-		}
-
-		if payload.Xoxc == "" || payload.Xoxd == "" {
-			msg := "missing tokens"
-			if payload.Xoxc == "" {
-				msg = "could not extract xoxc token from localStorage — make sure you're on a Slack tab"
-			} else {
-				msg = "could not extract xoxd cookie — make sure you're logged into Slack"
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": msg})
-			return
-		}
-
-		vTeam, vUser, vUserID, vErr := validateTokens(payload.Xoxc, payload.Xoxd)
-		if vErr != nil {
-			mu.Lock()
-			result = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("token validation failed: %v", vErr)}
-			mu.Unlock()
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": result.Error})
-			return
-		}
-
-		cfg, cfgErr := LoadConfig()
-		if cfgErr != nil {
-			cfg = &Config{Workspaces: make(map[string]WorkspaceConfig)}
-		}
-
-		cfg.Workspaces[vTeam] = WorkspaceConfig{
-			XoxcToken: payload.Xoxc,
-			XoxdToken: payload.Xoxd,
-			TeamName:  vTeam,
-			UserName:  vUser,
-			UserID:    vUserID,
-		}
-
-		if cfg.DefaultWorkspace == "" {
-			cfg.DefaultWorkspace = vTeam
-		}
-
-		if saveErr := SaveConfig(cfg); saveErr != nil {
-			mu.Lock()
-			result = &setupResult{Done: true, OK: false, Error: fmt.Sprintf("failed to save config: %v", saveErr)}
-			mu.Unlock()
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": result.Error})
-			return
-		}
-
-		mu.Lock()
-		result = &setupResult{Done: true, OK: true, Team: vTeam, User: vUser}
-		mu.Unlock()
-
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "team": vTeam, "user": vUser})
-
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			close(done)
-		}()
-	})
-
-	// Status endpoint for the page to poll
-	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		mu.Lock()
-		defer mu.Unlock()
-		if result != nil {
-			json.NewEncoder(w).Encode(result)
-		} else {
-			json.NewEncoder(w).Encode(setupResult{Done: false})
-		}
-	})
-
-	server := &http.Server{Handler: mux}
-
-	go func() {
-		if srvErr := server.Serve(listener); srvErr != nil && srvErr != http.ErrServerClosed {
-			log.Printf("Server error: %v", srvErr)
-		}
-	}()
+	cs := NewCallbackServer(listener, port)
+	cs.Start()
 
 	// Wait for completion
-	<-done
+	<-cs.Done()
+	cs.Stop()
 
-	mu.Lock()
-	r := result
-	mu.Unlock()
-
-	// Shutdown server
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	server.Shutdown(ctx)
-
-	if r != nil && r.OK {
+	r := cs.Result()
+	if r != nil && r.Err == nil {
 		return r.Team, r.User, nil
 	}
 	if r != nil {
-		return "", "", fmt.Errorf("%s", r.Error)
+		return "", "", r.Err
 	}
 	return "", "", fmt.Errorf("setup completed without result")
 }

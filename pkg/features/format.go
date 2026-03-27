@@ -55,6 +55,32 @@ func truncate(s string, max int) string {
 	return string(runes[:max]) + "..."
 }
 
+// formatMapList handles list data that may be []map[string]string (in-process)
+// or []interface{} (after JSON round-trip). Calls fn for each entry.
+func formatMapList(s *strings.Builder, v interface{}, fn func(map[string]string) string) {
+	switch list := v.(type) {
+	case []map[string]string:
+		for _, m := range list {
+			s.WriteString(fn(m))
+		}
+	case []interface{}:
+		for _, item := range list {
+			switch m := item.(type) {
+			case map[string]string:
+				s.WriteString(fn(m))
+			case map[string]interface{}:
+				conv := make(map[string]string)
+				for k, val := range m {
+					if str, ok := val.(string); ok {
+						conv[k] = str
+					}
+				}
+				s.WriteString(fn(conv))
+			}
+		}
+	}
+}
+
 func dataMap(result *FeatureResult) map[string]interface{} {
 	if m, ok := result.Data.(map[string]interface{}); ok {
 		return m
@@ -530,21 +556,70 @@ func formatAuthSetup(result *FeatureResult) string {
 		return result.Message
 	}
 
-	status := str(data, "status")
-	switch status {
-	case "connected":
-		return fmt.Sprintf("Connected to **%s** as **%s**.", str(data, "workspace"), str(data, "user"))
-	case "waiting":
-		url := str(data, "url")
-		if url != "" {
-			return fmt.Sprintf("Setup running at %s — complete the flow in your browser.", url)
+	state := str(data, "state")
+
+	// Legacy status field (from clear action)
+	if state == "" {
+		status := str(data, "status")
+		switch status {
+		case "cleared":
+			return "Credentials cleared." + footer(result)
+		case "no_credentials":
+			return "No credentials stored." + footer(result)
+		default:
+			return result.Message + footer(result)
 		}
-		return "Setup in progress — waiting for browser flow to complete."
-	case "cleared":
-		return "Credentials cleared." + footer(result)
-	default:
-		return result.Message + footer(result)
 	}
+
+	var s strings.Builder
+
+	switch state {
+	case "complete":
+		s.WriteString(fmt.Sprintf("Connected to **%s** as **%s**.", str(data, "team"), str(data, "user")))
+
+	case "browser_choice":
+		s.WriteString("## Setup — Choose Browser\n\n")
+		s.WriteString(result.Message + "\n\n")
+		if browsers, ok := data["browsers"]; ok {
+			formatMapList(&s, browsers, func(m map[string]string) string {
+				return fmt.Sprintf("- **%s** (`%s`)\n", m["display_name"], m["name"])
+			})
+		}
+
+	case "profile_choice":
+		s.WriteString("## Setup — Choose Profile\n\n")
+		s.WriteString(result.Message + "\n\n")
+		if profiles, ok := data["profiles"]; ok {
+			formatMapList(&s, profiles, func(m map[string]string) string {
+				email := ""
+				if e := m["email"]; e != "" {
+					email = fmt.Sprintf(" (%s)", e)
+				}
+				return fmt.Sprintf("- **%s**%s — dir: `%s`\n", m["display_name"], email, m["dir_name"])
+			})
+		}
+
+	case "profile_locked":
+		s.WriteString("## Setup — Browser Locked\n\n")
+		s.WriteString(result.Message)
+
+	case "firefox_ext_written":
+		s.WriteString("## Setup — Firefox Extension\n\n")
+		s.WriteString(result.Message)
+
+	case "waiting_for_callback":
+		s.WriteString("Waiting for tokens from browser...")
+
+	case "failed":
+		s.WriteString("## Setup — Failed\n\n")
+		s.WriteString(result.Message)
+
+	default:
+		s.WriteString(result.Message)
+	}
+
+	s.WriteString(footer(result))
+	return s.String()
 }
 
 // --- Generic fallback ---

@@ -79,6 +79,15 @@ npm-publish: npm-copy-binaries ## Publish the npm packages
 	jq '.optionalDependencies |= with_entries(.value = "$(NPM_VERSION)")' ./npm/slack-mcp-server/package.json > tmp.json && mv tmp.json ./npm/slack-mcp-server/package.json; \
 	cd npm/slack-mcp-server && npm publish
 
+.PHONY: check-network-isolation
+check-network-isolation: ## Verify no rod auto-download calls exist in source
+	@echo "Checking for forbidden rod download patterns..."
+	@! grep -rn 'browser\.Get\|browser\.MustGet\|\.Download(' pkg/ --include='*.go' | grep -v '^\s*//' | grep -v '// ' \
+		|| (echo "FAIL: found browser download calls — use launcher.LookPath() + Bin() instead" && exit 1)
+	@! grep -rn 'launcher\.New()' pkg/ --include='*.go' | grep -v 'NewUserMode' | grep -v '^\s*//' | grep -v '// ' \
+		|| (echo "FAIL: found bare launcher.New() — use NewUserMode().Bin(path) instead" && exit 1)
+	@echo "OK: no forbidden patterns found"
+
 .PHONY: test
 test: ## Run the tests
 	go test -count=1 -v ./...

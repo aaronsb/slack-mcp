@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const appName = "slack-mcp"
@@ -18,10 +19,40 @@ type WorkspaceConfig struct {
 	UserID    string `json:"user_id,omitempty"`
 }
 
+// FlowState persists the setup flow's current position across server restarts
+type FlowState struct {
+	State       string    `json:"state"`
+	Tier        int       `json:"tier,omitempty"`
+	BrowserPath string    `json:"browser_path,omitempty"`
+	BrowserName string    `json:"browser_name,omitempty"`
+	ProfileDir  string    `json:"profile_dir,omitempty"`
+	UserDataDir string    `json:"user_data_dir,omitempty"`
+	TempDir     string    `json:"temp_dir,omitempty"`
+	Port        int       `json:"port,omitempty"`
+	StartedAt   time.Time `json:"started_at"`
+}
+
+const flowTTL = 1 * time.Hour
+
+// FlowExpired returns true if the flow state is older than the TTL
+func (fs *FlowState) FlowExpired() bool {
+	if fs == nil {
+		return true
+	}
+	return time.Since(fs.StartedAt) > flowTTL
+}
+
 // Config holds all workspace configurations
 type Config struct {
 	Workspaces       map[string]WorkspaceConfig `json:"workspaces"`
 	DefaultWorkspace string                     `json:"default_workspace,omitempty"`
+	SetupFlow        *FlowState                 `json:"setup_flow,omitempty"`
+}
+
+// ClearFlow removes setup flow state and saves the config
+func (c *Config) ClearFlow() error {
+	c.SetupFlow = nil
+	return SaveConfig(c)
 }
 
 // ConfigDir returns the XDG config directory: $XDG_CONFIG_HOME/slack-mcp
