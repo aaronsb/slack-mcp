@@ -3,7 +3,6 @@ package features
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/slack-go/slack"
@@ -70,13 +69,13 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		}, nil
 	}
 
-	// Resolve channel name to ID
-	channelID := resolveChannelID(apiProvider, channel)
+	// Resolve channel name to ID (also resolves usernames to DM channels)
+	channelID := resolveChannelForSending(apiProvider, api, channel)
 	if channelID == "" {
 		return &FeatureResult{
 			Success:  false,
-			Message:  fmt.Sprintf("Could not find channel '%s'", channel),
-			Guidance: "Use 'list-channels' to see available channels",
+			Message:  fmt.Sprintf("Could not find channel or user '%s'", channel),
+			Guidance: "Use 'list-channels' to see available channels, or provide a username for DMs",
 		}, nil
 	}
 
@@ -198,23 +197,6 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 	}
 
 	return result, nil
-}
-
-func resolveChannelID(apiProvider *provider.ApiProvider, channel string) string {
-	cleanName := strings.TrimPrefix(channel, "#")
-
-	// Try cache first
-	resolved := apiProvider.ResolveChannelID(cleanName)
-	if strings.HasPrefix(resolved, "C") || strings.HasPrefix(resolved, "D") || strings.HasPrefix(resolved, "G") {
-		return resolved
-	}
-
-	// If it already looks like an ID, use it
-	if strings.HasPrefix(channel, "C") || strings.HasPrefix(channel, "D") || strings.HasPrefix(channel, "G") {
-		return channel
-	}
-
-	return ""
 }
 
 func resolveChannelName(ctx context.Context, apiProvider *provider.ApiProvider, channelID string, fallback string) string {

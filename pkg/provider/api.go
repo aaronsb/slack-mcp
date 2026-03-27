@@ -448,6 +448,8 @@ func (ap *ApiProvider) ResolveChannelID(channelNameOrID string) string {
 		return id
 	}
 
+	log.Printf("ResolveChannelID: no match for %q (cache has %d names)", channelNameOrID, len(ap.channelNames))
+
 	// Not found, return original
 	return channelNameOrID
 }

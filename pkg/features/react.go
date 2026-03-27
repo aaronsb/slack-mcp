@@ -65,8 +65,8 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 		}, nil
 	}
 
-	// Resolve channel name to ID
-	channelID := resolveChannelID(apiProvider, channel)
+	// Resolve channel name to ID (also resolves usernames to DM channels)
+	channelID := resolveChannelForSending(apiProvider, api, channel)
 	if channelID == "" {
 		return &FeatureResult{
 			Success:  false,
