@@ -120,13 +120,9 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 			return nil, err
 		}
 
-		// Convert to JSON for MCP response
-		jsonData, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-
-		return mcp.NewToolResultText(string(jsonData)), nil
+		// Format as markdown for AI consumption
+		text := features.FormatResult(feature.Name, result)
+		return mcp.NewToolResultText(text), nil
 	}
 
 	// Register the tool
