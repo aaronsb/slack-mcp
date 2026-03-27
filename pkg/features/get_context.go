@@ -204,8 +204,9 @@ func resolveChannelID(apiProvider *provider.ApiProvider, channel string) string 
 	cleanName := strings.TrimPrefix(channel, "#")
 
 	// Try cache first
-	if id := apiProvider.ResolveChannelID(cleanName); id != "" {
-		return id
+	resolved := apiProvider.ResolveChannelID(cleanName)
+	if strings.HasPrefix(resolved, "C") || strings.HasPrefix(resolved, "D") || strings.HasPrefix(resolved, "G") {
+		return resolved
 	}
 
 	// If it already looks like an ID, use it
