@@ -558,39 +558,6 @@ func (f *Flow) doFallthrough() *FlowResponse {
 
 // --- Helpers ---
 
-func (f *Flow) saveTokens(xoxc, xoxd, team, user, userID string) *FlowResponse {
-	f.cfg.Workspaces[team] = WorkspaceConfig{
-		XoxcToken: xoxc,
-		XoxdToken: xoxd,
-		TeamName:  team,
-		UserName:  user,
-		UserID:    userID,
-	}
-	if f.cfg.DefaultWorkspace == "" {
-		f.cfg.DefaultWorkspace = team
-	}
-	f.cfg.SetupFlow = nil
-	if err := SaveConfig(f.cfg); err != nil {
-		f.state = StateFailed
-		return &FlowResponse{
-			State:   StateFailed,
-			Message: fmt.Sprintf("Tokens valid but failed to save config: %v", err),
-			Actions: []string{"retry", "reset"},
-		}
-	}
-
-	f.cleanup()
-	f.state = StateComplete
-
-	return &FlowResponse{
-		State:   StateComplete,
-		Message: fmt.Sprintf("Connected to %s as %s.", team, user),
-		Done:    true,
-		OK:      true,
-		Context: map[string]any{"team": team, "user": user},
-	}
-}
-
 func (f *Flow) ensureCallbackServer() error {
 	if f.callback != nil {
 		return nil

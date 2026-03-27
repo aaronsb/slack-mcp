@@ -45,16 +45,19 @@ Tier 3: Manual flow (any browser)    — current behavior, always available
 
 Use [rod](https://github.com/go-rod/rod), a Go library for Chrome DevTools Protocol, to control a Chromium-based browser and extract tokens programmatically.
 
-Rod's `launcher.NewUserMode()` is purpose-built for this: it reuses the user's existing browser profile via `LookPath()` discovery, a fixed debug port, and no auto-download. It requires the browser to be fully closed (profile lock), which aligns with our extraction-only model.
+Chrome 146+ blocks `--remote-debugging-port` when `--user-data-dir` points to the browser's own default directory. Rod's `launcher.NewUserMode()` cannot work around this. Instead, we launch Chrome directly via `os/exec` with a symlinked profile trick: create a temp directory, copy `Local State` into it, and symlink the target profile subdirectory. Chrome sees a "non-default" user-data-dir and enables debugging, while the actual profile data (cookies, localStorage) is the real data via symlink. On Windows, directory junctions (`mklink /J`) are used as a fallback since symlinks require Developer Mode.
+
+Rod is used only for its CDP client (`rod.New().ControlURL(ws).Connect()`) — browser launch is handled entirely by `os/exec` for reliability across Chrome versions. The debug WebSocket URL is obtained by polling Chrome's HTTP endpoint (`/json/version`) rather than parsing stderr.
 
 **When Chrome is not running** (profile unlocked):
-1. Use `launcher.LookPath()` to find an installed Chromium-based browser (Chrome, Chromium, Edge). If none found, skip to Tier 2.
+1. Detect installed Chromium-based browsers via platform-specific known paths. If none found, skip to Tier 2.
 2. Parse `Local State` JSON to enumerate profiles. If multiple profiles exist, present them to the agent with display names/emails for user selection.
-3. Launch with `NewUserMode()` using the selected profile — headful, existing user data, no Chromium download.
+3. Create temp user-data-dir with symlinked profile, launch Chrome with `--remote-debugging-port`.
 4. Navigate to `app.slack.com`.
-5. Extract xoxc token from localStorage and d cookie via CDP.
-6. Validate tokens against `auth.test`.
-7. Close the browser.
+5. Poll localStorage for xoxc token (Slack's SPA never "stabilizes" so polling is used instead of page-ready checks).
+6. Extract d cookie via CDP (sees HttpOnly cookies).
+7. Validate tokens against `auth.test`.
+8. Close the browser and clean up temp directory.
 
 **When Chrome is running** (profile locked):
 1. Detect the lock, inform the agent.

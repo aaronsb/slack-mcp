@@ -56,10 +56,11 @@ type CallbackServer struct {
 	listener net.Listener
 	port     int
 
-	mu      sync.Mutex
-	result  *TokenResult
-	sResult *setupResult // for HTML status polling
-	done    chan struct{}
+	mu        sync.Mutex
+	result    *TokenResult
+	sResult   *setupResult // for HTML status polling
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewCallbackServer creates a callback server on the given listener.
@@ -104,7 +105,14 @@ func NewCallbackServer(listener net.Listener, port int) *CallbackServer {
 }
 
 func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Restrict CORS to localhost origins only — the callback server binds to
+	// 127.0.0.1, so only localhost origins should be posting tokens here.
+	origin := r.Header.Get("Origin")
+	if origin == "" || strings.HasPrefix(origin, "http://localhost") || strings.HasPrefix(origin, "http://127.0.0.1") {
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+	}
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
@@ -191,11 +199,7 @@ func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request)
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		select {
-		case <-cs.done:
-		default:
-			close(cs.done)
-		}
+		cs.closeOnce.Do(func() { close(cs.done) })
 	}()
 }
 

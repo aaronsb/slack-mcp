@@ -120,16 +120,10 @@ func (e *CDPExtractor) extract(ctx context.Context, debugPort int) (string, stri
 		return "", "", fmt.Errorf("failed to open Slack page: %w", err)
 	}
 
-	// Wait for Slack to load. Don't use WaitStable — Slack's constant
-	// WebSocket activity means the page never "stabilizes" by rod's definition.
-	// Instead, wait for the page to have a Slack URL and give it time to hydrate.
-	if err := page.WaitLoad(); err != nil {
-		return "", "", fmt.Errorf("page did not load: %w", err)
-	}
-	time.Sleep(3 * time.Second)
-
-	// Extract xoxc from localStorage
-	xoxc, err := extractXoxcFromLocalStorage(page)
+	// Poll for xoxc token in localStorage. Don't use WaitStable — Slack's
+	// constant WebSocket activity means the page never "stabilizes."
+	// Instead, poll until the token appears or we time out.
+	xoxc, err := pollForXoxcToken(ctx, page)
 	if err != nil {
 		return "", "", err
 	}
@@ -168,6 +162,25 @@ func (e *CDPExtractor) Cleanup() {
 }
 
 // --- Extraction helpers ---
+
+// pollForXoxcToken polls localStorage until an xoxc token appears or context expires.
+func pollForXoxcToken(ctx context.Context, page *rod.Page) (string, error) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("timed out waiting for xoxc token in localStorage — Slack may not be fully loaded")
+		case <-ticker.C:
+			xoxc, err := extractXoxcFromLocalStorage(page)
+			if err == nil && xoxc != "" {
+				return xoxc, nil
+			}
+			// Keep polling — Slack SPA may still be hydrating
+		}
+	}
+}
 
 // extractXoxcFromLocalStorage searches localStorage for an xoxc token.
 func extractXoxcFromLocalStorage(page *rod.Page) (string, error) {
@@ -242,12 +255,14 @@ func prepareCDPUserDataDir(realUserDataDir, profileDir string) (string, error) {
 		os.WriteFile(filepath.Join(tmpDir, "Local State"), data, 0600)
 	}
 
-	// Symlink the real profile directory
+	// Link the real profile directory. Use symlink on Unix, fall back to
+	// directory junction on Windows (junctions don't require Developer Mode
+	// or admin privileges, unlike symlinks).
 	realProfile := filepath.Join(realUserDataDir, profileDir)
 	tmpProfile := filepath.Join(tmpDir, profileDir)
-	if err := os.Symlink(realProfile, tmpProfile); err != nil {
+	if err := linkProfileDir(realProfile, tmpProfile); err != nil {
 		os.RemoveAll(tmpDir)
-		return "", fmt.Errorf("failed to symlink profile: %w", err)
+		return "", fmt.Errorf("failed to link profile: %w", err)
 	}
 
 	return tmpDir, nil
