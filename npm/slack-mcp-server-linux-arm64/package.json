@@ -1,11 +1,16 @@
 {
-  "name": "slack-mcp-server-linux-arm64",
-  "version": "1.1.0",
-  "description": "Model Context Protocol (MCP) server for Slack Workspaces. This integration supports both Stdio and SSE transports, proxy settings and does not require any permissions or bots being created or approved by Workspace admins",
+  "name": "@aaronsb/slack-mcp-linux-arm64",
+  "version": "1.2.0",
+  "description": "Platform binary for @aaronsb/slack-mcp (linux-arm64)",
   "os": [
     "linux"
   ],
   "cpu": [
     "arm64"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aaronsb/slack-mcp.git"
+  },
+  "license": "MIT"
 }
