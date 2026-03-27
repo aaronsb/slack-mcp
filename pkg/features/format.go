@@ -97,6 +97,15 @@ func num(m map[string]interface{}, key string) int {
 
 func footer(result *FeatureResult) string {
 	var parts []string
+	if result.Pagination != nil && result.Pagination.HasMore {
+		p := result.Pagination
+		hint := fmt.Sprintf("**Page:** %d items shown", p.PageSize)
+		if p.TotalCount > 0 {
+			hint += fmt.Sprintf(" of %d total", p.TotalCount)
+		}
+		hint += fmt.Sprintf(". More available — use cursor='%s'", p.NextCursor)
+		parts = append(parts, hint)
+	}
 	if result.Guidance != "" {
 		parts = append(parts, result.Guidance)
 	}
