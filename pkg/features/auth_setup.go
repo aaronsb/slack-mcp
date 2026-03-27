@@ -104,7 +104,11 @@ func authSetupHandler(ctx context.Context, params map[string]interface{}) (*Feat
 	if resp.Done && resp.OK {
 		if setProvider, ok := params["_setProvider"].(func(*provider.ApiProvider)); ok {
 			cfg, err := setup.LoadConfig()
-			if err == nil && len(cfg.Workspaces) > 0 {
+			if err != nil {
+				log.Printf("Warning: auth succeeded but failed to load config for hot-load: %v", err)
+			} else if len(cfg.Workspaces) == 0 {
+				log.Println("Warning: auth succeeded but config has no workspaces after save")
+			} else {
 				wsName := cfg.DefaultWorkspace
 				if wsName == "" {
 					for name := range cfg.Workspaces {
