@@ -130,7 +130,7 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 func resolveChannelForSending(apiProvider *provider.ApiProvider, api *slack.Client, channel string) string {
 	// First try provider's cache for channel names
 	cleanName := strings.TrimPrefix(channel, "#")
-	if channelID := apiProvider.ResolveChannelID(cleanName); strings.HasPrefix(channelID, "C") || strings.HasPrefix(channelID, "G") {
+	if channelID := apiProvider.ResolveChannelID(cleanName); strings.HasPrefix(channelID, "C") || strings.HasPrefix(channelID, "D") || strings.HasPrefix(channelID, "G") {
 		return channelID
 	}
 
