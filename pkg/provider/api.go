@@ -42,6 +42,12 @@ type ApiProvider struct {
 	dmMap      map[string]string
 	dmMapMutex sync.RWMutex
 
+	// Authenticated user identity
+	selfUserID string
+	selfUser   string
+	selfTeam   string
+	selfTeamID string
+
 	// Cache persistence
 	store *cache.Store
 
@@ -116,6 +122,9 @@ func (ap *ApiProvider) Provide() (*slack.Client, error) {
 	if ap.client == nil {
 		ap.client = ap.boot()
 
+		// Capture identity
+		ap.captureIdentity()
+
 		err := ap.bootstrapDependencies(context.Background())
 		if err != nil {
 			return nil, err
@@ -123,6 +132,20 @@ func (ap *ApiProvider) Provide() (*slack.Client, error) {
 	}
 
 	return ap.client, nil
+}
+
+func (ap *ApiProvider) captureIdentity() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := ap.client.AuthTestContext(ctx)
+	if err != nil {
+		log.Printf("Could not capture identity: %v", err)
+		return
+	}
+	ap.selfUserID = res.UserID
+	ap.selfUser = res.User
+	ap.selfTeam = res.Team
+	ap.selfTeamID = res.TeamID
 }
 
 func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
@@ -432,6 +455,52 @@ func (ap *ApiProvider) ProvideUsersMap() map[string]slack.User {
 	ap.usersMutex.RLock()
 	defer ap.usersMutex.RUnlock()
 	return ap.users
+}
+
+// Identity returns information about the authenticated user
+type Identity struct {
+	UserID      string `json:"userId"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+	Title       string `json:"title,omitempty"`
+	Email       string `json:"email,omitempty"`
+	Team        string `json:"team"`
+	TeamID      string `json:"teamId"`
+}
+
+// ProvideIdentity returns the authenticated user's identity
+func (ap *ApiProvider) ProvideIdentity() *Identity {
+	if ap.selfUserID == "" {
+		return nil
+	}
+
+	id := &Identity{
+		UserID:   ap.selfUserID,
+		Username: ap.selfUser,
+		Team:     ap.selfTeam,
+		TeamID:   ap.selfTeamID,
+	}
+
+	// Enrich from users cache
+	ap.usersMutex.RLock()
+	if user, ok := ap.users[ap.selfUserID]; ok {
+		if user.RealName != "" {
+			id.DisplayName = user.RealName
+		}
+		if user.Profile.Title != "" {
+			id.Title = user.Profile.Title
+		}
+		if user.Profile.Email != "" {
+			id.Email = user.Profile.Email
+		}
+	}
+	ap.usersMutex.RUnlock()
+
+	if id.DisplayName == "" {
+		id.DisplayName = id.Username
+	}
+
+	return id
 }
 
 func (ap *ApiProvider) ProvideInternalClient() *InternalClient {

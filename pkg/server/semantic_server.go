@@ -189,6 +189,47 @@ func (s *SemanticMCPServer) createToolOption(name string, prop map[string]interf
 
 // registerResources adds MCP resources for help content
 func (s *SemanticMCPServer) registerResources() {
+	// Identity resource — tells the agent who it's operating as
+	s.server.AddResource(
+		mcp.Resource{
+			URI:         "slack-mcp://identity",
+			Name:        "Current User Identity",
+			Description: "The authenticated Slack user this server is operating as. Read this to know your name, team, and role before interacting with others.",
+			MIMEType:    "application/json",
+		},
+		func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+			if s.provider == nil {
+				return []mcp.ResourceContents{
+					mcp.TextResourceContents{
+						URI:      "slack-mcp://identity",
+						MIMEType: "application/json",
+						Text:     `{"status": "not_authenticated", "message": "Use auth-setup to connect a workspace"}`,
+					},
+				}, nil
+			}
+
+			identity := s.provider.ProvideIdentity()
+			if identity == nil {
+				return []mcp.ResourceContents{
+					mcp.TextResourceContents{
+						URI:      "slack-mcp://identity",
+						MIMEType: "application/json",
+						Text:     `{"status": "unknown", "message": "Identity not yet available — provider may still be booting"}`,
+					},
+				}, nil
+			}
+
+			data, _ := json.MarshalIndent(identity, "", "  ")
+			return []mcp.ResourceContents{
+				mcp.TextResourceContents{
+					URI:      "slack-mcp://identity",
+					MIMEType: "application/json",
+					Text:     string(data),
+				},
+			}, nil
+		},
+	)
+
 	s.server.AddResource(
 		mcp.Resource{
 			URI:         "slack-mcp://help/browser-setup",
