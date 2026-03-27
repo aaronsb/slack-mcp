@@ -40,7 +40,7 @@ make npm-publish NPM_TOKEN=... # Publish to npm
 
 ## Environment
 
-Required: `SLACK_XOXC_TOKEN`, `SLACK_XOXD_TOKEN`
+Required: `SLACK_MCP_XOXC_TOKEN`, `SLACK_MCP_XOXD_TOKEN` (or config file at `~/.config/slack-mcp/config.json`)
 Optional: `SLACK_MCP_HOST`, `SLACK_MCP_PORT`, `SLACK_MCP_SSE_API_KEY`, `SLACK_MCP_DEBUG`
 
 ## Key Design Decisions

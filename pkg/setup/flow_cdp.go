@@ -89,7 +89,7 @@ func (e *CDPExtractor) run(ctx context.Context, debugPort int) {
 		e.result = &TokenResult{Err: err}
 	} else {
 		// Validate tokens
-		team, user, userID, vErr := validateTokens(xoxc, xoxd)
+		team, user, userID, vErr := ValidateTokens(xoxc, xoxd)
 		if vErr != nil {
 			e.result = &TokenResult{Err: fmt.Errorf("token validation failed: %w", vErr)}
 		} else {

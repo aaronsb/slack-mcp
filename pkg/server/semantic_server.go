@@ -102,6 +102,20 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 			params[k] = v
 		}
 
+		// Provide a callback so auth-setup can hot-load the provider after success
+		params["_setProvider"] = func(p *provider.ApiProvider) {
+			s.provider = p
+			log.Println("Provider hot-loaded after successful auth setup")
+			go func() {
+				log.Println("Booting provider in background after auth...")
+				if _, err := p.Provide(); err != nil {
+					log.Printf("Warning: post-auth provider boot failed: %v", err)
+				} else {
+					log.Println("Provider booted successfully after auth")
+				}
+			}()
+		}
+
 		// Add provider to params for features that need it
 		if s.provider == nil && feature.Name != "auth-setup" {
 			guidance := map[string]interface{}{

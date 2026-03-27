@@ -90,8 +90,8 @@ Run `slack-mcp setup` or use the `auth-setup` tool — if no browser is detected
 You can also set tokens directly via environment variables:
 
 ```bash
-export SLACK_XOXC_TOKEN="xoxc-..."
-export SLACK_XOXD_TOKEN="xoxd-..."
+export SLACK_MCP_XOXC_TOKEN="xoxc-..."
+export SLACK_MCP_XOXD_TOKEN="xoxd-..."
 ./slack-mcp
 ```
 
