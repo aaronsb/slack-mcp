@@ -180,10 +180,10 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		Message:     fmt.Sprintf("Got %d messages from %s", len(formatted), channelName),
 		ResultCount: len(formatted),
 		Data: map[string]interface{}{
-			"channel":       channelName,
-			"channelId":     channelID,
-			"messages":      formatted,
-			"messageCount":  len(formatted),
+			"channel":      channelName,
+			"channelId":    channelID,
+			"messages":     formatted,
+			"messageCount": len(formatted),
 		},
 		NextActions: []string{
 			fmt.Sprintf("Send a reply: send-message channel='%s'", channel),

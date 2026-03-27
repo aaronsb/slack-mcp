@@ -201,7 +201,7 @@ func (c *InternalClient) SearchMessages(ctx context.Context, query string, extra
 
 	result := &SearchModulesResponse{}
 	err := c.callInternalAPI(ctx, "/api/search.modules", params, result)
-	
+
 	// Debug logging
 	log.Printf("Search query: %s", query)
 	log.Printf("Search response - Total: %d, Matches: %d", result.Messages.Total, len(result.Messages.Matches))

@@ -67,7 +67,7 @@ func findDiscussionHandler(ctx context.Context, params map[string]interface{}) (
 			Message: "Please provide either a search query or a threadId",
 		}, nil
 	}
-	
+
 	// Implementation
 	result, err := searchMessagesImpl(ctx, params, query)
 	return result, err

@@ -74,7 +74,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 
 	// Determine if we should auto-follow cursors
 	shouldAutoCursor := shouldAutoFollowCursor(since, cursor)
-	
+
 	// Collect all messages if auto-cursoring
 	allMessages := []slack.Message{}
 	importantItems := []map[string]interface{}{}
@@ -84,13 +84,13 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		"mentions":      0,
 		"reactions":     0,
 	}
-	
+
 	usersMap := provider.ProvideUsersMap()
 	currentCursor := cursor
 	hasMore := true
 	pageCount := 0
 	maxPages := 10
-	
+
 	// For recent timeframes, be more aggressive
 	if isRecentTimeframe(since) && cursor == "" {
 		maxPages = 20
@@ -116,7 +116,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		// Process messages
 		for _, msg := range resp.Messages {
 			allMessages = append(allMessages, msg)
-			
+
 			// Analyze each message
 			item := analyzeMessage(msg, usersMap)
 			if item != nil {
@@ -186,14 +186,14 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 
 	// Apply count-based windowing rules
 	totalMsgCount := stats["totalMessages"].(int)
-	
+
 	// Add contextual guidance based on message count
 	if totalMsgCount == 0 {
 		result.Guidance = "✅ No activity in this time period"
 		result.NextActions = []string{
-			"Try a longer timeframe: catch-up channel='"+channel+"' since='1w'",
+			"Try a longer timeframe: catch-up channel='" + channel + "' since='1w'",
 			"Check other channels: list-channels filter='with-unreads'",
-			"Search for older discussions: search query='<topic>' in:"+channel+" timeframe='1m'",
+			"Search for older discussions: search query='<topic>' in:" + channel + " timeframe='1m'",
 		}
 	} else if totalMsgCount <= 3 {
 		// 1-3 messages: Full consumption = auto-mark read
@@ -205,7 +205,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		}
 		// TODO: Actually mark as read
 	} else if totalMsgCount <= 15 {
-		// 4-15 messages: Thorough review = auto-mark read  
+		// 4-15 messages: Thorough review = auto-mark read
 		result.Guidance = "🔍 Thorough review complete - marking as read"
 		result.NextActions = []string{
 			"Messages auto-marked as read (thorough review)",
@@ -229,25 +229,25 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		// 50+ messages: Surface scan = preserve unread
 		result.Guidance = "📡 High volume detected - showing surface scan only"
 		result.NextActions = []string{}
-		
+
 		if currentCursor != "" {
 			result.NextActions = append(result.NextActions,
 				fmt.Sprintf("🔄 Continue reading next batch: catch-up channel='%s' cursor='%s'", channel, currentCursor))
 		}
-		
+
 		result.NextActions = append(result.NextActions,
 			"Filter by importance: catch-up channel='"+channel+"' focus='important'",
 			"Search for specific topics: search query='<topic>' in:"+channel)
-		
+
 		// Add semantic prompt for high volume
 		if hasMore {
 			result.Data.(map[string]interface{})["semanticPrompt"] = fmt.Sprintf(
 				"High message volume (%d+ messages). To continue systematic review, use the cursor to fetch the next batch. "+
-				"Large message volumes are best handled in smaller chunks.",
+					"Large message volumes are best handled in smaller chunks.",
 				totalMsgCount)
 		}
 	}
-	
+
 	// Add thread and mention suggestions if found
 	if len(importantItems) > 0 {
 		hasThreads := false
@@ -257,13 +257,13 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 				break
 			}
 		}
-		
+
 		// Add contextual search for any message count with important items
 		if hasThreads || len(importantItems) < 3 {
 			result.NextActions = append(result.NextActions,
 				"For specific topics: search query='<topic>' in:"+channel)
 		}
-		
+
 		if hasThreads {
 			result.NextActions = append(result.NextActions,
 				"Join active conversation: send-message channel='"+channel+"' threadTs='<thread>'")
@@ -279,7 +279,7 @@ func shouldAutoFollowCursor(timeframe string, manualCursor string) bool {
 	if manualCursor != "" {
 		return false
 	}
-	
+
 	// Auto-cursor for recent timeframes
 	return isRecentTimeframe(timeframe)
 }
@@ -290,14 +290,14 @@ func isRecentTimeframe(timeframe string) bool {
 	if strings.HasSuffix(timeframe, "m") || strings.HasSuffix(timeframe, "h") {
 		return true
 	}
-	
+
 	// Check for "1d" or less
 	if strings.HasSuffix(timeframe, "d") {
 		days := 1
 		fmt.Sscanf(timeframe, "%dd", &days)
 		return days <= 1
 	}
-	
+
 	return false
 }
 

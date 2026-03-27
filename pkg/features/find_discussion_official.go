@@ -96,8 +96,8 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		}
 
 		// Check if it's part of a thread
-		if match.Previous.Timestamp != "" || match.Previous2.Timestamp != "" || 
-		   match.Next.Timestamp != "" || match.Next2.Timestamp != "" {
+		if match.Previous.Timestamp != "" || match.Previous2.Timestamp != "" ||
+			match.Next.Timestamp != "" || match.Next2.Timestamp != "" {
 			discussion["type"] = "thread"
 			discussion["threadId"] = fmt.Sprintf("%s:%s", match.Channel.ID, match.Timestamp)
 		}
@@ -123,7 +123,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	// Add next actions based on results
 	if len(discussions) > 0 {
 		result.NextActions = []string{}
-		
+
 		// Primary action: catch up on channels with found content
 		channelsSeen := map[string]bool{}
 		for _, d := range discussions {
@@ -161,17 +161,17 @@ func parseTimeframeToDateFilter(timeframe string) string {
 	} else if strings.HasSuffix(timeframe, "w") {
 		weeks := strings.TrimSuffix(timeframe, "w")
 		if w, err := time.ParseDuration(weeks + "h"); err == nil {
-			days := int(w.Hours() / 24 / 7) * 7
+			days := int(w.Hours()/24/7) * 7
 			return fmt.Sprintf("after:-%dd", days)
 		}
 	} else if strings.HasSuffix(timeframe, "m") {
 		months := strings.TrimSuffix(timeframe, "m")
 		if m, err := time.ParseDuration(months + "h"); err == nil {
-			days := int(m.Hours() / 24 / 30) * 30
+			days := int(m.Hours()/24/30) * 30
 			return fmt.Sprintf("after:-%dd", days)
 		}
 	}
-	
+
 	// Default to 30 days
 	return "after:-30d"
 }

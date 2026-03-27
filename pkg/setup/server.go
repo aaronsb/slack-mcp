@@ -72,21 +72,22 @@ func RunSetup() error {
 
 	// Receive tokens from the browser snippet
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// CORS for the Slack page POSTing to localhost
+		// CORS headers must be set before any response — including preflight
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Content-Type", "application/json")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB max
 		if err != nil {
@@ -158,16 +159,6 @@ func RunSetup() error {
 			time.Sleep(500 * time.Millisecond)
 			close(done)
 		}()
-	})
-
-	// CORS preflight for /callback
-	mux.HandleFunc("/callback/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			w.WriteHeader(http.StatusOK)
-		}
 	})
 
 	// Status endpoint for the page to poll
@@ -259,10 +250,10 @@ func validateTokens(xoxc, xoxd string) (team, user, userID string, err error) {
 	}
 
 	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-		Team  string `json:"team"`
-		User  string `json:"user"`
+		OK     bool   `json:"ok"`
+		Error  string `json:"error"`
+		Team   string `json:"team"`
+		User   string `json:"user"`
 		UserID string `json:"user_id"`
 	}
 
