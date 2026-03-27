@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "slack-mcp",
-  "display_name": "Slack MCP",
+  "display_name": "Slack",
   "version": "1.2.0",
   "description": "MCP server for Slack workspaces using session tokens. Automatic browser-based token extraction, stealth reads, channel caching.",
   "author": {
