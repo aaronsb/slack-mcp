@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
-	"github.com/aaronsb/slack-mcp/pkg/transport"
-	"github.com/slack-go/slack"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -14,6 +12,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aaronsb/slack-mcp/pkg/cache"
+	"github.com/aaronsb/slack-mcp/pkg/transport"
+	"github.com/slack-go/slack"
+)
+
+// Cache file names in XDG data dir
+const (
+	channelsCacheFile = "channels.json"
+	usersCacheFile    = "users.json"
+	dmMapCacheFile    = "dm-map.json"
+	flushInterval     = 5 * time.Minute
 )
 
 type ApiProvider struct {
@@ -21,16 +31,26 @@ type ApiProvider struct {
 	client         *slack.Client
 	internalClient *InternalClient
 
-	users         map[string]slack.User
-	usersCache    string
+	users      map[string]slack.User
+	usersMutex sync.RWMutex
+
 	channels      map[string]slack.Channel // Channel ID -> Channel info
-	channelNames  map[string]string        // Channel name -> Channel ID
+	channelNames  map[string]string        // Channel name/display name -> Channel ID
 	channelsMutex sync.RWMutex
+
+	// DM channel map: user name/ID -> DM channel ID
+	dmMap      map[string]string
+	dmMapMutex sync.RWMutex
+
+	// Cache persistence
+	store *cache.Store
 
 	// Cache management
 	lastChannelRefresh time.Time
 	refreshCalls       int
 	refreshResetTime   time.Time
+	backfillDone       bool
+	backfillMutex      sync.Mutex
 }
 
 // New creates a provider from environment variables (backward compatible)
@@ -50,18 +70,18 @@ func New() *ApiProvider {
 
 // NewWithTokens creates a provider with explicit tokens
 func NewWithTokens(token, cookie string) *ApiProvider {
-	cache := os.Getenv("SLACK_MCP_USERS_CACHE")
-	if cache == "" {
-		cache = ".users_cache.json"
+	// Initialize XDG cache store
+	store, err := cache.NewStore()
+	if err != nil {
+		log.Printf("Warning: could not create cache store: %v", err)
 	}
 
-	return &ApiProvider{
+	ap := &ApiProvider{
 		boot: func() *slack.Client {
 			api := slack.New(token,
 				withHTTPClientOption(cookie),
 			)
 
-			// Create a context with timeout for auth test
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
@@ -69,13 +89,11 @@ func NewWithTokens(token, cookie string) *ApiProvider {
 			if err != nil {
 				log.Printf("ERROR: Slack authentication failed: %v", err)
 				log.Printf("Please check your tokens")
-				// Return the API client anyway - some operations might still work
 				return api
 			}
 
 			log.Printf("Authenticated as: %s\n", res)
 
-			// Create new client with team-specific endpoint
 			api = slack.New(token,
 				withHTTPClientOption(cookie),
 				withTeamEndpointOption(res.URL),
@@ -85,10 +103,13 @@ func NewWithTokens(token, cookie string) *ApiProvider {
 		},
 		internalClient: NewInternalClient(token, cookie),
 		users:          make(map[string]slack.User),
-		usersCache:     cache,
 		channels:       make(map[string]slack.Channel),
 		channelNames:   make(map[string]string),
+		dmMap:          make(map[string]string),
+		store:          store,
 	}
+
+	return ap
 }
 
 func (ap *ApiProvider) Provide() (*slack.Client, error) {
@@ -105,131 +126,160 @@ func (ap *ApiProvider) Provide() (*slack.Client, error) {
 }
 
 func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
-	// Load users cache
-	if data, err := os.ReadFile(ap.usersCache); err == nil {
-		var cachedUsers []slack.User
-		if err := json.Unmarshal(data, &cachedUsers); err != nil {
-			log.Printf("Failed to unmarshal %s: %v; will refetch", ap.usersCache, err)
-		} else {
-			for _, u := range cachedUsers {
-				ap.users[u.ID] = u
-			}
-			log.Printf("Loaded %d users from cache %q", len(cachedUsers), ap.usersCache)
+	// Migrate old CWD cache files to XDG
+	if ap.store != nil {
+		ap.store.MigrateFromCWD(map[string]string{
+			".users_cache.json":    usersCacheFile,
+			".channels_cache.json": channelsCacheFile,
+		})
+	}
 
-			// Still need to load channels even if users are cached
-			return ap.loadChannelsProgressive(ctx)
+	// Load users from cache
+	ap.loadUsersFromCache()
+
+	if len(ap.users) == 0 {
+		// No cached users, fetch from API
+		if err := ap.fetchAndCacheUsers(ctx); err != nil {
+			log.Printf("Failed to fetch users: %v", err)
+			return err
 		}
 	}
 
-	// Fetch users
-	optionLimit := slack.GetUsersOptionLimit(1000)
-	users, err := ap.client.GetUsersContext(ctx,
-		optionLimit,
-	)
-	if err != nil {
-		log.Printf("Failed to fetch users: %v", err)
-		return err
+	// Load channels from cache
+	ap.loadChannelsFromCache()
+
+	// Fetch member channels (fast — only channels user belongs to)
+	go ap.loadMemberChannels(ctx)
+
+	// Start background backfill on relaxed schedule
+	go ap.backgroundBackfill(ctx)
+
+	// Start periodic cache flush
+	if ap.store != nil {
+		ap.store.StartPeriodicFlush(flushInterval, ap.flushCaches)
 	}
-
-	for _, user := range users {
-		ap.users[user.ID] = user
-	}
-
-	if data, err := json.MarshalIndent(users, "", "  "); err != nil {
-		log.Printf("Failed to marshal users for cache: %v", err)
-	} else {
-		if err := os.WriteFile(ap.usersCache, data, 0644); err != nil {
-			log.Printf("Failed to write cache file %q: %v", ap.usersCache, err)
-		} else {
-			log.Printf("Wrote %d users to cache %q", len(users), ap.usersCache)
-		}
-	}
-
-	// Load channels progressively
-	return ap.loadChannelsProgressive(ctx)
-}
-
-// loadChannelsProgressive loads channels progressively without blocking
-func (ap *ApiProvider) loadChannelsProgressive(ctx context.Context) error {
-	log.Println("Loading channel cache progressively...")
-
-	// Try to load from cache file first
-	cacheFile := ".channels_cache.json"
-	if data, err := os.ReadFile(cacheFile); err == nil {
-		var cachedChannels []slack.Channel
-		if err := json.Unmarshal(data, &cachedChannels); err == nil {
-			// Load from cache
-			ap.channelsMutex.Lock()
-			ap.channels = make(map[string]slack.Channel)
-			ap.channelNames = make(map[string]string)
-
-			for _, ch := range cachedChannels {
-				ap.channels[ch.ID] = ch
-
-				// Build name mappings
-				if ch.Name != "" {
-					ap.channelNames[ch.Name] = ch.ID
-					ap.channelNames[strings.ToLower(ch.Name)] = ch.ID
-				}
-
-				// For DMs, also map by user's real name
-				if ch.IsIM && ch.User != "" {
-					if user, ok := ap.users[ch.User]; ok {
-						if user.RealName != "" {
-							ap.channelNames[user.RealName] = ch.ID
-							ap.channelNames[strings.ToLower(user.RealName)] = ch.ID
-						}
-						if user.Name != "" {
-							ap.channelNames[user.Name] = ch.ID
-							ap.channelNames[strings.ToLower(user.Name)] = ch.ID
-						}
-					}
-				}
-			}
-
-			ap.lastChannelRefresh = time.Now()
-			ap.channelsMutex.Unlock()
-
-			log.Printf("Loaded %d channels from cache %q", len(cachedChannels), cacheFile)
-
-			// Still fetch fresh data in background
-			go ap.refreshChannelsInBackground(ctx)
-			return nil
-		}
-	}
-
-	// No cache, start fresh
-	ap.channelsMutex.Lock()
-	ap.channels = make(map[string]slack.Channel)
-	ap.channelNames = make(map[string]string)
-	ap.lastChannelRefresh = time.Now() // Initialize to now to avoid zero time
-	ap.channelsMutex.Unlock()
-
-	// Load channels in background
-	go ap.refreshChannelsInBackground(ctx)
 
 	return nil
 }
 
-// refreshChannelsInBackground fetches channels from API progressively
-func (ap *ApiProvider) refreshChannelsInBackground(ctx context.Context) {
-	log.Println("Starting background channel refresh...")
+// loadUsersFromCache loads users from XDG cache file
+func (ap *ApiProvider) loadUsersFromCache() {
+	if ap.store == nil {
+		return
+	}
 
-	// Phase 1: Load channels user is member of (fast)
-	log.Println("Phase 1: Loading member channels...")
-	memberCursor := ""
-	memberCount := 0
+	var cachedUsers []slack.User
+	if err := ap.store.Load(usersCacheFile, &cachedUsers); err != nil {
+		return
+	}
+
+	ap.usersMutex.Lock()
+	for _, u := range cachedUsers {
+		ap.users[u.ID] = u
+	}
+	ap.usersMutex.Unlock()
+	log.Printf("Loaded %d users from cache", len(cachedUsers))
+}
+
+// fetchAndCacheUsers fetches all users and saves to cache
+func (ap *ApiProvider) fetchAndCacheUsers(ctx context.Context) error {
+	users, err := ap.client.GetUsersContext(ctx, slack.GetUsersOptionLimit(1000))
+	if err != nil {
+		return err
+	}
+
+	ap.usersMutex.Lock()
+	for _, user := range users {
+		ap.users[user.ID] = user
+	}
+	ap.usersMutex.Unlock()
+
+	if ap.store != nil {
+		if err := ap.store.Save(usersCacheFile, users); err != nil {
+			log.Printf("Failed to save users cache: %v", err)
+		} else {
+			log.Printf("Saved %d users to cache", len(users))
+		}
+	}
+
+	return nil
+}
+
+// loadChannelsFromCache loads channels from XDG cache file
+func (ap *ApiProvider) loadChannelsFromCache() {
+	if ap.store == nil {
+		return
+	}
+
+	var cachedChannels []slack.Channel
+	if err := ap.store.Load(channelsCacheFile, &cachedChannels); err != nil {
+		return
+	}
+
+	ap.channelsMutex.Lock()
+	for _, ch := range cachedChannels {
+		ap.channels[ch.ID] = ch
+		ap.indexChannel(ch)
+	}
+	ap.lastChannelRefresh = time.Now()
+	ap.channelsMutex.Unlock()
+
+	// Load DM map
+	var dmMap map[string]string
+	if err := ap.store.Load(dmMapCacheFile, &dmMap); err == nil {
+		ap.dmMapMutex.Lock()
+		ap.dmMap = dmMap
+		ap.dmMapMutex.Unlock()
+	}
+
+	log.Printf("Loaded %d channels from cache", len(cachedChannels))
+}
+
+// indexChannel adds name mappings for a channel (caller must hold channelsMutex write lock)
+func (ap *ApiProvider) indexChannel(ch slack.Channel) {
+	if ch.Name != "" {
+		ap.channelNames[ch.Name] = ch.ID
+		ap.channelNames[strings.ToLower(ch.Name)] = ch.ID
+	}
+
+	// For DMs, map by user's real name and username
+	if ch.IsIM && ch.User != "" {
+		ap.usersMutex.RLock()
+		if user, ok := ap.users[ch.User]; ok {
+			if user.RealName != "" {
+				ap.channelNames[user.RealName] = ch.ID
+				ap.channelNames[strings.ToLower(user.RealName)] = ch.ID
+			}
+			if user.Name != "" {
+				ap.channelNames[user.Name] = ch.ID
+				ap.channelNames[strings.ToLower(user.Name)] = ch.ID
+			}
+		}
+		ap.usersMutex.RUnlock()
+
+		// Also update DM map
+		ap.dmMapMutex.Lock()
+		ap.dmMap[ch.User] = ch.ID
+		ap.dmMapMutex.Unlock()
+	}
+}
+
+// loadMemberChannels fetches channels the user is a member of (fast startup)
+func (ap *ApiProvider) loadMemberChannels(ctx context.Context) {
+	log.Println("Loading member channels...")
+	cursor := ""
+	count := 0
 
 	for {
 		channels, nextCursor, err := ap.client.GetConversationsForUser(&slack.GetConversationsForUserParameters{
-			Cursor:          memberCursor,
+			Cursor:          cursor,
 			Limit:           100,
 			Types:           []string{"public_channel", "private_channel", "mpim", "im"},
 			ExcludeArchived: true,
 		})
 		if err != nil {
 			if rateLimitErr, ok := err.(*slack.RateLimitedError); ok {
-				log.Printf("Rate limited, waiting %v before retry", rateLimitErr.RetryAfter)
+				log.Printf("Rate limited, waiting %v", rateLimitErr.RetryAfter)
 				time.Sleep(rateLimitErr.RetryAfter)
 				continue
 			}
@@ -237,49 +287,40 @@ func (ap *ApiProvider) refreshChannelsInBackground(ctx context.Context) {
 			break
 		}
 
-		// Add member channels to cache
 		ap.channelsMutex.Lock()
 		for _, ch := range channels {
-			// These are channels user is member of
 			ch.IsMember = true
 			ap.channels[ch.ID] = ch
-
-			// Build name mappings
-			if ch.Name != "" {
-				ap.channelNames[ch.Name] = ch.ID
-				ap.channelNames[strings.ToLower(ch.Name)] = ch.ID
-			}
-
-			// For DMs, also map by user's real name
-			if ch.IsIM && ch.User != "" {
-				if user, ok := ap.users[ch.User]; ok {
-					if user.RealName != "" {
-						ap.channelNames[user.RealName] = ch.ID
-						ap.channelNames[strings.ToLower(user.RealName)] = ch.ID
-					}
-					if user.Name != "" {
-						ap.channelNames[user.Name] = ch.ID
-						ap.channelNames[strings.ToLower(user.Name)] = ch.ID
-					}
-				}
-			}
+			ap.indexChannel(ch)
 		}
 		ap.channelsMutex.Unlock()
 
-		memberCount += len(channels)
-		log.Printf("Loaded %d member channels (total: %d)", len(channels), memberCount)
+		count += len(channels)
 
 		if nextCursor == "" {
 			break
 		}
-		memberCursor = nextCursor
-		time.Sleep(500 * time.Millisecond) // Small delay between batches
+		cursor = nextCursor
+		time.Sleep(500 * time.Millisecond)
 	}
 
-	log.Printf("Phase 1 complete: Loaded %d member channels", memberCount)
+	log.Printf("Loaded %d member channels", count)
+	ap.markDirty()
+}
 
-	// Phase 2: Load all other channels (slower, in background)
-	log.Println("Phase 2: Loading all remaining channels...")
+// backgroundBackfill slowly loads remaining workspace channels
+func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
+	// Wait for member channels to load first
+	time.Sleep(10 * time.Second)
+
+	ap.backfillMutex.Lock()
+	if ap.backfillDone {
+		ap.backfillMutex.Unlock()
+		return
+	}
+	ap.backfillMutex.Unlock()
+
+	log.Println("Starting background channel backfill...")
 	cursor := ""
 	totalLoaded := 0
 	batchCount := 0
@@ -292,31 +333,19 @@ func (ap *ApiProvider) refreshChannelsInBackground(ctx context.Context) {
 		})
 		if err != nil {
 			if rateLimitErr, ok := err.(*slack.RateLimitedError); ok {
-				log.Printf("Rate limited, waiting %v before retry", rateLimitErr.RetryAfter)
+				log.Printf("Backfill rate limited, waiting %v", rateLimitErr.RetryAfter)
 				time.Sleep(rateLimitErr.RetryAfter)
 				continue
 			}
-			log.Printf("Failed to fetch all channels: %v", err)
+			log.Printf("Backfill failed: %v", err)
 			return
 		}
 
-		// Add channels to cache progressively (lock per batch)
 		ap.channelsMutex.Lock()
 		for _, ch := range channels {
-			// Only add if not already in cache (preserves IsMember status from Phase 1)
 			if _, exists := ap.channels[ch.ID]; !exists {
-				// These are channels from general list - user may or may not be member
 				ap.channels[ch.ID] = ch
-
-				// Build name mappings (only if name not already mapped)
-				if ch.Name != "" {
-					if _, nameExists := ap.channelNames[ch.Name]; !nameExists {
-						ap.channelNames[ch.Name] = ch.ID
-					}
-					if _, nameExists := ap.channelNames[strings.ToLower(ch.Name)]; !nameExists {
-						ap.channelNames[strings.ToLower(ch.Name)] = ch.ID
-					}
-				}
+				ap.indexChannel(ch)
 			}
 		}
 		ap.channelsMutex.Unlock()
@@ -324,43 +353,84 @@ func (ap *ApiProvider) refreshChannelsInBackground(ctx context.Context) {
 		totalLoaded += len(channels)
 		batchCount++
 
-		log.Printf("Phase 2: Loaded %d channels (total: %d)", len(channels), totalLoaded)
-
 		if nextCursor == "" {
 			break
 		}
 		cursor = nextCursor
 
-		// Add a small delay between batches to avoid rate limits
+		// Relaxed pacing: longer delays to avoid rate limits
 		if batchCount%3 == 0 {
-			log.Printf("Pausing to avoid rate limits...")
-			time.Sleep(2 * time.Second)
-		}
-	}
-
-	log.Printf("Background refresh complete: %d channels loaded", totalLoaded)
-
-	// Save to cache file
-	ap.channelsMutex.RLock()
-	cachedChannels := make([]slack.Channel, 0, len(ap.channels))
-	for _, ch := range ap.channels {
-		cachedChannels = append(cachedChannels, ch)
-	}
-	ap.lastChannelRefresh = time.Now()
-	ap.channelsMutex.RUnlock()
-
-	if data, err := json.MarshalIndent(cachedChannels, "", "  "); err != nil {
-		log.Printf("Failed to marshal channels for cache: %v", err)
-	} else {
-		if err := os.WriteFile(".channels_cache.json", data, 0644); err != nil {
-			log.Printf("Failed to write channel cache file: %v", err)
+			time.Sleep(3 * time.Second)
 		} else {
-			log.Printf("Wrote %d channels to cache", len(cachedChannels))
+			time.Sleep(1 * time.Second)
 		}
+	}
+
+	ap.backfillMutex.Lock()
+	ap.backfillDone = true
+	ap.backfillMutex.Unlock()
+
+	log.Printf("Background backfill complete: %d channels", totalLoaded)
+	ap.markDirty()
+	ap.flushCaches()
+}
+
+// markDirty flags the cache store as needing a flush
+func (ap *ApiProvider) markDirty() {
+	if ap.store != nil {
+		ap.store.MarkDirty()
 	}
 }
 
+// flushCaches writes all in-memory caches to disk
+func (ap *ApiProvider) flushCaches() error {
+	if ap.store == nil {
+		return nil
+	}
+
+	// Save channels
+	ap.channelsMutex.RLock()
+	channels := make([]slack.Channel, 0, len(ap.channels))
+	for _, ch := range ap.channels {
+		channels = append(channels, ch)
+	}
+	ap.channelsMutex.RUnlock()
+
+	if err := ap.store.Save(channelsCacheFile, channels); err != nil {
+		return fmt.Errorf("flush channels: %w", err)
+	}
+
+	// Save users
+	ap.usersMutex.RLock()
+	users := make([]slack.User, 0, len(ap.users))
+	for _, u := range ap.users {
+		users = append(users, u)
+	}
+	ap.usersMutex.RUnlock()
+
+	if err := ap.store.Save(usersCacheFile, users); err != nil {
+		return fmt.Errorf("flush users: %w", err)
+	}
+
+	// Save DM map
+	ap.dmMapMutex.RLock()
+	dmMapCopy := make(map[string]string, len(ap.dmMap))
+	for k, v := range ap.dmMap {
+		dmMapCopy[k] = v
+	}
+	ap.dmMapMutex.RUnlock()
+
+	if err := ap.store.Save(dmMapCacheFile, dmMapCopy); err != nil {
+		return fmt.Errorf("flush dm-map: %w", err)
+	}
+
+	log.Printf("Flushed caches: %d channels, %d users, %d DM mappings", len(channels), len(users), len(dmMapCopy))
+	return nil
+}
+
 func (ap *ApiProvider) ProvideUsersMap() map[string]slack.User {
+	ap.usersMutex.RLock()
+	defer ap.usersMutex.RUnlock()
 	return ap.users
 }
 
@@ -368,16 +438,14 @@ func (ap *ApiProvider) ProvideInternalClient() *InternalClient {
 	return ap.internalClient
 }
 
-// GetChannelInfo gets channel info with caching
-// It accepts both channel IDs and names
+// GetChannelInfo gets channel info with on-demand resolution.
+// On cache miss, fetches from API and patches the cache.
 func (ap *ApiProvider) GetChannelInfo(ctx context.Context, channelIDOrName string) (*slack.Channel, error) {
-	// First try to resolve name to ID
 	channelID := channelIDOrName
 
 	ap.channelsMutex.RLock()
-	// Check if it's a name that needs resolution
-	if !strings.HasPrefix(channelIDOrName, "C") && !strings.HasPrefix(channelIDOrName, "D") && !strings.HasPrefix(channelIDOrName, "G") {
-		// Try to find by name
+	// Try name resolution if not already an ID
+	if !looksLikeChannelID(channelIDOrName) {
 		if id, ok := ap.channelNames[channelIDOrName]; ok {
 			channelID = id
 		} else if id, ok := ap.channelNames[strings.ToLower(channelIDOrName)]; ok {
@@ -392,7 +460,94 @@ func (ap *ApiProvider) GetChannelInfo(ctx context.Context, channelIDOrName strin
 	}
 	ap.channelsMutex.RUnlock()
 
-	// Not in cache, fetch from API
+	// Cache miss — try on-demand resolution
+
+	// If the input doesn't look like a channel ID, try display name resolution
+	if !looksLikeChannelID(channelIDOrName) {
+		ch, err := ap.resolveByDisplayName(ctx, channelIDOrName)
+		if err == nil {
+			return ch, nil
+		}
+		log.Printf("Display name resolution failed for %q: %v", channelIDOrName, err)
+	}
+
+	// Try direct API fetch with the ID we have
+	if looksLikeChannelID(channelID) {
+		return ap.fetchAndCacheChannel(ctx, channelID)
+	}
+
+	return nil, fmt.Errorf("channel_not_found: %s", channelIDOrName)
+}
+
+// resolveByDisplayName tries to resolve a display name to a DM channel.
+// It searches users by real name, then opens a DM via conversations.open.
+func (ap *ApiProvider) resolveByDisplayName(ctx context.Context, name string) (*slack.Channel, error) {
+	client, err := ap.Provide()
+	if err != nil {
+		return nil, err
+	}
+
+	// Search users for matching real name or username
+	nameLower := strings.ToLower(name)
+
+	ap.usersMutex.RLock()
+	var matchedUserID string
+	for _, user := range ap.users {
+		if strings.ToLower(user.RealName) == nameLower || strings.ToLower(user.Name) == nameLower {
+			matchedUserID = user.ID
+			break
+		}
+	}
+	ap.usersMutex.RUnlock()
+
+	if matchedUserID == "" {
+		return nil, fmt.Errorf("no user matching %q", name)
+	}
+
+	// Check DM map first
+	ap.dmMapMutex.RLock()
+	if dmID, ok := ap.dmMap[matchedUserID]; ok {
+		ap.dmMapMutex.RUnlock()
+		// We have the DM channel ID, fetch info
+		ap.channelsMutex.RLock()
+		if ch, ok := ap.channels[dmID]; ok {
+			ap.channelsMutex.RUnlock()
+			return &ch, nil
+		}
+		ap.channelsMutex.RUnlock()
+		return ap.fetchAndCacheChannel(ctx, dmID)
+	}
+	ap.dmMapMutex.RUnlock()
+
+	// Open DM conversation (creates if needed, returns existing if already open)
+	dmChannel, _, _, err := client.OpenConversationContext(ctx, &slack.OpenConversationParameters{
+		Users: []string{matchedUserID},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open DM for %q: %w", name, err)
+	}
+
+	dmChannelID := dmChannel.ID
+
+	// Patch DM map
+	ap.dmMapMutex.Lock()
+	ap.dmMap[matchedUserID] = dmChannelID
+	ap.dmMapMutex.Unlock()
+
+	// Cache the channel info we already have
+	ap.channelsMutex.Lock()
+	ap.channels[dmChannelID] = *dmChannel
+	ap.indexChannel(*dmChannel)
+	ap.channelNames[name] = dmChannelID
+	ap.channelNames[nameLower] = dmChannelID
+	ap.channelsMutex.Unlock()
+
+	ap.markDirty()
+	return dmChannel, nil
+}
+
+// fetchAndCacheChannel fetches a channel from API and patches the cache
+func (ap *ApiProvider) fetchAndCacheChannel(ctx context.Context, channelID string) (*slack.Channel, error) {
 	client, err := ap.Provide()
 	if err != nil {
 		return nil, err
@@ -405,53 +560,80 @@ func (ap *ApiProvider) GetChannelInfo(ctx context.Context, channelIDOrName strin
 		return nil, err
 	}
 
-	// Cache the result
+	// Patch the cache
 	ap.channelsMutex.Lock()
 	ap.channels[channelID] = *info
-	// Also update name mappings
-	if info.Name != "" {
-		ap.channelNames[info.Name] = info.ID
-		ap.channelNames[strings.ToLower(info.Name)] = info.ID
-	}
+	ap.indexChannel(*info)
 	ap.channelsMutex.Unlock()
 
+	ap.markDirty()
 	return info, nil
 }
 
-// ResolveChannelName resolves a channel ID to a name using cache
+// ResolveChannelName resolves a channel ID to a name using cache,
+// fetching from API on cache miss.
 func (ap *ApiProvider) ResolveChannelName(ctx context.Context, channelID string) string {
 	info, err := ap.GetChannelInfo(ctx, channelID)
 	if err != nil {
-		return channelID // Return ID if can't resolve
+		return channelID
 	}
 	return info.Name
 }
 
-// ResolveChannelID resolves a channel name to ID
-// Returns the ID if found, or the original input if not
+// ResolveChannelID resolves a channel name to ID.
+// On cache miss, tries display name resolution via user search + conversations.open.
 func (ap *ApiProvider) ResolveChannelID(channelNameOrID string) string {
-	// If it already looks like an ID, return it
-	if strings.HasPrefix(channelNameOrID, "C") || strings.HasPrefix(channelNameOrID, "D") || strings.HasPrefix(channelNameOrID, "G") {
+	if looksLikeChannelID(channelNameOrID) {
 		return channelNameOrID
 	}
 
 	ap.channelsMutex.RLock()
-	defer ap.channelsMutex.RUnlock()
-
-	// Try exact match
 	if id, ok := ap.channelNames[channelNameOrID]; ok {
+		ap.channelsMutex.RUnlock()
 		return id
 	}
-
-	// Try lowercase match
 	if id, ok := ap.channelNames[strings.ToLower(channelNameOrID)]; ok {
+		ap.channelsMutex.RUnlock()
 		return id
 	}
+	ap.channelsMutex.RUnlock()
 
-	log.Printf("ResolveChannelID: no match for %q (cache has %d names)", channelNameOrID, len(ap.channelNames))
+	// Cache miss — try on-demand resolution
+	ch, err := ap.resolveByDisplayName(context.Background(), channelNameOrID)
+	if err != nil {
+		log.Printf("ResolveChannelID: no match for %q: %v", channelNameOrID, err)
+		return channelNameOrID
+	}
+	return ch.ID
+}
 
-	// Not found, return original
-	return channelNameOrID
+// ResolveUser resolves a user ID to user info, fetching on cache miss.
+func (ap *ApiProvider) ResolveUser(ctx context.Context, userID string) (*slack.User, error) {
+	ap.usersMutex.RLock()
+	if user, ok := ap.users[userID]; ok {
+		ap.usersMutex.RUnlock()
+		return &user, nil
+	}
+	ap.usersMutex.RUnlock()
+
+	// Cache miss — fetch from API
+	client, err := ap.Provide()
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := client.GetUserInfoContext(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Patch cache
+	ap.usersMutex.Lock()
+	ap.users[user.ID] = *user
+	ap.usersMutex.Unlock()
+	ap.markDirty()
+
+	return user, nil
 }
 
 // RefreshResult contains information about a cache refresh attempt
@@ -476,16 +658,10 @@ func (ap *ApiProvider) RefreshChannelCache(ctx context.Context) (*RefreshResult,
 
 	now := time.Now()
 
-	// Reset call counter if window expired (5 minutes)
 	if now.Sub(ap.refreshResetTime) > 5*time.Minute {
 		ap.refreshCalls = 0
 		ap.refreshResetTime = now
 	}
-
-	// Rate limiting logic:
-	// - Minimum 30 seconds between refreshes
-	// - Maximum 3 refreshes per 5-minute window
-	// - Backoff: each call within window adds 30 seconds to minimum wait
 
 	minWait := 30*time.Second + time.Duration(ap.refreshCalls)*30*time.Second
 	timeSinceLastRefresh := now.Sub(ap.lastChannelRefresh)
@@ -495,7 +671,6 @@ func (ap *ApiProvider) RefreshChannelCache(ctx context.Context) (*RefreshResult,
 		if retryAfter < 0 {
 			retryAfter = 30 * time.Second
 		}
-
 		return &RefreshResult{
 			Allowed:      false,
 			LastRefresh:  ap.lastChannelRefresh,
@@ -504,13 +679,15 @@ func (ap *ApiProvider) RefreshChannelCache(ctx context.Context) (*RefreshResult,
 		}, nil
 	}
 
-	// Allowed to refresh
 	ap.refreshCalls++
-
-	// Start background refresh
-	go ap.refreshChannelsInBackground(ctx)
-
 	ap.lastChannelRefresh = now
+
+	// Reset backfill flag to allow re-backfill
+	ap.backfillMutex.Lock()
+	ap.backfillDone = false
+	ap.backfillMutex.Unlock()
+
+	go ap.backgroundBackfill(ctx)
 
 	return &RefreshResult{
 		Allowed:      true,
@@ -529,7 +706,6 @@ func (ap *ApiProvider) GetCachedChannels() []slack.Channel {
 	for _, ch := range ap.channels {
 		channels = append(channels, ch)
 	}
-
 	return channels
 }
 
@@ -545,6 +721,11 @@ func (ap *ApiProvider) GetCacheInfo() CacheInfo {
 	}
 }
 
+// looksLikeChannelID returns true if the string looks like a Slack channel/DM/group ID
+func looksLikeChannelID(s string) bool {
+	return strings.HasPrefix(s, "C") || strings.HasPrefix(s, "D") || strings.HasPrefix(s, "G")
+}
+
 func withHTTPClientOption(cookie string) func(c *slack.Client) {
 	return func(c *slack.Client) {
 		var proxy func(*http.Request) (*url.URL, error)
@@ -553,7 +734,6 @@ func withHTTPClientOption(cookie string) func(c *slack.Client) {
 			if err != nil {
 				log.Fatalf("Failed to parse proxy URL: %v", err)
 			}
-
 			proxy = http.ProxyURL(parsed)
 		} else {
 			proxy = nil
@@ -569,7 +749,6 @@ func withHTTPClientOption(cookie string) func(c *slack.Client) {
 			if err != nil {
 				log.Fatalf("Failed to append %q to RootCAs: %v", localCertFile, err)
 			}
-
 			if ok := rootCAs.AppendCertsFromPEM(certs); !ok {
 				log.Println("No certs appended, using system certs only")
 			}
