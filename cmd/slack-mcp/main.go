@@ -134,6 +134,11 @@ func loadProvider() (*provider.ApiProvider, error) {
 				return nil, fmt.Errorf("stored tokens for workspace %q are invalid (%v) — run auth-setup to re-authenticate", wsName, err)
 			}
 			log.Printf("Workspace %q authenticated successfully", wsName)
+			// Clear any stale setup flow state — tokens are valid
+			if cfg.SetupFlow != nil {
+				log.Println("Clearing stale setup flow state")
+				cfg.ClearFlow()
+			}
 			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken), nil
 		}
 	}
