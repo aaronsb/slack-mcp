@@ -138,6 +138,7 @@ func ExtractSlackDCookie(userDataDir, profileDir string) (string, error) {
 // system keyring using secret-tool (freedesktop.org Secret Service API).
 // Works with both GNOME Keyring and KWallet.
 func getChromeSafeStorageKey() (string, error) {
+	ensureDBus()
 	for _, app := range []string{"chrome", "chromium"} {
 		out, err := exec.Command("secret-tool", "lookup", "application", app).Output()
 		if err == nil && len(out) > 0 {
