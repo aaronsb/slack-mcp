@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-)
 
-const appName = "slack-mcp"
+	"github.com/aaronsb/slack-mcp/pkg/paths"
+)
 
 // Store manages JSON cache files in XDG data directory with atomic writes.
 // It handles serialization, periodic flushing, and TTL-based staleness.
@@ -21,22 +21,10 @@ type Store struct {
 	flushStop chan struct{}
 }
 
-// dataDir returns the XDG data directory: $XDG_DATA_HOME/slack-mcp
-func dataDir() string {
-	if base := os.Getenv("XDG_DATA_HOME"); base != "" {
-		return filepath.Join(base, appName)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".local", "share", appName)
-	}
-	return filepath.Join(home, ".local", "share", appName)
-}
-
 // NewStore creates a cache store using XDG data directory.
 // It ensures the directory exists and starts a periodic flush goroutine.
 func NewStore() (*Store, error) {
-	dir := dataDir()
+	dir := paths.DataDir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("cache: create dir %s: %w", dir, err)
 	}

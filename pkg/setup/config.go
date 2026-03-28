@@ -4,11 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
-)
 
-const appName = "slack-mcp"
+	"github.com/aaronsb/slack-mcp/pkg/paths"
+)
 
 // WorkspaceConfig holds tokens for a single workspace
 type WorkspaceConfig struct {
@@ -57,31 +56,17 @@ func (c *Config) ClearFlow() error {
 
 // ConfigDir returns the XDG config directory: $XDG_CONFIG_HOME/slack-mcp
 func ConfigDir() string {
-	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
-		return filepath.Join(base, appName)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".config", appName)
-	}
-	return filepath.Join(home, ".config", appName)
+	return paths.ConfigDir()
 }
 
 // DataDir returns the XDG data directory: $XDG_DATA_HOME/slack-mcp
 func DataDir() string {
-	if base := os.Getenv("XDG_DATA_HOME"); base != "" {
-		return filepath.Join(base, appName)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".local", "share", appName)
-	}
-	return filepath.Join(home, ".local", "share", appName)
+	return paths.DataDir()
 }
 
 // ConfigPath returns the config file path
 func ConfigPath() string {
-	return filepath.Join(ConfigDir(), "config.json")
+	return paths.ConfigPath()
 }
 
 // LoadConfig reads the config file, returning an empty config if it doesn't exist
