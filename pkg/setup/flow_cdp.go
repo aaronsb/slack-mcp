@@ -125,22 +125,26 @@ func (e *CDPExtractor) run(ctx context.Context, debugPort int) {
 }
 
 func (e *CDPExtractor) extract(ctx context.Context, debugPort int) (string, string, error) {
+	log.Printf("CDP: waiting for debug endpoint on port %d...", debugPort)
 	controlURL, err := waitForDebugEndpoint(ctx, debugPort)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get debug URL: %w", err)
 	}
+	log.Printf("CDP: debug endpoint ready, connecting...")
 
 	browser := rod.New().ControlURL(controlURL).Context(ctx)
 	if err := browser.Connect(); err != nil {
 		return "", "", fmt.Errorf("failed to connect to browser: %w", err)
 	}
 	defer browser.Close()
+	log.Println("CDP: connected, navigating to app.slack.com...")
 
 	// Navigate to Slack
 	page, err := browser.Page(proto.TargetCreateTarget{URL: "https://app.slack.com"})
 	if err != nil {
 		return "", "", fmt.Errorf("failed to open Slack page: %w", err)
 	}
+	log.Println("CDP: Slack page opened, polling for xoxc token...")
 
 	// Poll for xoxc token in localStorage. Don't use WaitStable — Slack's
 	// constant WebSocket activity means the page never "stabilizes."
@@ -149,6 +153,7 @@ func (e *CDPExtractor) extract(ctx context.Context, debugPort int) (string, stri
 	if err != nil {
 		return "", "", err
 	}
+	log.Println("CDP: xoxc token found, extracting d cookie...")
 
 	// Extract d cookie via CDP (sees HttpOnly cookies)
 	xoxd, err := extractDCookie(page)
