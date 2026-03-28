@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	_ "modernc.org/sqlite"
 	"golang.org/x/crypto/pbkdf2"
@@ -22,8 +20,8 @@ import (
 // Steps:
 //  1. Copy the Cookies file (Chrome holds a lock on the original)
 //  2. Query for the "d" cookie on slack.com
-//  3. Get the decryption key from the system keyring via secret-tool
-//  4. Decrypt: PBKDF2-SHA1(keyring_password, "saltysalt", 1 iter) → AES-128-CBC
+//  3. Get the decryption key from the platform keychain (OS-specific)
+//  4. Decrypt: PBKDF2-SHA1(password, "saltysalt", 1 iter) → AES-128-CBC
 //  5. Strip 32-byte SHA256 domain hash (cookie DB version 24+)
 //  6. Delete the copy
 func ExtractSlackDCookie(userDataDir, profileDir string) (string, error) {
@@ -87,13 +85,14 @@ func ExtractSlackDCookie(userDataDir, profileDir string) (string, error) {
 
 	log.Printf("Cookie extract: found encrypted d cookie (prefix=%s, dbVersion=%d, %d bytes)", prefix, dbVersion, len(encryptedValue))
 
-	// Get the encryption password from the system keyring
+	// Get the encryption password from the platform keychain
 	password, err := getChromeSafeStorageKey()
 	if err != nil {
 		return "", err
 	}
 
 	// Decrypt: PBKDF2-SHA1, salt="saltysalt", 1 iteration, 16-byte key → AES-128-CBC
+	// This is consistent across all platforms — only key retrieval differs.
 	key := pbkdf2.Key([]byte(password), []byte("saltysalt"), 1, 16, sha1.New)
 
 	block, err := aes.NewCipher(key)
@@ -132,23 +131,4 @@ func ExtractSlackDCookie(userDataDir, profileDir string) (string, error) {
 
 	log.Printf("Cookie extract: successfully decrypted d cookie (%d chars)", len(result))
 	return result, nil
-}
-
-// getChromeSafeStorageKey retrieves Chrome's encryption password from the
-// system keyring using secret-tool (freedesktop.org Secret Service API).
-// Works with both GNOME Keyring and KWallet.
-func getChromeSafeStorageKey() (string, error) {
-	ensureDBus()
-	for _, app := range []string{"chrome", "chromium"} {
-		out, err := exec.Command("secret-tool", "lookup", "application", app).Output()
-		if err == nil && len(out) > 0 {
-			key := strings.TrimSpace(string(out))
-			if key != "" {
-				log.Printf("Cookie extract: got keyring key for %s", app)
-				return key, nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("no Chrome safe storage key found in keyring (tried secret-tool for chrome and chromium)")
 }
