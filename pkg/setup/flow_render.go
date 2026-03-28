@@ -27,10 +27,6 @@ func (f *Flow) ensureCallbackServer() error {
 }
 
 func (f *Flow) cleanup() {
-	if f.cdpExtractor != nil {
-		f.cdpExtractor.Cleanup()
-		f.cdpExtractor = nil
-	}
 	if f.callback != nil {
 		f.callback.Stop()
 		f.callback = nil
@@ -68,10 +64,6 @@ func (f *Flow) actionsForState() []string {
 		return []string{"select:<browser_name>", "reset"}
 	case StateProfileChoice:
 		return []string{"select:<dir_name>", "reset"}
-	case StateProfileLocked:
-		return []string{"retry", "next", "reset"}
-	case StateExtracting:
-		return []string{"status", "reset"}
 	case StateFirefoxExtWritten, StateManualFlow:
 		return []string{"next", "reset"}
 	case StateWaitingForCallback:
@@ -93,12 +85,6 @@ func (f *Flow) messageForState() string {
 		return fmt.Sprintf("Found %d browser(s). Waiting for selection.", len(f.browsers))
 	case StateProfileChoice:
 		return fmt.Sprintf("Found %d profile(s). Waiting for selection.", len(f.profiles))
-	case StateProfileLocked:
-		browserName := "Browser"
-		if f.selectedBrowser != nil {
-			browserName = f.selectedBrowser.DisplayName
-		}
-		return fmt.Sprintf("%s is running — profile is locked.", browserName)
 	case StateFirefoxExtWritten:
 		return "Firefox extension written. Waiting for user to load it."
 	case StateWaitingForCallback:

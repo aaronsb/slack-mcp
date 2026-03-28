@@ -85,14 +85,14 @@ func (f *Flow) doProfileScan() *FlowResponse {
 	if err != nil || len(profiles) == 0 {
 		// Can't enumerate — try Default profile
 		f.selectedProfile = "Default"
-		return f.doCDPConnect()
+		return f.doDirectExtract()
 	}
 
 	f.profiles = profiles
 
 	if len(profiles) == 1 {
 		f.selectedProfile = profiles[0].DirName
-		return f.doCDPConnect()
+		return f.doDirectExtract()
 	}
 
 	// Multiple profiles — let user choose
@@ -138,35 +138,17 @@ func (f *Flow) doSelectProfile(dirName string) *FlowResponse {
 	}
 
 	f.selectedProfile = dirName
-	return f.doCDPConnect()
+	return f.doDirectExtract()
 }
 
-func (f *Flow) doCDPConnect() *FlowResponse {
-	f.state = StateCDPConnect
+func (f *Flow) doDirectExtract() *FlowResponse {
+	f.state = StateExtracting
 	f.persist()
 
-	// Check profile lock before attempting launch
-	if IsProfileLocked(f.selectedBrowser.UserDataDir) {
-		f.state = StateProfileLocked
-		f.persist()
-
-		return &FlowResponse{
-			State:   StateProfileLocked,
-			Message: fmt.Sprintf("%s is currently running — its profile is locked.", f.selectedBrowser.DisplayName),
-			Guidance: fmt.Sprintf(
-				"Tell the user: %s needs to be fully closed (not just minimized) to access their login session. "+
-					"All tabs will restore when they reopen the browser. "+
-					"Once closed, use 'retry'. Or use 'next' to try a different method.",
-				f.selectedBrowser.DisplayName,
-			),
-			Actions: []string{"retry", "next", "reset"},
-			Context: map[string]any{"browser": f.selectedBrowser.DisplayName},
-		}
-	}
-
-	// Launch browser and start extraction in background
-	ext, err := StartCDPExtraction(
-		f.selectedBrowser.ExePath,
+	// Extract tokens directly from the browser's profile files.
+	// No browser launch needed — reads localStorage (LevelDB) and
+	// decrypts cookies (SQLite + system keyring).
+	xoxc, xoxd, err := ExtractTokensDirectly(
 		f.selectedBrowser.UserDataDir,
 		f.selectedProfile,
 	)
@@ -174,52 +156,33 @@ func (f *Flow) doCDPConnect() *FlowResponse {
 		f.state = StateFailed
 		f.persist()
 		return &FlowResponse{
-			State:    StateFailed,
-			Message:  fmt.Sprintf("Failed to launch browser: %v", err),
-			Guidance: "Could not start the browser for token extraction. Try a different browser or use 'retry' to start over.",
-			Actions:  []string{"retry", "reset"},
-		}
-	}
-
-	f.cdpExtractor = ext
-	f.state = StateExtracting
-	f.persist()
-
-	return &FlowResponse{
-		State:   StateExtracting,
-		Message: fmt.Sprintf("%s is opening Slack. This may take a moment.", f.selectedBrowser.DisplayName),
-		Guidance: "Tell the user: a browser window is opening and navigating to Slack. " +
-			"Wait for Slack to fully load (you should see your workspace), then tell the agent. " +
-			"Poll with 'status' to check if token extraction completed.",
-		Actions: []string{"status", "reset"},
-		Context: map[string]any{"browser": f.selectedBrowser.DisplayName},
-	}
-}
-
-func (f *Flow) doCheckCDP() *FlowResponse {
-	if f.cdpExtractor == nil {
-		return &FlowResponse{
 			State:   StateFailed,
-			Message: "No CDP extraction in progress.",
+			Message: fmt.Sprintf("Token extraction failed: %v", err),
+			Guidance: "Could not extract tokens from the browser profile. " +
+				"Make sure you are logged into Slack in this browser profile. " +
+				"Try a different browser or profile with 'reset'.",
 			Actions: []string{"retry", "reset"},
 		}
 	}
 
-	r := f.cdpExtractor.Result()
-	if r == nil {
+	// Validate and save
+	team, user, userID, vErr := ValidateTokens(xoxc, xoxd)
+	if vErr != nil {
+		f.state = StateFailed
+		f.persist()
 		return &FlowResponse{
-			State:    StateExtracting,
-			Message:  "Still extracting tokens — waiting for Slack to load...",
-			Guidance: "The browser is still loading Slack. Ask the user if they can see their Slack workspace. Keep polling with 'status'.",
-			Actions:  []string{"status", "reset"},
+			State:   StateFailed,
+			Message: fmt.Sprintf("Tokens extracted but validation failed: %v", vErr),
+			Guidance: "The tokens were read from the browser but Slack rejected them. " +
+				"The session may have expired. Log into Slack in this browser profile and try again.",
+			Actions: []string{"retry", "reset"},
 		}
 	}
 
-	// Extraction complete — clean up browser
-	f.cdpExtractor.Cleanup()
-	f.cdpExtractor = nil
-
-	return f.handleTokenResult(r)
+	return f.handleTokenResult(&TokenResult{
+		Xoxc: xoxc, Xoxd: xoxd,
+		Team: team, User: user, UserID: userID,
+	})
 }
 
 func (f *Flow) doFirefoxExtension() *FlowResponse {

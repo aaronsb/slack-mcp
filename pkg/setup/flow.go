@@ -14,8 +14,6 @@ const (
 	StateBrowserChoice      = "browser_choice"
 	StateProfileScan        = "profile_scan"
 	StateProfileChoice      = "profile_choice"
-	StateCDPConnect         = "cdp_connect"
-	StateProfileLocked      = "profile_locked"
 	StateExtracting         = "extracting"
 	StateValidating         = "validating"
 	StateComplete           = "complete"
@@ -45,7 +43,7 @@ type Flow struct {
 	browsers []BrowserInfo
 	profiles []ProfileInfo
 
-	// Selected browser/profile for CDP
+	// Selected browser/profile
 	selectedBrowser *BrowserInfo
 	selectedProfile string
 
@@ -53,9 +51,6 @@ type Flow struct {
 	callback *CallbackServer
 	listener net.Listener
 	port     int
-
-	// CDP extractor (async)
-	cdpExtractor *CDPExtractor
 
 	// Firefox extension temp dir
 	tempDir string
@@ -103,20 +98,11 @@ func (f *Flow) Advance(action string) *FlowResponse {
 	case f.state == StateProfileChoice && strings.HasPrefix(action, "select:"):
 		return f.doSelectProfile(strings.TrimPrefix(action, "select:"))
 
-	case f.state == StateProfileLocked && action == "retry":
-		return f.doCDPConnect()
-
-	case f.state == StateProfileLocked && action == "next":
-		return f.doFallthrough()
-
 	case f.state == StateFirefoxExtWritten && action == "next":
 		return f.doStartCallbackWait()
 
 	case f.state == StateManualFlow && action == "next":
 		return f.doStartCallbackWait()
-
-	case f.state == StateExtracting && action == "status":
-		return f.doCheckCDP()
 
 	case f.state == StateWaitingForCallback && action == "status":
 		return f.doCheckCallback()
@@ -139,15 +125,6 @@ func (f *Flow) Advance(action string) *FlowResponse {
 func (f *Flow) Status() *FlowResponse {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
-	// If extracting via CDP, check if done
-	if f.state == StateExtracting && f.cdpExtractor != nil {
-		if r := f.cdpExtractor.Result(); r != nil {
-			f.cdpExtractor.Cleanup()
-			f.cdpExtractor = nil
-			return f.handleTokenResult(r)
-		}
-	}
 
 	// If waiting for callback, check if it arrived
 	if f.state == StateWaitingForCallback && f.callback != nil {
