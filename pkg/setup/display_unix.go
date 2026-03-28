@@ -19,13 +19,26 @@ func ensureDisplay() {
 
 	log.Println("CDP: no display env vars set, attempting detection...")
 
+	// Resolve XDG_RUNTIME_DIR — Claude Desktop may not propagate it
+	xrd := os.Getenv("XDG_RUNTIME_DIR")
+	if xrd == "" {
+		// Standard location is /run/user/<uid>
+		xrd = fmt.Sprintf("/run/user/%d", os.Getuid())
+		if info, err := os.Stat(xrd); err == nil && info.IsDir() {
+			os.Setenv("XDG_RUNTIME_DIR", xrd)
+			log.Printf("CDP: set XDG_RUNTIME_DIR=%s", xrd)
+		} else {
+			xrd = ""
+		}
+	}
+
 	// Try Wayland first — check XDG_RUNTIME_DIR for wayland sockets
-	if xrd := os.Getenv("XDG_RUNTIME_DIR"); xrd != "" {
+	if xrd != "" {
 		matches, _ := filepath.Glob(filepath.Join(xrd, "wayland-[0-9]"))
 		if len(matches) > 0 {
 			name := filepath.Base(matches[0])
 			os.Setenv("WAYLAND_DISPLAY", name)
-			log.Printf("CDP: detected %s from XDG_RUNTIME_DIR", name)
+			log.Printf("CDP: detected WAYLAND_DISPLAY=%s", name)
 		}
 	}
 
@@ -36,7 +49,7 @@ func ensureDisplay() {
 			if len(e.Name()) > 0 && e.Name()[0] == 'X' {
 				display := fmt.Sprintf(":%s", e.Name()[1:])
 				os.Setenv("DISPLAY", display)
-				log.Printf("CDP: detected DISPLAY=%s from /tmp/.X11-unix", display)
+				log.Printf("CDP: detected DISPLAY=%s", display)
 				break
 			}
 		}

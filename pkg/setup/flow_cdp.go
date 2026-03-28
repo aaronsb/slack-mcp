@@ -56,16 +56,26 @@ func StartCDPExtraction(browserPath, userDataDir, profileDir string) (*CDPExtrac
 	ensureDisplay()
 
 	log.Printf("CDP: launching %s (port=%d, tmpDir=%s, profile=%s)", browserPath, debugPort, tmpDir, profileDir)
-	log.Printf("CDP: DISPLAY=%q WAYLAND_DISPLAY=%q", os.Getenv("DISPLAY"), os.Getenv("WAYLAND_DISPLAY"))
+	log.Printf("CDP: DISPLAY=%q WAYLAND_DISPLAY=%q XDG_RUNTIME_DIR=%q",
+		os.Getenv("DISPLAY"), os.Getenv("WAYLAND_DISPLAY"), os.Getenv("XDG_RUNTIME_DIR"))
 
-	cmd := exec.CommandContext(ctx, browserPath,
+	args := []string{
 		fmt.Sprintf("--user-data-dir=%s", tmpDir),
 		fmt.Sprintf("--profile-directory=%s", profileDir),
 		fmt.Sprintf("--remote-debugging-port=%d", debugPort),
 		"--no-first-run",
 		"--no-default-browser-check",
-		"about:blank",
-	)
+	}
+
+	// On Wayland systems, Chrome needs explicit ozone platform selection
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		args = append(args, "--ozone-platform=wayland")
+		log.Println("CDP: using Wayland ozone platform")
+	}
+
+	args = append(args, "about:blank")
+
+	cmd := exec.CommandContext(ctx, browserPath, args...)
 
 	// Capture stderr so we can log browser launch failures
 	cmd.Stderr = log.Writer()
