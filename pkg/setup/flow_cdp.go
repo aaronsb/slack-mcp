@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -31,14 +32,21 @@ type CDPExtractor struct {
 	result *TokenResult
 	cancel context.CancelFunc
 	cmd    *exec.Cmd
+	tmpDir string
 	done   chan struct{}
 }
 
 // StartCDPExtraction launches Chrome in the background and begins extraction.
 // Returns immediately. Poll Result() or wait on Done() for completion.
 func StartCDPExtraction(browserPath, userDataDir, profileDir string) (*CDPExtractor, error) {
+	tmpDir, err := prepareCDPUserDataDir(userDataDir, profileDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare user data dir: %w", err)
+	}
+
 	debugPort, err := findFreePort()
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("failed to find free port: %w", err)
 	}
 
@@ -47,15 +55,12 @@ func StartCDPExtraction(browserPath, userDataDir, profileDir string) (*CDPExtrac
 	// Detect display server if not set (Claude Desktop doesn't propagate these)
 	ensureDisplay()
 
-	log.Printf("CDP: launching %s (port=%d, userDataDir=%s, profile=%s)", browserPath, debugPort, userDataDir, profileDir)
+	log.Printf("CDP: launching %s (port=%d, tmpDir=%s, profile=%s)", browserPath, debugPort, tmpDir, profileDir)
 	log.Printf("CDP: DISPLAY=%q WAYLAND_DISPLAY=%q XDG_RUNTIME_DIR=%q",
 		os.Getenv("DISPLAY"), os.Getenv("WAYLAND_DISPLAY"), os.Getenv("XDG_RUNTIME_DIR"))
 
-	// Launch Chrome against the real user-data-dir. Using a temp dir breaks
-	// cookie decryption on Linux because the OS keyring (KWallet/GNOME Keyring)
-	// ties encryption keys to the original profile context.
 	args := []string{
-		fmt.Sprintf("--user-data-dir=%s", userDataDir),
+		fmt.Sprintf("--user-data-dir=%s", tmpDir),
 		fmt.Sprintf("--profile-directory=%s", profileDir),
 		fmt.Sprintf("--remote-debugging-port=%d", debugPort),
 		"--no-first-run",
@@ -77,6 +82,7 @@ func StartCDPExtraction(browserPath, userDataDir, profileDir string) (*CDPExtrac
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("failed to start browser: %w", err)
 	}
 
@@ -85,6 +91,7 @@ func StartCDPExtraction(browserPath, userDataDir, profileDir string) (*CDPExtrac
 	ext := &CDPExtractor{
 		cancel: cancel,
 		cmd:    cmd,
+		tmpDir: tmpDir,
 		done:   make(chan struct{}),
 	}
 
@@ -169,12 +176,15 @@ func (e *CDPExtractor) Done() <-chan struct{} {
 	return e.done
 }
 
-// Cleanup kills the browser process.
+// Cleanup kills the browser and removes the temp directory.
 func (e *CDPExtractor) Cleanup() {
 	e.cancel()
 	if e.cmd != nil && e.cmd.Process != nil {
 		e.cmd.Process.Kill()
 		e.cmd.Wait()
+	}
+	if e.tmpDir != "" {
+		os.RemoveAll(e.tmpDir)
 	}
 }
 
@@ -254,6 +264,36 @@ func extractDCookie(page *rod.Page) (string, error) {
 }
 
 // --- Chrome launch helpers ---
+
+// prepareCDPUserDataDir creates a temporary user-data-dir that Chrome will
+// accept for remote debugging. It copies "Local State" and symlinks the
+// target profile directory so Chrome sees a "non-default" path while still
+// using the real profile data.
+func prepareCDPUserDataDir(realUserDataDir, profileDir string) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "slack-mcp-cdp-*")
+	if err != nil {
+		return "", err
+	}
+
+	// Copy Local State (Chrome needs this to recognize profiles)
+	localState := filepath.Join(realUserDataDir, "Local State")
+	data, err := os.ReadFile(localState)
+	if err == nil {
+		os.WriteFile(filepath.Join(tmpDir, "Local State"), data, 0600)
+	}
+
+	// Link the real profile directory. Use symlink on Unix, fall back to
+	// directory junction on Windows (junctions don't require Developer Mode
+	// or admin privileges, unlike symlinks).
+	realProfile := filepath.Join(realUserDataDir, profileDir)
+	tmpProfile := filepath.Join(tmpDir, profileDir)
+	if err := linkProfileDir(realProfile, tmpProfile); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("failed to link profile: %w", err)
+	}
+
+	return tmpDir, nil
+}
 
 // findFreePort asks the OS for an available port
 func findFreePort() (int, error) {
