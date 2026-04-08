@@ -21,7 +21,7 @@ var GetContext = &Feature{
 			},
 			"messageTs": map[string]interface{}{
 				"type":        "string",
-				"description": "Message timestamp to get context around (optional - if omitted, gets recent messages)",
+				"description": "Message timestamp to retrieve. Returns full content for standalone messages, or full thread for threaded messages. If omitted, gets recent channel messages.",
 			},
 			"count": map[string]interface{}{
 				"type":        "number",
@@ -91,12 +91,16 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 			Limit:     count,
 		})
 		if threadErr == nil && len(threadMsgs) > 1 {
+			// Actual thread with replies
 			isThread = true
+			messages = threadMsgs
+		} else if threadErr == nil && len(threadMsgs) == 1 {
+			// Standalone message (no replies) — return it directly
 			messages = threadMsgs
 		}
 	}
 
-	// Fall back to channel history
+	// Fall back to channel history (only if no messages found above)
 	if len(messages) == 0 {
 		if messageTs != "" {
 			// Get messages around the specified timestamp

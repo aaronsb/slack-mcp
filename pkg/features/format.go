@@ -473,7 +473,7 @@ func formatSearch(result *FeatureResult) string {
 	for _, msg := range discussions {
 		channel := str(msg, "channel")
 		user := str(msg, "user")
-		text := truncate(str(msg, "text"), 120)
+		text := truncate(str(msg, "text"), 500)
 		ts := str(msg, "timestamp")
 		msgType := str(msg, "type")
 
@@ -482,9 +482,9 @@ func formatSearch(result *FeatureResult) string {
 			threadTag = " [thread]"
 		}
 
-		b.WriteString(fmt.Sprintf("#%s | %s | %s%s\n  %s\n", channel, user, ts, threadTag, text))
+		b.WriteString(fmt.Sprintf("#%s | %s | %s%s\n%s\n", channel, user, ts, threadTag, text))
 		if link := str(msg, "permalink"); link != "" {
-			b.WriteString(fmt.Sprintf("  %s\n", link))
+			b.WriteString(fmt.Sprintf("%s\n", link))
 		}
 		b.WriteString("\n")
 	}
