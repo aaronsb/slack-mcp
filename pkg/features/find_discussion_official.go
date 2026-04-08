@@ -123,7 +123,12 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	if len(discussions) > 0 {
 		result.NextActions = []string{}
 
-		// Primary action: catch up on channels with found content
+		// Suggest get-context for the first result to get full message content
+		first := discussions[0]
+		result.NextActions = append(result.NextActions,
+			fmt.Sprintf("Full message: get-context channel='%s' messageTs='%s'", first["channel"], first["timestamp"]))
+
+		// Also suggest catch-up on channels with found content
 		channelsSeen := map[string]bool{}
 		for _, d := range discussions {
 			ch := d["channel"].(string)
@@ -134,7 +139,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 			}
 		}
 
-		result.Guidance = fmt.Sprintf("Found %d discussions about '%s'", len(discussions), query)
+		result.Guidance = fmt.Sprintf("Found %d discussions about '%s'. Use get-context with a message timestamp to retrieve full content.", len(discussions), query)
 	} else {
 		result.Guidance = "No results found. Try different search terms or browse channels."
 		result.NextActions = []string{

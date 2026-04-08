@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "modernc.org/sqlite"
 	"golang.org/x/crypto/pbkdf2"
+	_ "modernc.org/sqlite"
 )
 
 // ExtractSlackDCookie reads the "d" cookie directly from Chrome's encrypted
