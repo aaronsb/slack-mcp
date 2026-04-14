@@ -344,5 +344,21 @@ func analyzeMessage(msg slack.Message, usersMap map[string]slack.User) map[strin
 		item["reactions"] = totalReactions
 	}
 
+	if len(msg.Files) > 0 {
+		if item["type"] == "message" {
+			item["type"] = "attachment"
+		}
+		files := make([]map[string]interface{}, 0, len(msg.Files))
+		for _, f := range msg.Files {
+			files = append(files, map[string]interface{}{
+				"id":       f.ID,
+				"name":     f.Name,
+				"mimetype": f.Mimetype,
+				"size":     f.Size,
+			})
+		}
+		item["files"] = files
+	}
+
 	return item
 }

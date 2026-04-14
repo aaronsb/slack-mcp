@@ -264,6 +264,53 @@ func (c *InternalClient) callInternalAPI(ctx context.Context, endpoint string, p
 	return nil
 }
 
+// DownloadFile fetches a Slack file URL (e.g. URLPrivateDownload) using the
+// session tokens and streams the body to w. Returns the number of bytes
+// written. The caller must supply a fully qualified https://files.slack.com
+// or https://slack.com URL — no path/host validation is performed here beyond
+// requiring a Slack-owned host.
+func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.Writer) (int64, error) {
+	u, err := url.Parse(fileURL)
+	if err != nil {
+		return 0, fmt.Errorf("invalid file URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return 0, fmt.Errorf("file URL must be https, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	if host != "files.slack.com" && host != "slack.com" && !isSlackSubdomain(host) {
+		return 0, fmt.Errorf("refusing to download from non-Slack host %q", host)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fileURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.xoxcToken))
+	req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.xoxdToken))
+	req.Header.Set("Referer", "https://app.slack.com/")
+
+	// Use a client with a longer timeout for large files.
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("downloading file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return 0, fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return io.Copy(w, resp.Body)
+}
+
+func isSlackSubdomain(host string) bool {
+	return len(host) > len(".slack.com") && host[len(host)-len(".slack.com"):] == ".slack.com"
+}
+
 // PostInternalAPI calls internal endpoints with POST method
 func (c *InternalClient) PostInternalAPI(ctx context.Context, endpoint string, payload interface{}, result interface{}) error {
 	// Encode payload

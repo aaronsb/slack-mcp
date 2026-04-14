@@ -139,6 +139,11 @@ func parseTimePeriod(period string) (time.Time, error) {
 
 // Helper to identify important messages
 func isImportantMessage(msg slack.Message) bool {
+	// Any file attachment — users almost always want to know about these
+	if len(msg.Files) > 0 {
+		return true
+	}
+
 	// High reaction count
 	if len(msg.Reactions) > 0 {
 		totalReactions := 0

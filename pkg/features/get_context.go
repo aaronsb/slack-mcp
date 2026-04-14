@@ -172,6 +172,19 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 			entry["reply_count"] = msg.ReplyCount
 		}
 
+		if len(msg.Files) > 0 {
+			files := make([]map[string]interface{}, 0, len(msg.Files))
+			for _, f := range msg.Files {
+				files = append(files, map[string]interface{}{
+					"id":       f.ID,
+					"name":     f.Name,
+					"mimetype": f.Mimetype,
+					"size":     f.Size,
+				})
+			}
+			entry["files"] = files
+		}
+
 		formatted = append(formatted, entry)
 	}
 
