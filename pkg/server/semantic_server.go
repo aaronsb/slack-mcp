@@ -54,6 +54,7 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	registry.Register(features.React)
 	registry.Register(features.ListUsers)
 	registry.Register(features.AuthSetup)
+	registry.Register(features.DownloadFile)
 
 	semanticServer := &SemanticMCPServer{
 		server:   s,

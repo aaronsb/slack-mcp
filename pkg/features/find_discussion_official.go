@@ -94,6 +94,10 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 			"permalink": match.Permalink,
 		}
 
+		if len(match.Attachments) > 0 {
+			discussion["hasAttachments"] = true
+		}
+
 		// Check if it's part of a thread
 		if match.Previous.Timestamp != "" || match.Previous2.Timestamp != "" ||
 			match.Next.Timestamp != "" || match.Next2.Timestamp != "" {

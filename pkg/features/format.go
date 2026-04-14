@@ -38,6 +38,8 @@ func FormatResult(toolName string, result *FeatureResult) string {
 		return formatTiming(result)
 	case "auth-setup":
 		return formatAuthSetup(result)
+	case "download-file":
+		return formatDownloadFile(result)
 	default:
 		return formatGeneric(result)
 	}
@@ -373,26 +375,43 @@ func formatCatchUp(result *FeatureResult) string {
 
 	var b strings.Builder
 	channel := str(data, "channel")
-	messages := asList(data["messages"])
+	items := asList(data["importantItems"])
 
-	b.WriteString(fmt.Sprintf("## %s (%d messages)\n\n", channel, len(messages)))
+	b.WriteString(fmt.Sprintf("## %s (%d important items)\n\n", channel, len(items)))
 
-	for _, msg := range messages {
-		user := str(msg, "user")
-		text := str(msg, "text")
-		ts := str(msg, "time")
+	for _, item := range items {
+		author := str(item, "author")
+		if author == "" {
+			author = str(item, "user")
+		}
+		text := str(item, "message")
+		if text == "" {
+			text = str(item, "text")
+		}
+		ts := str(item, "timestamp")
 		if ts == "" {
-			ts = str(msg, "timestamp")
+			ts = str(item, "time")
 		}
 
-		// Show thread indicator
-		replyCount := num(msg, "replyCount")
-		threadTag := ""
-		if replyCount > 0 {
-			threadTag = fmt.Sprintf(" [%d replies]", replyCount)
+		tags := ""
+		if itemType := str(item, "type"); itemType != "" && itemType != "message" {
+			tags += fmt.Sprintf(" [%s]", itemType)
+		}
+		if replyCount := num(item, "replyCount"); replyCount > 0 {
+			tags += fmt.Sprintf(" [%d replies]", replyCount)
+		}
+		if reactions := num(item, "reactions"); reactions > 0 {
+			tags += fmt.Sprintf(" [%d reactions]", reactions)
 		}
 
-		b.WriteString(fmt.Sprintf("**%s** (%s)%s\n%s\n\n", user, ts, threadTag, text))
+		b.WriteString(fmt.Sprintf("**%s** (%s)%s\n%s\n", author, ts, tags, text))
+		for _, f := range asList(item["files"]) {
+			name := str(f, "name")
+			id := str(f, "id")
+			mime := str(f, "mimetype")
+			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download-file fileId='%s'\n", name, mime, id, id))
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString(footer(result))
@@ -434,7 +453,14 @@ func formatContext(result *FeatureResult) string {
 			replyTag = fmt.Sprintf(" [%d replies]", replyCount)
 		}
 
-		b.WriteString(fmt.Sprintf("**%s** (%s)%s\n%s\n\n", user, ts, replyTag, text))
+		b.WriteString(fmt.Sprintf("**%s** (%s)%s\n%s\n", user, ts, replyTag, text))
+		for _, f := range asList(msg["files"]) {
+			name := str(f, "name")
+			id := str(f, "id")
+			mime := str(f, "mimetype")
+			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download-file fileId='%s'\n", name, mime, id, id))
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString(footer(result))
@@ -482,7 +508,15 @@ func formatSearch(result *FeatureResult) string {
 			threadTag = " [thread]"
 		}
 
-		b.WriteString(fmt.Sprintf("#%s | %s | %s%s\n%s\n", channel, user, ts, threadTag, text))
+		attachTag := ""
+		if v, ok := msg["hasAttachments"].(bool); ok && v {
+			attachTag = " 📎"
+		}
+
+		b.WriteString(fmt.Sprintf("#%s | %s | %s%s%s\n%s\n", channel, user, ts, threadTag, attachTag, text))
+		if attachTag != "" {
+			b.WriteString(fmt.Sprintf("  (has attachments — get-context channel='%s' messageTs='%s' for file IDs)\n", channel, ts))
+		}
 		if link := str(msg, "permalink"); link != "" {
 			b.WriteString(fmt.Sprintf("%s\n", link))
 		}
@@ -620,6 +654,21 @@ func formatAuthSetup(result *FeatureResult) string {
 
 	s.WriteString(footer(result))
 	return s.String()
+}
+
+// --- download-file ---
+
+func formatDownloadFile(result *FeatureResult) string {
+	s := result.Message
+	if data := dataMap(result); data != nil {
+		if mt := str(data, "mimetype"); mt != "" {
+			s += fmt.Sprintf(" [%s]", mt)
+		}
+		if path := str(data, "path"); path != "" {
+			s += fmt.Sprintf("\nPath: `%s`", path)
+		}
+	}
+	return s + footer(result)
 }
 
 // --- Generic fallback ---
