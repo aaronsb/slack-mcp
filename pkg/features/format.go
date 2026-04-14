@@ -659,15 +659,13 @@ func formatAuthSetup(result *FeatureResult) string {
 // --- download-file ---
 
 func formatDownloadFile(result *FeatureResult) string {
-	data := dataMap(result)
-	if data == nil {
-		return result.Message + footer(result)
-	}
 	s := result.Message
-	if path := str(data, "path"); path != "" {
-		s = fmt.Sprintf("Saved **%s** to `%s`", str(data, "name"), path)
+	if data := dataMap(result); data != nil {
 		if mt := str(data, "mimetype"); mt != "" {
-			s += fmt.Sprintf(" (%s)", mt)
+			s += fmt.Sprintf(" [%s]", mt)
+		}
+		if path := str(data, "path"); path != "" {
+			s += fmt.Sprintf("\nPath: `%s`", path)
 		}
 	}
 	return s + footer(result)

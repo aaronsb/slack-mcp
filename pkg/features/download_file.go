@@ -79,6 +79,13 @@ func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*F
 		}, nil
 	}
 
+	if file.Size > provider.MaxDownloadBytes {
+		return &FeatureResult{
+			Success: false,
+			Message: fmt.Sprintf("File %s is %d bytes, exceeding the %d byte limit", fileID, file.Size, provider.MaxDownloadBytes),
+		}, nil
+	}
+
 	downloadURL := file.URLPrivateDownload
 	if downloadURL == "" {
 		downloadURL = file.URLPrivate
@@ -120,7 +127,7 @@ func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*F
 		}, nil
 	}
 	rel, err := filepath.Rel(destAbs, targetAbs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Refusing to write outside destDir: %s", targetAbs),
@@ -135,22 +142,32 @@ func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*F
 		}, nil
 	}
 
-	out, err := os.Create(targetAbs)
+	// O_EXCL refuses to follow symlinks and refuses to clobber existing
+	// files — closes the symlink-TOCTOU window on destDir contents.
+	out, err := os.OpenFile(targetAbs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to create file %s: %v", targetAbs, err),
+			Success:  false,
+			Message:  fmt.Sprintf("Failed to create file %s: %v", targetAbs, err),
+			Guidance: "The target file already exists or is a symlink. Pass a different filename or remove the existing file first.",
 		}, nil
 	}
-	defer out.Close()
 
 	internal := apiProvider.ProvideInternalClient()
 	n, err := internal.DownloadFile(ctx, downloadURL, out)
 	if err != nil {
+		out.Close()
 		os.Remove(targetAbs)
 		return &FeatureResult{
 			Success: false,
 			Message: fmt.Sprintf("Download failed: %v", err),
+		}, nil
+	}
+	if closeErr := out.Close(); closeErr != nil {
+		os.Remove(targetAbs)
+		return &FeatureResult{
+			Success: false,
+			Message: fmt.Sprintf("Failed to finalize file: %v", closeErr),
 		}, nil
 	}
 

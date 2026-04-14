@@ -264,11 +264,15 @@ func (c *InternalClient) callInternalAPI(ctx context.Context, endpoint string, p
 	return nil
 }
 
-// DownloadFile fetches a Slack file URL (e.g. URLPrivateDownload) using the
-// session tokens and streams the body to w. Returns the number of bytes
-// written. The caller must supply a fully qualified https://files.slack.com
-// or https://slack.com URL — no path/host validation is performed here beyond
-// requiring a Slack-owned host.
+// MaxDownloadBytes caps how much a single DownloadFile call will read.
+// Slack's own upload limit is 1 GiB; 500 MiB is enough headroom for
+// everyday PDFs/images/zips while bounding blast radius if an LLM picks
+// the wrong fileId.
+const MaxDownloadBytes = 500 << 20
+
+// DownloadFile fetches a Slack file URL (e.g. URLPrivateDownload) and
+// streams the body to w, refusing any non-Slack host and capping total
+// bytes at MaxDownloadBytes. Returns the number of bytes written.
 func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.Writer) (int64, error) {
 	u, err := url.Parse(fileURL)
 	if err != nil {
@@ -287,12 +291,20 @@ func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.
 		return 0, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.xoxcToken))
+	// Cookie-only auth matches how the Slack web client fetches files and
+	// avoids leaking the xoxc bearer token on cross-origin redirects.
 	req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.xoxdToken))
 	req.Header.Set("Referer", "https://app.slack.com/")
 
-	// Use a client with a longer timeout for large files.
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := &http.Client{
+		Timeout: 5 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("downloading file: %w", err)
@@ -304,7 +316,15 @@ func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.
 		return 0, fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	return io.Copy(w, resp.Body)
+	// Read up to MaxDownloadBytes+1 so we can detect overrun.
+	n, err := io.Copy(w, io.LimitReader(resp.Body, MaxDownloadBytes+1))
+	if err != nil {
+		return n, fmt.Errorf("streaming body: %w", err)
+	}
+	if n > MaxDownloadBytes {
+		return n, fmt.Errorf("file exceeds %d byte limit", MaxDownloadBytes)
+	}
+	return n, nil
 }
 
 func isSlackSubdomain(host string) bool {
