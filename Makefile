@@ -94,6 +94,24 @@ npm-publish: npm-copy-binaries npm-set-version ## Publish all npm packages (requ
 test: ## Run the tests
 	go test -count=1 -v ./...
 
+.PHONY: check
+check: ## Everything CI gates on: formatting, vet, race tests, build
+	@echo "==> gofmt"
+	@unformatted=$$(gofmt -l cmd pkg); \
+	  if [ -n "$$unformatted" ]; then \
+	    echo "These files are not gofmt'd:"; echo "$$unformatted"; \
+	    echo "Run 'make format'."; exit 1; \
+	  fi
+	@echo "==> go vet"
+	go vet ./...
+	@echo "==> go test -race"
+	@# -race, because the provider boots background goroutines and the tools
+	@# read shared caches; a data race here corrupts what an agent is told.
+	go test -race -count=1 ./...
+	@echo "==> build"
+	@$(MAKE) --no-print-directory build
+	@echo "All checks passed"
+
 .PHONY: format
 format: ## Format the code
 	go fmt ./...
