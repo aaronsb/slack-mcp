@@ -42,6 +42,7 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	registry := features.NewRegistry()
 
 	// Register all available features
+	registry.Register(features.Poll)
 	registry.Register(features.CheckUnreads)
 	registry.Register(features.CatchUpOnChannel)
 	registry.Register(features.ListChannels)
