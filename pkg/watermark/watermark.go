@@ -338,6 +338,11 @@ func after(a, b string) bool {
 	return af > bf
 }
 
+// After reports whether Slack timestamp a is newer than b, using the same
+// comparison the store itself uses. Callers filtering a fetched range against a
+// position need this to agree with Changed, or the two disagree at the boundary.
+func After(a, b string) bool { return after(a, b) }
+
 // validTS reports whether ts is a timestamp safe to store as a watermark.
 func validTS(ts string) bool {
 	_, _, ok := splitTS(ts)

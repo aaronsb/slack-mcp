@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -503,6 +504,114 @@ func TestEventsCarryNoRawCoordinates(t *testing.T) {
 		if _, leaked := events[0][key]; leaked {
 			t.Errorf("event exposes raw coordinate %q", key)
 		}
+	}
+}
+
+// Slack's `inclusive` applies to both ends of a range. The fetch needs it for
+// `latest`, which also re-includes the message sitting exactly on the
+// watermark — already seen, and otherwise re-reported on every tick forever.
+func TestTheAcknowledgedMessageIsNotReReported(t *testing.T) {
+	srv := slacktest.New(t)
+	seen := recent(2 * time.Hour)
+	fresh := recent(time.Minute)
+
+	srv.Handle("client.counts", func(*http.Request) any {
+		return slacktest.Counts([]any{slacktest.Conversation("C1", "0", fresh, true, 1)}, nil)
+	})
+	srv.Handle("conversations.history", func(*http.Request) any {
+		// Slack returns the boundary message when inclusive is set.
+		return map[string]any{
+			"ok": true, "has_more": false,
+			"messages": []any{
+				slacktest.Message("U2", "new one", fresh),
+				slacktest.Message("U2", "already acknowledged", seen),
+			},
+		}
+	})
+
+	ap := srv.Provider(t)
+	if _, err := ap.Provide(); err != nil {
+		t.Fatalf("Provide(): %v", err)
+	}
+	srv.Quiesce(t)
+
+	store, err := watermark.Open("Praecipio", watermark.DefaultScope)
+	if err != nil {
+		t.Fatalf("watermark.Open: %v", err)
+	}
+	store.Ack("C1", seen, time.Now())
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	res, err := features.Poll.Handler(context.Background(), map[string]any{"_provider": ap})
+	if err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+
+	events := data(t, res)["events"].([]map[string]any)
+	for _, e := range events {
+		if e["preview"] == "already acknowledged" {
+			t.Fatal("the message on the watermark was re-reported; it would come back on every tick")
+		}
+	}
+	if len(events) != 1 {
+		t.Errorf("want only the new message, got %d events", len(events))
+	}
+}
+
+// A conversation lost to a fetch error is a conversation whose messages went
+// unreported, so the tick is not complete.
+func TestAFailedConversationMakesTheTickIncomplete(t *testing.T) {
+	srv := slacktest.New(t)
+	moved := recent(time.Hour)
+	srv.Handle("client.counts", func(*http.Request) any {
+		return slacktest.Counts([]any{slacktest.Conversation("C1", "0", moved, true, 1)}, nil)
+	})
+	srv.Handle("conversations.history", func(*http.Request) any {
+		return map[string]any{"ok": false, "error": "channel_not_found"}
+	})
+
+	coverage := data(t, poll(t, srv, nil))["coverage"].(map[string]any)
+	if coverage["conversationsFailed"].(int) == 0 {
+		t.Error("a failed fetch was not counted")
+	}
+	if coverage["complete"].(bool) {
+		t.Error("coverage claims complete while a conversation could not be read")
+	}
+}
+
+// A backlog larger than one tick reads must be reported as a backlog, not as a
+// slice of the newest messages with the oldest silently missing.
+func TestOverflowReportsBacklogRatherThanTheNewestSlice(t *testing.T) {
+	srv := slacktest.New(t)
+	moved := recent(time.Hour)
+	srv.Handle("client.counts", func(*http.Request) any {
+		return slacktest.Counts([]any{slacktest.Conversation("C1", "0", moved, true, 1)}, nil)
+	})
+	page := 0
+	srv.Handle("conversations.history", func(*http.Request) any {
+		page++
+		return map[string]any{
+			"ok": true, "has_more": true,
+			"messages":          []any{slacktest.Message("U2", fmt.Sprintf("newest slice %d", page), moved)},
+			"response_metadata": map[string]any{"next_cursor": fmt.Sprintf("c%d", page)},
+		}
+	})
+
+	d := data(t, poll(t, srv, nil))
+	events := d["events"].([]map[string]any)
+
+	if len(events) != 1 || events[0]["kind"] != "backlog" {
+		t.Fatalf("want a single backlog event, got %+v", events)
+	}
+	for _, e := range events {
+		if s, _ := e["preview"].(string); strings.Contains(s, "newest slice") {
+			t.Error("returned the newest slice, whose missing half is the half nearest the watermark")
+		}
+	}
+	if d["coverage"].(map[string]any)["complete"].(bool) {
+		t.Error("coverage claims complete while a backlog went unread")
 	}
 }
 

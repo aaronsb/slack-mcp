@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aaronsb/slack-mcp/pkg/handle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
@@ -80,12 +82,17 @@ type tick struct {
 
 	// Each of these independently makes the tick incomplete.
 	conversationsDropped int // moved past maxHydrated
-	conversationsPartial int // more history than maxHistoryPages could fetch
+	conversationsPartial int // more history since the watermark than one tick reads
+	conversationsFailed  int // history could not be fetched
+	conversationsUnnamed int // no cached name, so reported by ID
 	limitReached         bool
 }
 
 func (t *tick) complete() bool {
-	return t.conversationsDropped == 0 && t.conversationsPartial == 0 && !t.limitReached
+	return t.conversationsDropped == 0 &&
+		t.conversationsPartial == 0 &&
+		t.conversationsFailed == 0 &&
+		!t.limitReached
 }
 
 func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
@@ -167,7 +174,7 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 	// Resolve names from cache only. Fetching per conversation would put an
 	// unbounded number of conversations.info calls inside a tick whose whole
 	// point is being cheap.
-	naming := newNameIndex(apiProvider)
+	naming := newNameIndex(apiProvider, t)
 	usersMap := apiProvider.ProvideUsersMap()
 
 	hydrateConversations(ctx, api, store, hydrated, naming, usersMap, limit, now.Add(-firstLookWindow), t)
@@ -231,11 +238,13 @@ func hydrateConversations(
 		}
 
 		where := naming(c)
-		messages, partial, err := fetchSince(ctx, api, c.ID, oldest)
+		messages, overflow, err := fetchSince(ctx, api, c.ID, oldest, c.Latest)
 		t.read++
 
 		if err != nil {
-			// One unreadable conversation must not cost the rest of the tick.
+			// One unreadable conversation must not cost the rest of the tick —
+			// but losing it entirely is not a complete tick either.
+			t.conversationsFailed++
 			t.events = append(t.events, map[string]interface{}{
 				"handle": handle.Conversation(c.ID),
 				"kind":   "unreadable",
@@ -244,8 +253,18 @@ func hydrateConversations(
 			})
 			continue
 		}
-		if partial {
+		if overflow {
+			// More since the watermark than one tick reads. Report the backlog
+			// rather than a slice missing its oldest half.
 			t.conversationsPartial++
+			t.events = append(t.events, map[string]interface{}{
+				"handle": handle.Conversation(c.ID),
+				"kind":   "backlog",
+				"where":  where,
+				"preview": fmt.Sprintf("More than %d messages since your position — more than one tick reads.",
+					historyPageSize*maxHistoryPages),
+			})
+			continue
 		}
 
 		for _, msg := range messages {
@@ -258,13 +277,19 @@ func hydrateConversations(
 	}
 }
 
-// fetchSince returns every message after oldest, oldest-first, reporting
-// whether more remained than it was willing to fetch.
+// fetchSince returns every message in (oldest, latest], oldest-first.
 //
-// Slack caps a page and reports has_more; ignoring it drops the OLDEST messages
-// in the range, which are exactly the ones an agent has not seen. So this pages
-// until Slack says there is no more, up to a bound, and reports reaching it.
-func fetchSince(ctx context.Context, api *slack.Client, channelID, oldest string) ([]slack.Message, bool, error) {
+// Slack returns history newest-first and its cursor pages BACKWARDS in time, so
+// the last page reached is the oldest. Stopping early therefore holds the newest
+// slice and is missing the messages nearest the watermark — exactly the ones the
+// agent has not seen. Returning that slice would look like a complete answer
+// while omitting the oldest, so when the range does not fit, this returns
+// nothing and says so. The caller reports a backlog instead of a partial read.
+//
+// latest is pinned to the timestamp the tick observed rather than left open, so
+// a conversation being actively posted to cannot push its own tail away faster
+// than the pages arrive.
+func fetchSince(ctx context.Context, api *slack.Client, channelID, oldest, latest string) ([]slack.Message, bool, error) {
 	var collected []slack.Message
 	cursor := ""
 
@@ -272,7 +297,8 @@ func fetchSince(ctx context.Context, api *slack.Client, channelID, oldest string
 		resp, err := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
 			ChannelID: channelID,
 			Oldest:    oldest,
-			Inclusive: false,
+			Latest:    latest,
+			Inclusive: true,
 			Limit:     historyPageSize,
 			Cursor:    cursor,
 		})
@@ -283,15 +309,36 @@ func fetchSince(ctx context.Context, api *slack.Client, channelID, oldest string
 
 		cursor = resp.ResponseMetaData.NextCursor
 		if !resp.HasMore || cursor == "" {
-			// Slack returns newest-first; hand back oldest-first so a reader
-			// follows the conversation forwards.
+			// Reached the oldest end of the range. Hand back oldest-first so a
+			// reader follows the conversation forwards.
 			reverse(collected)
-			return collected, false, nil
+			return dropAtOrBefore(collected, oldest), false, nil
 		}
 	}
 
-	reverse(collected)
-	return collected, true, nil
+	// Budget exhausted with older messages still unread. Discard rather than
+	// return a window whose missing half is the half that matters.
+	return nil, true, nil
+}
+
+// dropAtOrBefore removes messages at or older than the position already seen.
+//
+// Slack's `inclusive` applies to BOTH ends of a range, and the fetch needs it
+// for `latest` so the newest message is not cut off. That also re-includes the
+// message sitting exactly on the watermark, which the agent has already been
+// shown — so it would be re-reported on every tick forever. Filtering here
+// keeps the boundary agreeing with what the store considers changed.
+func dropAtOrBefore(msgs []slack.Message, position string) []slack.Message {
+	if position == "" {
+		return msgs
+	}
+	out := msgs[:0]
+	for _, m := range msgs {
+		if watermark.After(m.Timestamp, position) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func reverse(msgs []slack.Message) {
@@ -313,6 +360,8 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 				"conversationsRead":    t.read,
 				"conversationsDropped": t.conversationsDropped,
 				"conversationsPartial": t.conversationsPartial,
+				"conversationsFailed":  t.conversationsFailed,
+				"conversationsUnnamed": t.conversationsUnnamed,
 				"limitReached":         t.limitReached,
 				"complete":             t.complete(),
 				"firstLook":            t.firstLook,
@@ -339,17 +388,20 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 		notes = append(notes, fmt.Sprintf("%d further conversations moved but were not read this tick", t.conversationsDropped))
 	}
 	if t.conversationsPartial > 0 {
-		notes = append(notes, fmt.Sprintf("%d conversations had more history than one tick fetches", t.conversationsPartial))
+		notes = append(notes, fmt.Sprintf("%d conversations have a backlog larger than one tick reads", t.conversationsPartial))
+	}
+	if t.conversationsFailed > 0 {
+		notes = append(notes, fmt.Sprintf("%d conversations could not be read", t.conversationsFailed))
+	}
+	if t.conversationsUnnamed > 0 {
+		notes = append(notes, fmt.Sprintf("%d conversations are shown by ID because the channel cache is still warming", t.conversationsUnnamed))
 	}
 	if t.limitReached {
 		notes = append(notes, "the event limit was reached")
 	}
 	if len(notes) > 0 {
-		result.Guidance = strings.ToUpper(notes[0][:1]) + notes[0][1:]
-		for _, n := range notes[1:] {
-			result.Guidance += "; " + n
-		}
-		result.Guidance += ". Ack what you have seen, then poll again."
+		result.Guidance = capitalize(notes[0]) + strings.Join(prefixEach("; ", notes[1:]), "") +
+			". Ack what you have seen, then poll again."
 	}
 	if t.firstLook {
 		result.Guidance = strings.TrimSpace(result.Guidance +
@@ -368,16 +420,22 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 //
 // Slack does not populate Name on IM channel objects, so a DM resolves through
 // the user it is with. Without that, every DM would fall back to a raw ID.
-func newNameIndex(apiProvider *provider.ApiProvider) func(conversation) string {
+func newNameIndex(apiProvider *provider.ApiProvider, t *tick) func(conversation) string {
 	users := apiProvider.ProvideUsersMap()
-	names := make(map[string]string)
+	byName := make(map[string]string, len(users))
+	for _, u := range users {
+		byName[u.Name] = displayName(u)
+	}
 
+	names := make(map[string]string)
 	for _, ch := range apiProvider.GetCachedChannels() {
 		switch {
 		case ch.IsIM:
 			if u, ok := users[ch.User]; ok {
 				names[ch.ID] = "@" + displayName(u)
 			}
+		case ch.IsMpIM:
+			names[ch.ID] = groupName(ch.Name, byName)
 		case ch.Name != "":
 			names[ch.ID] = "#" + ch.Name
 		}
@@ -387,8 +445,40 @@ func newNameIndex(apiProvider *provider.ApiProvider) func(conversation) string {
 		if name, ok := names[c.ID]; ok {
 			return name
 		}
+		// A cold cache means every conversation reports as an ID, which is the
+		// one thing this server promises not to do. Count it so the tick says
+		// so instead of quietly looking like nonsense.
+		t.conversationsUnnamed++
 		return c.ID
 	}
+}
+
+// groupName turns Slack's internal group-DM name into the people in it.
+// The wire format is "mpdm-alice--bob--carol-1", which is not something to show
+// anyone.
+func groupName(raw string, byName map[string]string) string {
+	trimmed := strings.TrimPrefix(raw, "mpdm-")
+	if i := strings.LastIndex(trimmed, "-"); i > 0 {
+		trimmed = trimmed[:i]
+	}
+
+	parts := strings.Split(trimmed, "--")
+	if raw == "" || len(parts) == 0 {
+		return "group DM"
+	}
+
+	people := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if display, ok := byName[p]; ok {
+			people = append(people, display)
+		} else if p != "" {
+			people = append(people, p)
+		}
+	}
+	if len(people) == 0 {
+		return "group DM"
+	}
+	return "group: " + strings.Join(people, ", ")
 }
 
 func displayName(u slack.User) string {
@@ -444,6 +534,23 @@ func buildEvent(c conversation, msg slack.Message, where string, usersMap map[st
 		event["hasFiles"] = len(msg.Files)
 	}
 	return event
+}
+
+// capitalize upper-cases the first rune. Slicing the first byte instead would
+// mangle any note starting with a multi-byte rune, and panic on an empty one.
+func capitalize(s string) string {
+	for i, r := range s {
+		return string(unicode.ToUpper(r)) + s[i+utf8.RuneLen(r):]
+	}
+	return s
+}
+
+func prefixEach(sep string, items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, sep+item)
+	}
+	return out
 }
 
 // preview keeps an event small. Reading the whole message is what read is for.
