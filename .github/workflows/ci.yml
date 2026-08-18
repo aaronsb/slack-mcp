@@ -2,30 +2,50 @@ name: CI
 
 on:
   push:
-    branches: [main, "fix/*", "feature/*"]
-  pull_request:
     branches: [main]
+  # Every pull request, whatever the branch is called. The previous filter
+  # listed fix/* and feature/* by name, so a branch named anything else was
+  # gated only by whatever a reviewer happened to notice.
+  pull_request:
 
 jobs:
-  build:
+  check:
+    name: Format, vet, test, build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: make build
-      - run: make test
+
+      # One target, so local and CI cannot drift. `make check` is what a
+      # contributor runs before pushing and what fails the build here.
+      - run: make check
+
+      # `make build` depends on `tidy` and `format`, so it can rewrite go.mod,
+      # go.sum and source files as a side effect of building. That would let a
+      # dependency change ride in without ever appearing in a diff, and CI would
+      # go green on a tree nobody committed. Assert the build changed nothing.
+      - name: Building changed no tracked files
+        run: |
+          if ! git diff --quiet; then
+            echo "make check modified tracked files:"
+            git diff --stat
+            echo
+            echo "Run 'make check' locally and commit the result."
+            exit 1
+          fi
 
   build-all-platforms:
+    name: Cross-compile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: make build-all-platforms
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binaries
           path: build/slack-mcp-*
