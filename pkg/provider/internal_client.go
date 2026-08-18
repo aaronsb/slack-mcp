@@ -122,6 +122,10 @@ type ClientCountsResponse struct {
 func (c *InternalClient) GetClientCounts(ctx context.Context) (*ClientCountsResponse, error) {
 	params := url.Values{}
 	params.Set("thread_counts_by_channel", "true")
+
+	// org_wide_aware asks an Enterprise Grid deployment to report conversations
+	// shared across the org's workspaces rather than only this one. On a
+	// single-workspace team it changes nothing.
 	params.Set("org_wide_aware", "true")
 
 	result := &ClientCountsResponse{}
