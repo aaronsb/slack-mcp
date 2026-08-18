@@ -75,16 +75,59 @@ func New() *ApiProvider {
 	return NewWithTokens(token, cookie)
 }
 
+// Option configures an ApiProvider at construction.
+type Option func(*providerConfig)
+
+type providerConfig struct {
+	// baseURL replaces https://slack.com for both the slack-go client and the
+	// internal client. Set it to point at a fake in tests, or at a custom
+	// endpoint. Empty means normal team-endpoint discovery via auth.test.
+	baseURL string
+}
+
+// WithBaseURL overrides the Slack host for the API requests this provider
+// makes, on both the slack-go client and the internal client. Supplying it also
+// skips team-endpoint discovery, since the caller has already named the
+// endpoint — which means the auth.test round trip that would otherwise validate
+// the host does not run.
+//
+// File downloads are NOT redirected: DownloadFile pins files.slack.com and
+// slack.com subdomains independently of this option.
+//
+// Every redirected request carries the xoxc bearer token and the xoxd cookie.
+// Pass only a host you control — a test fake or a known endpoint — and never a
+// value derived from user input, configuration, or the environment.
+func WithBaseURL(u string) Option {
+	return func(c *providerConfig) { c.baseURL = strings.TrimSuffix(u, "/") }
+}
+
 // NewWithTokens creates a provider with explicit tokens
-func NewWithTokens(token, cookie string) *ApiProvider {
+func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
+	var cfg providerConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	// Initialize XDG cache store
 	store, err := cache.NewStore()
 	if err != nil {
 		log.Printf("Warning: could not create cache store: %v", err)
 	}
 
+	internal := NewInternalClient(token, cookie)
+	if cfg.baseURL != "" {
+		internal.baseURL = cfg.baseURL
+	}
+
 	ap := &ApiProvider{
 		boot: func() *slack.Client {
+			if cfg.baseURL != "" {
+				return slack.New(token,
+					withHTTPClientOption(cookie),
+					slack.OptionAPIURL(cfg.baseURL+"/api/"),
+				)
+			}
+
 			api := slack.New(token,
 				withHTTPClientOption(cookie),
 			)
@@ -108,7 +151,7 @@ func NewWithTokens(token, cookie string) *ApiProvider {
 
 			return api
 		},
-		internalClient: NewInternalClient(token, cookie),
+		internalClient: internal,
 		users:          make(map[string]slack.User),
 		channels:       make(map[string]slack.Channel),
 		channelNames:   make(map[string]string),
