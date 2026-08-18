@@ -32,6 +32,7 @@ CLEAN_TARGETS += '$(BINARY_NAME)'
 CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./build/$(BINARY_NAME)-$(os)-$(arch)$(if $(findstring windows,$(os)),.exe,)))
 CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(NPM_PKG_PREFIX)-$(os)-$(arch)/bin/))
 CLEAN_TARGETS += ./npm/$(NPM_PKG_PREFIX)/.npmrc ./npm/$(NPM_PKG_PREFIX)/LICENSE ./npm/$(NPM_PKG_PREFIX)/README.md
+CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(NPM_PKG_PREFIX)-$(os)-$(arch)/LICENSE))
 CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./npm/$(NPM_PKG_PREFIX)-$(os)-$(arch)/.npmrc))
 CLEAN_TARGETS += mcpb/bin $(BINARY_NAME)-*.mcpb
 
@@ -81,9 +82,21 @@ npm-set-version: ## Set version in all npm package.json files
 	jq '.version = "$(NPM_VERSION)"' npm/$(NPM_PKG_PREFIX)/package.json > npm/$(NPM_PKG_PREFIX)/tmp.json && mv npm/$(NPM_PKG_PREFIX)/tmp.json npm/$(NPM_PKG_PREFIX)/package.json
 	jq '.optionalDependencies |= with_entries(.value = "$(NPM_VERSION)")' npm/$(NPM_PKG_PREFIX)/package.json > npm/$(NPM_PKG_PREFIX)/tmp.json && mv npm/$(NPM_PKG_PREFIX)/tmp.json npm/$(NPM_PKG_PREFIX)/package.json
 
+.PHONY: npm-metadata
+npm-metadata: ## Write shared metadata and a README into every platform package
+	@# These are published, public packages. Without this they render on
+	@# npmjs.com with no README, no homepage and no way to report a bug, which
+	@# is how a legitimate package comes to look abandoned. Generated rather
+	@# than hand-maintained so six copies cannot drift apart.
+	@./scripts/npm-metadata.sh
+
 .PHONY: npm-publish
-npm-publish: npm-copy-binaries npm-set-version ## Publish all npm packages (requires NPM_TOKEN or npm login)
+npm-publish: npm-copy-binaries npm-set-version npm-metadata ## Publish all npm packages (requires NPM_TOKEN or npm login)
 	cp README.md LICENSE ./npm/$(NPM_PKG_PREFIX)/
+	@# Every platform package publishes its own licence, not just the wrapper.
+	$(foreach os,$(OSES),$(foreach arch,$(ARCHS), \
+		cp LICENSE ./npm/$(NPM_PKG_PREFIX)-$(os)-$(arch)/; \
+	))
 	$(foreach os,$(OSES),$(foreach arch,$(ARCHS), \
 		DIRNAME="$(NPM_PKG_PREFIX)-$(os)-$(arch)"; \
 		cd npm/$$DIRNAME && npm publish --access public $(NPM_PUBLISH_FLAGS) && cd ../..; \

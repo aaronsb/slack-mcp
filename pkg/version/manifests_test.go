@@ -44,6 +44,7 @@ type serverJSON struct {
 type packageJSON struct {
 	Name                 string            `json:"name"`
 	Version              string            `json:"version"`
+	License              string            `json:"license"`
 	OptionalDependencies map[string]string `json:"optionalDependencies"`
 }
 
@@ -176,5 +177,70 @@ func TestServerJSONSaysWhereTheSourceIs(t *testing.T) {
 	}
 	if server.WebsiteURL == "" {
 		t.Error("server.json has no websiteUrl")
+	}
+}
+
+// The six platform packages are public on npmjs.com. Left unattended they
+// render with no README, no homepage and no bug link, which is what an
+// abandoned package looks like. `make npm-metadata` writes these; this asserts
+// nobody edited one copy by hand and left the other five behind.
+func TestPlatformPackagesCarryPublishableMetadata(t *testing.T) {
+	wrapper := readJSON[packageJSON](t, "npm/slack-mcp-server/package.json")
+
+	for _, plat := range platforms {
+		dir := filepath.Join("npm", "slack-mcp-server-"+plat)
+
+		var pkg struct {
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			License     string   `json:"license"`
+			Files       []string `json:"files"`
+			Homepage    string   `json:"homepage"`
+			OS          []string `json:"os"`
+			CPU         []string `json:"cpu"`
+			Author      struct {
+				Name string `json:"name"`
+			} `json:"author"`
+			Bugs struct {
+				URL string `json:"url"`
+			} `json:"bugs"`
+			Repository struct {
+				URL string `json:"url"`
+			} `json:"repository"`
+		}
+		raw, err := os.ReadFile(filepath.Join(repoRoot, dir, "package.json"))
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+		if err := json.Unmarshal(raw, &pkg); err != nil {
+			t.Fatalf("parse %s: %v", dir, err)
+		}
+
+		if pkg.Description == "" {
+			t.Errorf("%s has no description", plat)
+		}
+		if pkg.Homepage == "" || pkg.Bugs.URL == "" || pkg.Author.Name == "" {
+			t.Errorf("%s is missing homepage, bugs, or author — it will look abandoned on npm", plat)
+		}
+		if pkg.License != wrapper.License && pkg.License == "" {
+			t.Errorf("%s has no license", plat)
+		}
+		if pkg.Repository.URL == "" {
+			t.Errorf("%s does not say where its source is", plat)
+		}
+
+		// os/cpu are what make npm install exactly one of these. Without them
+		// every user would download all six.
+		if len(pkg.OS) == 0 || len(pkg.CPU) == 0 {
+			t.Errorf("%s does not restrict os/cpu; npm would install it everywhere", plat)
+		}
+		if len(pkg.Files) == 0 {
+			t.Errorf("%s has no files allowlist", plat)
+		}
+
+		// A README is what npmjs.com shows on the package page.
+		if _, err := os.Stat(filepath.Join(repoRoot, dir, "README.md")); err != nil {
+			t.Errorf("%s has no README: %v", plat, err)
+		}
 	}
 }
