@@ -406,3 +406,56 @@ func (c *InternalClient) PostInternalAPI(ctx context.Context, endpoint string, p
 
 	return nil
 }
+
+// ThreadViewResponse is Slack's own Threads view, from
+// /api/subscriptions.thread.getView.
+//
+// Two constraints observed against a live workspace, both load-bearing:
+//
+// It is strictly unreads-only. include_read, unreads_only=false and
+// include_all are all accepted and silently ignored — every thread it returns
+// has unread replies. A thread the person has already read in their own client
+// disappears from it, so this can seed a tracked set but cannot be the sole
+// basis for change detection.
+//
+// It caps at 10 entries per page regardless of limit, and pages via current_ts.
+// max_ts in the response is a server clock rather than a cursor: it advances
+// with wall time between calls and paging on it returns the same first entry.
+type ThreadViewResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+
+	HasMore            bool   `json:"has_more"`
+	MaxTS              string `json:"max_ts"`
+	NewThreadsCount    int    `json:"new_threads_count"`
+	TotalUnreadReplies int    `json:"total_unread_replies"`
+
+	Threads []struct {
+		RootMsg struct {
+			Type        string `json:"type"`
+			User        string `json:"user"`
+			Text        string `json:"text"`
+			TS          string `json:"ts"`
+			ThreadTS    string `json:"thread_ts"`
+			Channel     string `json:"channel"`
+			ReplyCount  int    `json:"reply_count"`
+			LatestReply string `json:"latest_reply"`
+			Subscribed  bool   `json:"subscribed"`
+		} `json:"root_msg"`
+		UnreadReplies int `json:"unread_replies"`
+	} `json:"threads"`
+}
+
+// GetThreadView fetches the threads with unread replies. currentTS pages to
+// older entries; pass an empty string for the first page.
+func (c *InternalClient) GetThreadView(ctx context.Context, currentTS string) (*ThreadViewResponse, error) {
+	params := url.Values{}
+	params.Set("limit", "10")
+	if currentTS != "" {
+		params.Set("current_ts", currentTS)
+	}
+
+	result := &ThreadViewResponse{}
+	err := c.callInternalAPI(ctx, "/api/subscriptions.thread.getView", params, result)
+	return result, err
+}

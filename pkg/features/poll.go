@@ -33,6 +33,16 @@ const (
 	// conversation is reported partial.
 	historyPageSize = 100
 	maxHistoryPages = 5
+
+	// threadRecency bounds which tracked threads a tick re-checks. Each costs
+	// one conversations.replies call, so without a bound the tick's cost grows
+	// with every thread the agent has ever seen.
+	threadRecency = 7 * 24 * time.Hour
+
+	// maxTrackedPolled caps that further, so a busy month cannot make a tick
+	// expensive. Threads beyond it are reported as unchecked rather than
+	// silently skipped.
+	maxTrackedPolled = 10
 )
 
 // Poll reports what changed since the agent last acknowledged.
@@ -86,12 +96,18 @@ type tick struct {
 	conversationsFailed  int // history could not be fetched
 	conversationsUnnamed int // no cached name, so reported by ID
 	limitReached         bool
+
+	threadsChecked   int
+	threadsUnchecked int // tracked, but past the per-tick bound
+	threadFeedFailed bool
 }
 
 func (t *tick) complete() bool {
 	return t.conversationsDropped == 0 &&
 		t.conversationsPartial == 0 &&
 		t.conversationsFailed == 0 &&
+		t.threadsUnchecked == 0 &&
+		!t.threadFeedFailed &&
 		!t.limitReached
 }
 
@@ -178,6 +194,7 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 	usersMap := apiProvider.ProvideUsersMap()
 
 	hydrateConversations(ctx, api, store, hydrated, naming, usersMap, limit, now.Add(-firstLookWindow), t)
+	tickThreads(ctx, api, internal, store, naming, usersMap, limit, now, t)
 
 	return buildPollResult(t, counts.Threads.UnreadCountByChannel), nil
 }
@@ -363,6 +380,8 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 				"conversationsFailed":  t.conversationsFailed,
 				"conversationsUnnamed": t.conversationsUnnamed,
 				"limitReached":         t.limitReached,
+				"threadsChecked":       t.threadsChecked,
+				"threadsUnchecked":     t.threadsUnchecked,
 				"complete":             t.complete(),
 				"firstLook":            t.firstLook,
 				"window":               describeWindow(t.firstLook),
@@ -407,9 +426,13 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 		result.Guidance = strings.TrimSpace(result.Guidance +
 			" This is a first look at conversations with no recorded position, bounded to the last 24 hours.")
 	}
-	if len(threadActivity) > 0 {
-		result.NextActions = append(result.NextActions,
-			"Threads moved in some channels; thread reporting arrives with the thread tick.")
+	if t.threadsUnchecked > 0 {
+		result.Guidance = strings.TrimSpace(result.Guidance +
+			fmt.Sprintf(" %d tracked threads were not re-checked this tick.", t.threadsUnchecked))
+	}
+	if t.threadFeedFailed {
+		result.Guidance = strings.TrimSpace(result.Guidance +
+			" The thread feed could not be read, so new threads may be missing.")
 	}
 
 	return result
