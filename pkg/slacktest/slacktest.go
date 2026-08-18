@@ -11,6 +11,16 @@
 //	srv := slacktest.New(t)
 //	srv.Handle("client.counts", func(*http.Request) any { ... })
 //	p := srv.Provider(t)
+//
+// When a test asserts how many requests something made — the cost of a tick,
+// or that a read tool did not touch the read marker — quiesce before measuring,
+// because provider bootstrap continues in background goroutines:
+//
+//	p := srv.Provider(t)
+//	p.Provide()
+//	srv.Quiesce(t)
+//	srv.ResetCalls()
+//	// ... exercise the tool, then assert srv.Calls(...)
 package slacktest
 
 import (
@@ -22,6 +32,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/paths"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
@@ -39,6 +50,9 @@ type Server struct {
 	mu       sync.Mutex
 	handlers map[string]Handler
 	calls    map[string]int
+
+	inflight     int
+	lastActivity time.Time
 
 	channels []slack.Channel
 	users    []slack.User
@@ -110,10 +124,50 @@ func (s *Server) Calls(method string) int {
 
 // ResetCalls zeroes the call counters, so a test can measure one phase in
 // isolation from provider bootstrap.
+//
+// Call Quiesce first. Bootstrap traffic runs partly in background goroutines,
+// so resetting without quiescing leaves a window in which a late bootstrap
+// request lands after the reset and inflates the counters being measured.
 func (s *Server) ResetCalls() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = make(map[string]int)
+}
+
+// Quiesce blocks until the server has been idle for a short settle window, so
+// that background bootstrap traffic cannot land in the middle of a measurement.
+//
+// The provider spawns loadMemberChannels and backgroundBackfill as goroutines
+// holding context.Background(), so nothing cancels them and nothing reports
+// when they finish. Without this, a test asserting exact call counts races
+// them, and a test that ends promptly tears the server down underneath one —
+// which shows up as "EOF" or "connection refused" in bootstrap log lines.
+func (s *Server) Quiesce(t *testing.T) {
+	t.Helper()
+
+	const timeout = 5 * time.Second
+	if !s.drain(timeout) {
+		t.Fatalf("slacktest: server did not go idle within %s", timeout)
+	}
+}
+
+// drain waits for the server to be idle for a settle window, reporting whether
+// it got there before the timeout.
+func (s *Server) drain(timeout time.Duration) bool {
+	const settle = 100 * time.Millisecond
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		inflight, last := s.inflight, s.lastActivity
+		s.mu.Unlock()
+
+		if inflight == 0 && !last.IsZero() && time.Since(last) >= settle {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 // Provider returns an ApiProvider whose public and internal clients both point
@@ -138,6 +192,11 @@ func (s *Server) Provider(t *testing.T) *provider.ApiProvider {
 	writeCache(t, filepath.Join(dir, "channels.json"), channels)
 	writeCache(t, filepath.Join(dir, "users.json"), users)
 
+	// Cleanups run last-registered-first, so this drains bootstrap traffic
+	// before New's cleanup closes the listener underneath it. Best-effort: a
+	// goroutine that never settles is not itself a test failure.
+	t.Cleanup(func() { s.drain(2 * time.Second) })
+
 	return provider.NewWithTokens("xoxc-test", "xoxd-test", provider.WithBaseURL(s.URL))
 }
 
@@ -157,10 +216,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.calls[method]++
+	s.inflight++
 	h := s.handlers[method]
 	channels := append([]slack.Channel(nil), s.channels...)
 	users := append([]slack.User(nil), s.users...)
 	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.inflight--
+		s.lastActivity = time.Now()
+		s.mu.Unlock()
+	}()
 
 	var body any
 	if h != nil {

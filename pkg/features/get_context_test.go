@@ -60,6 +60,7 @@ func TestGetContextDoesNotMarkRead(t *testing.T) {
 	if _, err := ap.Provide(); err != nil {
 		t.Fatalf("Provide(): %v", err)
 	}
+	srv.Quiesce(t)
 	srv.ResetCalls()
 
 	res, err := features.GetContext.Handler(context.Background(), map[string]any{

@@ -85,9 +85,18 @@ type providerConfig struct {
 	baseURL string
 }
 
-// WithBaseURL overrides the Slack host for every request this provider makes.
-// Supplying it also skips team-endpoint discovery, since the caller has already
-// named the endpoint.
+// WithBaseURL overrides the Slack host for the API requests this provider
+// makes, on both the slack-go client and the internal client. Supplying it also
+// skips team-endpoint discovery, since the caller has already named the
+// endpoint — which means the auth.test round trip that would otherwise validate
+// the host does not run.
+//
+// File downloads are NOT redirected: DownloadFile pins files.slack.com and
+// slack.com subdomains independently of this option.
+//
+// Every redirected request carries the xoxc bearer token and the xoxd cookie.
+// Pass only a host you control — a test fake or a known endpoint — and never a
+// value derived from user input, configuration, or the environment.
 func WithBaseURL(u string) Option {
 	return func(c *providerConfig) { c.baseURL = strings.TrimSuffix(u, "/") }
 }
