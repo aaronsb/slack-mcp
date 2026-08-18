@@ -5,14 +5,20 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
+	"github.com/aaronsb/slack-mcp/pkg/handle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/slack-go/slack"
 )
 
-// searchUsingOfficialAPI uses the official Slack search.messages API
+// widenTo is the window a search falls back to when the first attempt finds
+// nothing. An empty result and a badly chosen window are indistinguishable to
+// the caller, so rather than return the first and let them guess, search widens
+// once and says that it did.
+const widenTo = 365 * 24 * time.Hour
+
 func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query string, params map[string]interface{}) (*FeatureResult, error) {
-	// Get Slack client
 	api, err := p.Provide()
 	if err != nil {
 		return &FeatureResult{
@@ -21,162 +27,225 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		}, nil
 	}
 
-	// Build search parameters
-	searchParams := slack.NewSearchParameters()
-	searchParams.Sort = "timestamp"
-	searchParams.SortDirection = "desc"
-	searchParams.Count = 100
-	searchParams.Page = 1
-
-	// Apply filters from params
-	if timeframe, ok := params["timeframe"].(string); ok {
-		// Convert our timeframe format to Slack's date filter
-		dateFilter := parseTimeframeToDateFilter(timeframe)
-		query = query + " " + dateFilter
+	timeframe, pinned := params["timeframe"].(string)
+	if !pinned || timeframe == "" {
+		timeframe = "1w"
 	}
 
-	if channels, ok := params["in"].([]string); ok && len(channels) > 0 {
-		// Convert channel names to IDs
-		channelIDs := []string{}
-		for _, ch := range channels {
-			channelID := p.ResolveChannelID(ch)
-			channelIDs = append(channelIDs, channelID)
-		}
-		query = query + " in:" + strings.Join(channelIDs, ",")
-	}
+	channels := stringList(params["in"])
+	people := stringList(params["from"])
 
-	if users, ok := params["from"].([]string); ok && len(users) > 0 {
-		query = query + " from:" + strings.Join(users, ",")
-	}
-
-	// Log the search
-	log.Printf("Official API search query: %s", query)
-
-	// Perform search
-	messages, err := api.SearchMessagesContext(ctx, query, searchParams)
+	built, since := buildQuery(p, query, timeframe, channels, people)
+	messages, err := runSearch(ctx, api, built)
 	if err != nil {
-		log.Printf("Official API search error: %v", err)
 		return &FeatureResult{
 			Success: false,
 			Message: fmt.Sprintf("Search failed: %v", err),
 		}, nil
 	}
 
-	log.Printf("Official API search results - Total: %d, Matches: %d", messages.Total, len(messages.Matches))
+	widened := false
+	if len(messages.Matches) == 0 && !pinned {
+		// Nothing in the default window. Widen once rather than handing back an
+		// empty result the caller cannot distinguish from a wrong window.
+		widened = true
+		since = time.Now().Add(-widenTo)
+		built, _ = buildQueryFrom(p, query, since, channels, people)
+		messages, err = runSearch(ctx, api, built)
+		if err != nil {
+			return &FeatureResult{
+				Success: false,
+				Message: fmt.Sprintf("Search failed while widening: %v", err),
+			}, nil
+		}
+	}
 
-	// Convert to our format
-	discussions := []map[string]interface{}{}
 	usersMap := p.ProvideUsersMap()
+	results := make([]map[string]interface{}, 0, len(messages.Matches))
 
 	for _, match := range messages.Matches {
-		// Get channel info
-		channelName := p.ResolveChannelName(ctx, match.Channel.ID)
-		if channelName == "" {
-			channelName = match.Channel.Name
-		}
-
-		// Get user info
-		userName := "unknown"
+		who := "unknown"
 		if user, ok := usersMap[match.User]; ok {
-			userName = user.Name
-			if user.RealName != "" {
-				userName = user.RealName
-			}
+			who = displayName(user)
 		}
 
-		discussion := map[string]interface{}{
-			"type":      match.Type,
-			"channel":   channelName,
-			"channelId": match.Channel.ID,
-			"user":      userName,
+		entry := map[string]interface{}{
+			// A handle, not a channel ID and a timestamp for the caller to
+			// reassemble. Composing "channel:ts" was the format ADR-003 retired.
+			"handle":    handle.Message(match.Channel.ID, match.Timestamp),
+			"where":     conversationLabel(p, match.Channel.ID),
+			"who":       who,
+			"when":      formatTimestamp(parseSlackTimestamp(match.Timestamp)),
 			"text":      match.Text,
-			"timestamp": match.Timestamp,
 			"permalink": match.Permalink,
 		}
 
+		if match.Previous.Timestamp != "" || match.Next.Timestamp != "" {
+			entry["inThread"] = true
+		}
 		if len(match.Attachments) > 0 {
-			discussion["hasAttachments"] = true
+			entry["hasAttachments"] = true
 		}
 
-		// Check if it's part of a thread
-		if match.Previous.Timestamp != "" || match.Previous2.Timestamp != "" ||
-			match.Next.Timestamp != "" || match.Next2.Timestamp != "" {
-			discussion["type"] = "thread"
-			discussion["threadId"] = fmt.Sprintf("%s:%s", match.Channel.ID, match.Timestamp)
-		}
+		results = append(results, entry)
+	}
 
-		discussions = append(discussions, discussion)
+	coverage := map[string]interface{}{
+		"searchedSince": since.Format("2006-01-02"),
+		"window":        describeSearchWindow(since, widened, pinned),
+		"widened":       widened,
+		"channels":      channels,
+		"from":          people,
+		"totalMatches":  messages.Total,
+		"returned":      len(results),
+		"complete":      messages.Total <= len(results),
 	}
 
 	result := &FeatureResult{
-		Success: true,
-		Message: fmt.Sprintf("Found %d discussions matching '%s'", len(discussions), query),
+		Success:     true,
+		ResultCount: len(results),
 		Data: map[string]interface{}{
-			"query":       query,
-			"discussions": discussions,
-			"searchMeta": map[string]interface{}{
-				"totalMatches": messages.Total,
-				"returned":     len(discussions),
-				"timeframe":    params["timeframe"],
-			},
+			"query":    query,
+			"results":  results,
+			"coverage": coverage,
 		},
-		ResultCount: len(discussions),
 	}
 
-	// Add next actions based on results
-	if len(discussions) > 0 {
-		result.NextActions = []string{}
-
-		// Suggest get-context for the first result to get full message content
-		first := discussions[0]
-		result.NextActions = append(result.NextActions,
-			fmt.Sprintf("Full message: get-context channel='%s' messageTs='%s'", first["channel"], first["timestamp"]))
-
-		// Also suggest catch-up on channels with found content
-		channelsSeen := map[string]bool{}
-		for _, d := range discussions {
-			ch := d["channel"].(string)
-			if !channelsSeen[ch] && len(channelsSeen) < 2 {
-				channelsSeen[ch] = true
-				result.NextActions = append(result.NextActions,
-					fmt.Sprintf("Read context: catch-up channel='%s' since='1d'", ch))
-			}
-		}
-
-		result.Guidance = fmt.Sprintf("Found %d discussions about '%s'. Use get-context with a message timestamp to retrieve full content.", len(discussions), query)
-	} else {
-		result.Guidance = "No results found. Try different search terms or browse channels."
+	if len(results) == 0 {
+		result.Message = fmt.Sprintf("Nothing matching %q since %s.", query, since.Format("2006-01-02"))
+		result.Guidance = fmt.Sprintf(
+			"Searched %s. Slack search only covers channels you are in — a message in a channel you have not joined will not appear.",
+			coverage["window"])
 		result.NextActions = []string{
-			"check-unreads",
-			"list-channels filter='member-only'",
-			"catch-up channel='general' since='1d'",
-			"search query='<different_terms>'",
+			"Try different terms: search query='<other terms>'",
+			"Narrow to one place: read handle='<channel or person>'",
 		}
+		return result, nil
+	}
+
+	result.Message = fmt.Sprintf("%d results for %q.", len(results), query)
+	result.NextActions = []string{
+		"Read one in full: read handle='<handle from a result>'",
+	}
+	if messages.Total > len(results) {
+		result.Guidance = fmt.Sprintf("Showing %d of %d matches, newest first.", len(results), messages.Total)
+	}
+	if widened {
+		result.Guidance = strings.TrimSpace(result.Guidance +
+			fmt.Sprintf(" Nothing matched in the last %s, so this widened to %s.", timeframe, coverage["window"]))
 	}
 
 	return result, nil
 }
 
-// parseTimeframeToDateFilter converts our timeframe format to Slack's date filter
-func parseTimeframeToDateFilter(timeframe string) string {
-	timeframe = strings.TrimSpace(timeframe)
+func runSearch(ctx context.Context, api *slack.Client, query string) (*slack.SearchMessages, error) {
+	searchParams := slack.NewSearchParameters()
+	searchParams.Sort = "timestamp"
+	searchParams.SortDirection = "desc"
+	searchParams.Count = 100
+	searchParams.Page = 1
 
-	if strings.HasSuffix(timeframe, "d") {
-		var d int
-		if _, err := fmt.Sscanf(timeframe, "%dd", &d); err == nil && d > 0 {
-			return fmt.Sprintf("after:-%dd", d)
+	log.Printf("search: %s", query)
+	return api.SearchMessagesContext(ctx, query, searchParams)
+}
+
+// buildQuery renders a search, returning the query and the point it searches
+// back to.
+func buildQuery(p *provider.ApiProvider, query, timeframe string, channels, people []string) (string, time.Time) {
+	return buildQueryFrom(p, query, timeframeStart(timeframe), channels, people)
+}
+
+func buildQueryFrom(p *provider.ApiProvider, query string, since time.Time, channels, people []string) (string, time.Time) {
+	parts := []string{query}
+
+	// An absolute date, because Slack's search grammar takes one. The previous
+	// form rendered "after:-30d", which Slack does not parse as a relative
+	// offset — so the filter was quietly ignored and results came back from
+	// outside the window the caller asked for.
+	parts = append(parts, "after:"+since.Format("2006-01-02"))
+
+	for _, ch := range channels {
+		name := strings.TrimPrefix(strings.TrimSpace(ch), "#")
+		if name == "" {
+			continue
 		}
-	} else if strings.HasSuffix(timeframe, "w") {
-		var w int
-		if _, err := fmt.Sscanf(timeframe, "%dw", &w); err == nil && w > 0 {
-			return fmt.Sprintf("after:-%dd", w*7)
+		parts = append(parts, "in:#"+name)
+	}
+	for _, person := range people {
+		name := strings.TrimPrefix(strings.TrimSpace(person), "@")
+		if name == "" {
+			continue
 		}
-	} else if strings.HasSuffix(timeframe, "m") {
-		var m int
-		if _, err := fmt.Sscanf(timeframe, "%dm", &m); err == nil && m > 0 {
-			return fmt.Sprintf("after:-%dd", m*30)
-		}
+		parts = append(parts, "from:@"+name)
 	}
 
-	return "after:-30d"
+	return strings.Join(parts, " "), since
+}
+
+// timeframeStart turns "3d", "2w", "1m", "1y" into the point to search back to.
+// An unrecognised value falls back to a week rather than silently searching a
+// month, which is what the previous default did.
+func timeframeStart(timeframe string) time.Time {
+	now := time.Now()
+	timeframe = strings.TrimSpace(strings.ToLower(timeframe))
+	if timeframe == "" {
+		return now.AddDate(0, 0, -7)
+	}
+
+	unit := timeframe[len(timeframe)-1]
+	var n int
+	if _, err := fmt.Sscanf(timeframe, "%d", &n); err != nil || n <= 0 {
+		return now.AddDate(0, 0, -7)
+	}
+
+	switch unit {
+	case 'd':
+		return now.AddDate(0, 0, -n)
+	case 'w':
+		return now.AddDate(0, 0, -n*7)
+	case 'm':
+		return now.AddDate(0, -n, 0)
+	case 'y':
+		return now.AddDate(-n, 0, 0)
+	}
+	return now.AddDate(0, 0, -7)
+}
+
+func describeSearchWindow(since time.Time, widened, pinned bool) string {
+	days := int(time.Since(since).Hours() / 24)
+	switch {
+	case widened:
+		return fmt.Sprintf("the last %d days, after nothing matched in the requested window", days)
+	case pinned:
+		return fmt.Sprintf("the last %d days, as requested", days)
+	default:
+		return fmt.Sprintf("the last %d days", days)
+	}
+}
+
+// stringList accepts what an MCP host actually delivers.
+//
+// Arguments arrive as decoded JSON, so an array is []interface{} — never
+// []string. Asserting []string meant the in: and from: filters silently never
+// applied, and a caller narrowing a search got a workspace-wide one back with
+// no indication the narrowing had been dropped.
+func stringList(v interface{}) []string {
+	switch list := v.(type) {
+	case []string:
+		return list
+	case []interface{}:
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if strings.TrimSpace(list) == "" {
+			return nil
+		}
+		return []string{list}
+	}
+	return nil
 }
