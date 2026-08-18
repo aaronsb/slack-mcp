@@ -34,3 +34,10 @@ Thumbs.db
 # Reference repos (temporary)
 slack-mcp-original/
 slack-stealth-mcp/
+
+# Build leftovers from the pre-rename package layout. The published packages all
+# live under npm/slack-mcp-server-*; anything matching the older bare prefix is
+# a stale artifact, not a package.
+npm/slack-mcp-darwin-*/
+npm/slack-mcp-linux-*/
+npm/slack-mcp-windows-*/
