@@ -1,6 +1,6 @@
 {
   "name": "@aaronsb/slack-mcp-windows-arm64",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Platform binary for @aaronsb/slack-mcp (windows-arm64). Installed automatically as an optional dependency; not useful on its own.",
   "os": [
     "win32"
