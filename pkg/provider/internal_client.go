@@ -68,12 +68,17 @@ type ClientCountsResponse struct {
 		HasUnreads   bool   `json:"has_unreads"`
 	} `json:"ims"`
 
-	// Thread counts
+	// Thread counts. The by-channel maps only appear when the request asks for
+	// thread_counts_by_channel; without it Slack returns the aggregates alone,
+	// which cannot say where thread activity happened.
 	Threads struct {
 		HasUnreads   bool `json:"has_unreads"`
 		MentionCount int  `json:"mention_count"`
 		UnreadCount  int  `json:"unread_count"`
 		VipCount     int  `json:"vip_count"`
+
+		MentionCountByChannel map[string]int `json:"mention_count_by_channel"`
+		UnreadCountByChannel  map[string]int `json:"unread_count_by_channel"`
 	} `json:"threads"`
 
 	// Channel badges summary
@@ -102,10 +107,29 @@ type ClientCountsResponse struct {
 	CountsLastFetched int64 `json:"counts_last_fetched"`
 }
 
-// GetClientCounts fetches unread counts using the internal client.counts endpoint
+// GetClientCounts fetches per-conversation state from the internal
+// client.counts endpoint.
+//
+// The response covers every channel, DM and group DM whether or not it has
+// unreads, and carries `latest` — the newest message timestamp — for each. That
+// makes it a change feed rather than an unread feed: comparing `latest` against
+// a stored position detects movement regardless of what the user's own Slack
+// client has marked read. `has_unreads` is the derived flag their client zeroes.
+//
+// thread_counts_by_channel adds per-channel thread counts, which is the only
+// way this endpoint says where thread activity happened. It costs nothing —
+// same request.
 func (c *InternalClient) GetClientCounts(ctx context.Context) (*ClientCountsResponse, error) {
+	params := url.Values{}
+	params.Set("thread_counts_by_channel", "true")
+
+	// org_wide_aware asks an Enterprise Grid deployment to report conversations
+	// shared across the org's workspaces rather than only this one. On a
+	// single-workspace team it changes nothing.
+	params.Set("org_wide_aware", "true")
+
 	result := &ClientCountsResponse{}
-	err := c.callInternalAPI(ctx, "/api/client.counts", nil, result)
+	err := c.callInternalAPI(ctx, "/api/client.counts", params, result)
 	return result, err
 }
 
