@@ -255,3 +255,16 @@ func TestCallbackServerTokenReceive(t *testing.T) {
 		t.Errorf("Port() = %d, want %d", cs.Port(), port)
 	}
 }
+
+// Advancing the flow opens a browser, which made `go test ./...` spawn a tab
+// per test that reached that state. TestMain sets SLACK_MCP_NO_BROWSER; this
+// asserts the guard is actually read, so deleting it fails here rather than
+// showing up as tabs nobody connects back to the test suite.
+func TestBrowserLaunchIsSuppressible(t *testing.T) {
+	if os.Getenv(NoBrowserEnv) == "" {
+		t.Fatalf("%s is unset; TestMain should set it for every test in this package", NoBrowserEnv)
+	}
+
+	// With the guard honoured this returns without spawning anything.
+	OpenBrowserURL("http://127.0.0.1:1/should-never-open")
+}
