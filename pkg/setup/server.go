@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -342,8 +343,21 @@ func ValidateTokens(xoxc, xoxd string) (team, user, userID string, err error) {
 	return authResult.Team, authResult.User, authResult.UserID, nil
 }
 
-// OpenBrowserURL opens the default browser to the given URL
+// NoBrowserEnv suppresses browser launching when set to any non-empty value.
+//
+// The setup flow opens a browser as a side effect of advancing its state
+// machine, which means `go test ./...` opened one too — a full test run left a
+// pile of tabs behind, and on a headless CI runner it is a pointless subprocess.
+const NoBrowserEnv = "SLACK_MCP_NO_BROWSER"
+
+// OpenBrowserURL opens the default browser to the given URL, unless
+// SLACK_MCP_NO_BROWSER is set.
 func OpenBrowserURL(url string) {
+	if os.Getenv(NoBrowserEnv) != "" {
+		log.Printf("Browser launch suppressed by %s. Open this URL manually: %s", NoBrowserEnv, url)
+		return
+	}
+
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
