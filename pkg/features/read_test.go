@@ -2,7 +2,9 @@ package features_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/aaronsb/slack-mcp/pkg/features"
@@ -33,6 +35,12 @@ func channel(id, name string) slack.Channel {
 	ch.Name = name
 	ch.IsChannel = true
 	ch.IsMember = true
+	return ch
+}
+
+func channelWithTopic(id, name, topic string) slack.Channel {
+	ch := channel(id, name)
+	ch.Topic.Value = topic
 	return ch
 }
 
@@ -260,5 +268,125 @@ func TestReadReturnsHandlesForWhatItRead(t *testing.T) {
 	}
 	if len(res.NextActions) == 0 {
 		t.Error("read did not offer a way to acknowledge what it returned")
+	}
+}
+
+// The worst failure this tool can have: silently reading a conversation the
+// caller did not ask for. A name appearing in some channel's TOPIC must never
+// resolve on its own.
+func TestATopicMatchNeverResolvesOnItsOwn(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(
+		// No DM with Sarah exists. #general merely mentions her in its topic.
+		channelWithTopic("C1", "general", "see sarah's onboarding doc before asking"),
+	)
+
+	res := read(t, srv, map[string]any{"handle": "sarah"})
+	d := res.Data.(map[string]any)
+
+	if where, ok := d["where"]; ok {
+		t.Fatalf("read silently opened %v on a topic match; that is a wrong conversation, not a miss", where)
+	}
+	if ambiguous, _ := d["ambiguous"].(bool); !ambiguous {
+		t.Fatalf("a topic-only match should be offered as a choice, got %+v", d)
+	}
+	options := d["candidates"].([]map[string]any)
+	if len(options) != 1 || options[0]["matchedOn"] == nil {
+		t.Errorf("the candidate does not say it matched on topic rather than name: %+v", options)
+	}
+}
+
+// A name match still wins outright — the fix must not make every read ambiguous.
+func TestANameMatchStillResolvesOutright(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(
+		channelWithTopic("C1", "general", "sarah runs onboarding"),
+		dmWith("D1", "U2"),
+	)
+	srv.Handle("conversations.history", func(*http.Request) any {
+		return map[string]any{
+			"ok": true, "has_more": false,
+			"messages": []any{slacktest.Message("U2", "hi", "1782246118.543969")},
+		}
+	})
+
+	res := read(t, srv, map[string]any{"handle": "sarah"})
+	d := res.Data.(map[string]any)
+	if d["where"] != "@Sarah Chen" {
+		t.Errorf("a real name match should beat a topic mention; got %+v", d)
+	}
+}
+
+// The tool's own description promises this phrasing works.
+func TestAPhraseResolvesThroughItsSignificantWords(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(dmWith("D1", "U2"), channel("C1", "deploy"))
+
+	res := read(t, srv, map[string]any{"handle": "the thread with Sarah about the deploy"})
+	if !res.Success {
+		t.Fatalf("the phrasing in the tool's own description did not resolve: %s", res.Message)
+	}
+	d := res.Data.(map[string]any)
+	if ambiguous, _ := d["ambiguous"].(bool); !ambiguous {
+		t.Fatalf("expected Sarah and #deploy as choices, got %+v", d)
+	}
+	if got := len(d["candidates"].([]map[string]any)); got != 2 {
+		t.Errorf("want both Sarah and #deploy, got %d candidates", got)
+	}
+}
+
+// A truncated candidate list must say it was truncated.
+func TestTruncatedCandidatesAreReported(t *testing.T) {
+	srv := slacktest.New(t)
+	var many []slack.Channel
+	for i, name := range []string{"deploy-a", "deploy-b", "deploy-c", "deploy-d", "deploy-e", "deploy-f", "deploy-g"} {
+		many = append(many, channel(fmt.Sprintf("C%d", i), name))
+	}
+	srv.SeedChannels(many...)
+
+	res := read(t, srv, map[string]any{"handle": "deploy"})
+	d := res.Data.(map[string]any)
+
+	if total := d["totalMatches"].(int); total != 7 {
+		t.Errorf("totalMatches = %d, want 7", total)
+	}
+	if truncated, _ := d["truncated"].(bool); !truncated {
+		t.Error("a shortened candidate list was presented as the whole list")
+	}
+}
+
+// A conversation the cache cannot name reports the gap rather than passing an
+// ID off as a name.
+func TestUnnamedConversationIsFlagged(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(channel("C1", "engineering"))
+	srv.Handle("conversations.history", func(*http.Request) any {
+		return map[string]any{
+			"ok": true, "has_more": false,
+			"messages": []any{slacktest.Message("U2", "hi", "1782246118.543969")},
+		}
+	})
+
+	res := read(t, srv, map[string]any{"handle": handle.Conversation("CNOTCACHED")})
+	coverage := res.Data.(map[string]any)["coverage"].(map[string]any)
+	if named, _ := coverage["named"].(bool); named {
+		t.Error("a conversation with no cached name was reported as named")
+	}
+}
+
+// Slack answering with nothing is not an error to report as one.
+func TestMissingMessageSaysSoWithoutANilError(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(channel("C1", "engineering"))
+	srv.Handle("conversations.replies", func(*http.Request) any {
+		return map[string]any{"ok": true, "has_more": false, "messages": []any{}}
+	})
+
+	res := read(t, srv, map[string]any{"handle": handle.Message("C1", "1782246118.543969")})
+	if res.Success {
+		t.Fatal("expected a miss")
+	}
+	if strings.Contains(res.Message, "<nil>") {
+		t.Errorf("message describes the request rather than the result: %q", res.Message)
 	}
 }
