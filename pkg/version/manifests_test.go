@@ -244,3 +244,21 @@ func TestPlatformPackagesCarryPublishableMetadata(t *testing.T) {
 		}
 	}
 }
+
+// The MCP Registry rejects a description over 100 characters with a 422, and
+// server.json is only exercised at release time — by a CI job, on a tag, after
+// npm has already published. v1.5.0 shipped to npm and bounced off the registry
+// for exactly this, so the limit is asserted here where it costs nothing.
+func TestServerJSONDescriptionFitsTheRegistryLimit(t *testing.T) {
+	const registryMax = 100
+
+	server := readJSON[serverJSON](t, "server.json")
+	if server.Description == "" {
+		t.Fatal("server.json has no description")
+	}
+	// The registry counts characters, not bytes; the description contains an
+	// em dash, so len() would overstate it.
+	if n := len([]rune(server.Description)); n > registryMax {
+		t.Errorf("description is %d characters, registry limit is %d:\n  %q", n, registryMax, server.Description)
+	}
+}
