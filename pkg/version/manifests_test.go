@@ -262,3 +262,29 @@ func TestServerJSONDescriptionFitsTheRegistryLimit(t *testing.T) {
 		t.Errorf("description is %d characters, registry limit is %d:\n  %q", n, registryMax, server.Description)
 	}
 }
+
+// The MCP Registry proves an npm package belongs to a registry entry by reading
+// mcpName out of the PUBLISHED package.json. Missing, the registry publish
+// fails with a 400 — after npm has already shipped, so the fix costs a whole
+// version. v1.5.1 was spent learning this.
+func TestWrapperDeclaresItsRegistryName(t *testing.T) {
+	server := readJSON[serverJSON](t, "server.json")
+
+	var wrapper struct {
+		MCPName string `json:"mcpName"`
+	}
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "npm/slack-mcp-server/package.json"))
+	if err != nil {
+		t.Fatalf("read wrapper package.json: %v", err)
+	}
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		t.Fatalf("parse wrapper package.json: %v", err)
+	}
+
+	if wrapper.MCPName == "" {
+		t.Fatal("wrapper package.json has no mcpName; the registry will reject the entry")
+	}
+	if wrapper.MCPName != server.Name {
+		t.Errorf("mcpName is %q, server.json name is %q — they must match", wrapper.MCPName, server.Name)
+	}
+}

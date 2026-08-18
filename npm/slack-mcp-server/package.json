@@ -33,5 +33,6 @@
   "bugs": {
     "url": "https://github.com/aaronsb/slack-mcp/issues"
   },
-  "homepage": "https://github.com/aaronsb/slack-mcp#readme"
+  "homepage": "https://github.com/aaronsb/slack-mcp#readme",
+  "mcpName": "io.github.aaronsb/slack-mcp"
 }

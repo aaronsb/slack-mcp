@@ -9,6 +9,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The registry proves an npm package belongs to a registry entry by reading
+# mcpName out of the PUBLISHED package.json. Without it the registry publish
+# fails with a 400 naming the exact field — after npm has already shipped, so
+# the fix costs a whole version.
+mcp_name=$(jq -r .name server.json)
+jq --arg n "$mcp_name" '. + {mcpName: $n}' \
+  npm/slack-mcp-server/package.json > npm/slack-mcp-server/package.json.tmp
+mv npm/slack-mcp-server/package.json.tmp npm/slack-mcp-server/package.json
+
 for dir in npm/slack-mcp-server-*/; do
   platform=$(basename "$dir" | sed 's/^slack-mcp-server-//')
 
