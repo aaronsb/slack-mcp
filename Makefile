@@ -193,14 +193,41 @@ version-check: ## Assert every version source agrees. Usage: make version-check 
 	fi; \
 	echo "All version sources agree on $(VERSION)"
 
+.PHONY: release-patch release-minor release-major
+release-patch: ## Release the next patch version
+	@$(MAKE) --no-print-directory _release-bump PART=patch
+release-minor: ## Release the next minor version
+	@$(MAKE) --no-print-directory _release-bump PART=minor
+release-major: ## Release the next major version
+	@$(MAKE) --no-print-directory _release-bump PART=major
+
+# The current version lives in the repo, so the next one can be computed rather
+# than typed. It used to be derived from the git tag at build time, which is why
+# this target originally demanded one — that stopped being true when
+# version-sync started committing the version.
+.PHONY: _release-bump
+_release-bump:
+	@current=$$(jq -r .version npm/$(NPM_PKG_PREFIX)/package.json); \
+	next=$$(echo "$$current" | awk -F. -v part="$(PART)" '{ \
+	  if (part == "major") printf "%d.0.0", $$1+1; \
+	  else if (part == "minor") printf "%d.%d.0", $$1, $$2+1; \
+	  else printf "%d.%d.%d", $$1, $$2, $$3+1 }'); \
+	echo "$$current -> $$next"; \
+	$(MAKE) --no-print-directory release TAG="v$$next"
+
 .PHONY: release
-release: ## Sync versions, commit, tag, and push. Usage: make release TAG=v1.2.3
+release: check ## Release an explicit version. Usage: make release TAG=v1.2.3
 	@if [ -z "$(TAG)" ]; then \
-	  echo "Usage: make release TAG=vX.Y.Z"; exit 1; \
+	  echo "Usage: make release TAG=vX.Y.Z, or make release-patch|minor|major"; exit 1; \
 	fi
 	@case "$(TAG)" in v*.*.*) ;; *) echo "TAG must look like vX.Y.Z, got $(TAG)"; exit 1;; esac
 	@if [ -n "$$(git status --porcelain -- $(VERSION_FILES))" ]; then \
 	  echo "Version files have uncommitted changes; commit or stash them first."; exit 1; \
+	fi
+	@# Refuse to release a version already tagged. Retagging moves a name people
+	@# may already have fetched, and npm would reject the republish anyway.
+	@if git rev-parse -q --verify "refs/tags/$(TAG)" >/dev/null; then \
+	  echo "$(TAG) already exists: $$(git log --oneline -1 $(TAG))"; exit 1; \
 	fi
 	@# Sync before tagging, so the tagged tree records the version it ships as.
 	@# Publishing previously read the version from git describe alone, which let
@@ -212,3 +239,5 @@ release: ## Sync versions, commit, tag, and push. Usage: make release TAG=v1.2.3
 	git tag -a "$(TAG)" -m "Release $(TAG)"
 	git push origin HEAD
 	git push origin "$(TAG)"
+	@echo ""
+	@echo "Pushed $(TAG). CI publishes npm, the MCP Registry and the GitHub Release."
