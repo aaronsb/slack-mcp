@@ -180,3 +180,11 @@ func parseTimeframeToDateFilter(timeframe string) string {
 
 	return "after:-30d"
 }
+
+// searchLabel names a conversation for a search result, accepting the raw ID
+// when the cache has no name — a search result is a pointer, and read reports
+// the naming gap when it opens one.
+func searchLabel(p *provider.ApiProvider, channelID string) string {
+	label, _ := conversationLabel(p, channelID)
+	return label
+}
