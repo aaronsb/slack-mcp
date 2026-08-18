@@ -1,7 +1,7 @@
 {
   "name": "@aaronsb/slack-mcp-linux-arm64",
   "version": "1.4.0",
-  "description": "Platform binary for @aaronsb/slack-mcp (linux-arm64)",
+  "description": "Platform binary for @aaronsb/slack-mcp (linux-arm64). Installed automatically as an optional dependency; not useful on its own.",
   "os": [
     "linux"
   ],
@@ -12,5 +12,16 @@
     "type": "git",
     "url": "git+https://github.com/aaronsb/slack-mcp.git"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "files": [
+    "bin"
+  ],
+  "author": {
+    "name": "Aaron Bockelie",
+    "url": "https://github.com/aaronsb"
+  },
+  "homepage": "https://github.com/aaronsb/slack-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/aaronsb/slack-mcp/issues"
+  }
 }
