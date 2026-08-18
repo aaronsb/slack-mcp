@@ -38,6 +38,11 @@ type Ref struct {
 	Channel string
 	// TS is the message or thread-root timestamp. Empty for KindConversation.
 	TS string
+	// Through is how far the content behind this handle was shown. Thread
+	// handles carry it, because a thread's root timestamp says nothing about
+	// which replies the caller has seen — acknowledging the root would leave
+	// the thread reporting forever.
+	Through string
 }
 
 const prefix = "ev_"
@@ -53,7 +58,7 @@ var encoding = base64.RawURLEncoding
 
 // Encode builds a handle for a reference.
 func Encode(ref Ref) string {
-	parts := string(ref.Kind) + "\x00" + ref.Channel + "\x00" + ref.TS
+	parts := string(ref.Kind) + "\x00" + ref.Channel + "\x00" + ref.TS + "\x00" + ref.Through
 	return prefix + encoding.EncodeToString([]byte(parts))
 }
 
@@ -65,6 +70,12 @@ func Message(channel, ts string) string {
 // Thread builds a handle for a thread, given its root timestamp.
 func Thread(channel, threadTS string) string {
 	return Encode(Ref{Kind: KindThread, Channel: channel, TS: threadTS})
+}
+
+// ThreadThrough builds a thread handle that also records the newest reply the
+// caller was shown, so acknowledging it advances the thread to exactly there.
+func ThreadThrough(channel, threadTS, latestReply string) string {
+	return Encode(Ref{Kind: KindThread, Channel: channel, TS: threadTS, Through: latestReply})
 }
 
 // Conversation builds a handle for a whole conversation.
@@ -85,11 +96,14 @@ func Decode(h string) (Ref, error) {
 	}
 
 	fields := strings.Split(string(raw), "\x00")
-	if len(fields) != 3 {
+	if len(fields) < 3 || len(fields) > 4 {
 		return Ref{}, ErrMalformed
 	}
 
 	ref := Ref{Kind: Kind(fields[0]), Channel: fields[1], TS: fields[2]}
+	if len(fields) == 4 {
+		ref.Through = fields[3]
+	}
 	switch ref.Kind {
 	case KindMessage, KindThread:
 		if ref.Channel == "" || ref.TS == "" {

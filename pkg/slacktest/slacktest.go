@@ -291,7 +291,10 @@ func defaultFixture(method, selfURL string, channels []slack.Channel, users []sl
 		)
 
 	case "subscriptions.thread.getView":
-		return ThreadView(Thread("C1", "1782246118.543969", "1786752114.508819", 9, 2))
+		// Empty by default. A fixture that reports unread threads out of the box
+		// makes every poll test assert around a thread it did not set up; a test
+		// that wants threads passes ThreadView(Thread(...)) explicitly.
+		return ThreadView()
 
 	case "conversations.mark", "chat.postMessage", "reactions.add", "reactions.remove":
 		return map[string]any{"ok": true, "ts": "1786752114.508819", "channel": "C1"}

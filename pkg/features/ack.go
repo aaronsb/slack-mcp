@@ -112,10 +112,19 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 			acked++
 
 		case handle.KindThread:
-			// A thread handle names the root, not the reply that was read.
-			// Recording the root is the conservative choice: it can only cause
-			// a reply to be reported again, never skipped.
-			store.AckThread(ref.Channel, ref.TS, ref.TS, now)
+			// The handle carries how far the thread was shown. Without it there
+			// is nothing to record but the root timestamp, which is older than
+			// every reply — so the thread would report again on every tick and
+			// acknowledging it would never converge.
+			through := ref.Through
+			if through == "" {
+				rejected = append(rejected, map[string]interface{}{
+					"handle": h,
+					"reason": "this thread handle does not say how far you read; use the handle from a poll event",
+				})
+				continue
+			}
+			store.AckThread(ref.Channel, ref.TS, through, now)
 			threads++
 
 		case handle.KindConversation:
