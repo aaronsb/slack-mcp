@@ -221,6 +221,23 @@ release: check ## Release an explicit version. Usage: make release TAG=v1.2.3
 	  echo "Usage: make release TAG=vX.Y.Z, or make release-patch|minor|major"; exit 1; \
 	fi
 	@case "$(TAG)" in v*.*.*) ;; *) echo "TAG must look like vX.Y.Z, got $(TAG)"; exit 1;; esac
+	@# Releasing from a feature branch tags a commit that is not on main, so the
+	@# published version exists nowhere in the mainline until someone remembers
+	@# to merge. v1.5.1 shipped that way. RELEASE_BRANCH=<name> to override.
+	@branch=$$(git rev-parse --abbrev-ref HEAD); \
+	want="$${RELEASE_BRANCH:-main}"; \
+	if [ "$$branch" != "$$want" ]; then \
+	  echo "On branch '$$branch', not '$$want'."; \
+	  echo "  Releasing here tags a commit that is not on $$want."; \
+	  echo "  Merge first, or: RELEASE_BRANCH=$$branch make release TAG=$(TAG)"; \
+	  exit 1; \
+	fi
+	@# A HEAD behind the remote publishes code that is not what main says.
+	@git fetch -q origin 2>/dev/null || true; \
+	if git rev-parse -q --verify origin/main >/dev/null && \
+	   ! git merge-base --is-ancestor origin/main HEAD; then \
+	  echo "HEAD is behind origin/main. Pull before releasing."; exit 1; \
+	fi
 	@if [ -n "$$(git status --porcelain -- $(VERSION_FILES))" ]; then \
 	  echo "Version files have uncommitted changes; commit or stash them first."; exit 1; \
 	fi
