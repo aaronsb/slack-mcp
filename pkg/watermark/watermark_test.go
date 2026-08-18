@@ -1,8 +1,10 @@
 package watermark_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -231,6 +233,147 @@ func TestTimestampOrderingIsNumeric(t *testing.T) {
 	}
 }
 
+// An out-of-range timestamp clamps to MaxInt64 if the parse error is ignored,
+// which would store a position no real timestamp can exceed and freeze the
+// conversation as unchanged forever. Silent, permanent message loss.
+func TestOverflowingTimestampCannotPoisonAWatermark(t *testing.T) {
+	s := open(t)
+
+	s.Ack("C1", "99999999999999999999999.000000", now)
+
+	if !s.Changed("C1", "1782246118.543969") {
+		t.Fatal("a real timestamp reports no change after an overflowed Ack — conversation is frozen")
+	}
+	if s.Known("C1") {
+		t.Error("an unparseable timestamp was stored as a watermark")
+	}
+}
+
+func TestMalformedTimestampsAreRejected(t *testing.T) {
+	for _, ts := range []string{
+		"not-a-timestamp",
+		"-1782246118.543969",
+		"1782246118.abcdef",
+		"..",
+		" 1782246118.543969",
+		"1e10.000000",
+	} {
+		s := open(t)
+		s.Ack("C1", ts, now)
+		if s.Known("C1") {
+			t.Errorf("Ack(%q) stored a watermark; want it ignored", ts)
+		}
+	}
+}
+
+// Comparison must fail towards showing: a redundant look costs one call, a
+// missed message is lost silently and permanently.
+func TestComparisonFailsTowardsShowing(t *testing.T) {
+	s := open(t)
+	s.Ack("C1", "1782246118.543969", now)
+
+	if !s.Changed("C1", "garbage") {
+		t.Error("an unparseable latest reported no change; comparison must fail towards showing")
+	}
+}
+
+// AckThread carries the same backwards guard as Ack. Mutation testing showed
+// nothing asserted it.
+func TestAckThreadNeverMovesBackwards(t *testing.T) {
+	s := open(t)
+	s.AckThread("C1", "1782246118.543969", "1786752114.508819", now)
+	s.AckThread("C1", "1782246118.543969", "1786000000.000000", now.Add(time.Minute))
+
+	if s.ThreadChanged("C1", "1782246118.543969", "1786752114.508819") {
+		t.Error("thread watermark moved backwards on a stale AckThread")
+	}
+}
+
+func TestAckThreadRejectsMalformedTimestamps(t *testing.T) {
+	s := open(t)
+	s.AckThread("C1", "1782246118.543969", "99999999999999999999999.000000", now)
+
+	if !s.ThreadChanged("C1", "1782246118.543969", "1786752114.508819") {
+		t.Error("thread frozen by an overflowed AckThread")
+	}
+}
+
+// Sanitizing alone is not injective, and the workspace is a Slack team display
+// name rather than an opaque ID. Two workspaces sharing one file would
+// interleave their positions.
+func TestSimilarWorkspaceNamesDoNotCollide(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	a, err := watermark.Open("acme/eng", watermark.DefaultScope)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	b, err := watermark.Open("acme-eng", watermark.DefaultScope)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if a.Path() == b.Path() {
+		t.Fatalf("distinct workspaces share a watermark file: %s", a.Path())
+	}
+
+	a.Ack("C1", "1782246118.543969", now)
+	if err := a.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if b.Known("C1") {
+		t.Error("watermark leaked between similarly named workspaces")
+	}
+}
+
+func TestSimilarScopeNamesDoNotCollide(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	a, err := watermark.Open("Praecipio", "day/watch")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	b, err := watermark.Open("Praecipio", "day-watch")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if a.Path() == b.Path() {
+		t.Fatalf("distinct scopes share a watermark file: %s", a.Path())
+	}
+}
+
+// Concurrent use is a documented property, so exercise it under -race.
+func TestConcurrentAckAndSave(t *testing.T) {
+	s := open(t)
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("C%d", i)
+			for j := range 50 {
+				s.Ack(id, fmt.Sprintf("178224%04d.000000", j), now)
+				s.Changed(id, "1799999999.000000")
+				if j%10 == 0 {
+					if err := s.Save(); err != nil {
+						t.Errorf("Save: %v", err)
+						return
+					}
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if !s.Known("C0") {
+		t.Error("concurrent acks lost")
+	}
+}
+
 func TestOpenRequiresWorkspace(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	if _, err := watermark.Open("", watermark.DefaultScope); err == nil {
@@ -241,14 +384,17 @@ func TestOpenRequiresWorkspace(t *testing.T) {
 // A corrupt file must surface as an error rather than silently resetting an
 // agent's position to zero.
 func TestCorruptFileIsAnError(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dir)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	path := filepath.Join(dir, "slack-mcp", "watermarks", "Praecipio")
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	// Ask the store where it keeps its file rather than assuming the layout.
+	s, err := watermark.Open("Praecipio", watermark.DefaultScope)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(path, "default.json"), []byte("{not json"), 0o600); err != nil {
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := os.WriteFile(s.Path(), []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

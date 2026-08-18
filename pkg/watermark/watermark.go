@@ -18,6 +18,8 @@
 package watermark
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,6 +69,11 @@ type Store struct {
 
 	mu    sync.RWMutex
 	state state
+
+	// saveMu serializes Save. The state lock is released before the file is
+	// written, so without this two concurrent saves would land in completion
+	// order rather than snapshot order, and the older snapshot could win.
+	saveMu sync.Mutex
 }
 
 // Open loads the watermarks for a workspace and scope, creating an empty store
@@ -80,13 +87,13 @@ func Open(workspace, scope string) (*Store, error) {
 		scope = DefaultScope
 	}
 
-	dir := filepath.Join(paths.DataDir(), "watermarks", sanitize(workspace))
+	dir := filepath.Join(paths.DataDir(), "watermarks", pathElement(workspace))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("watermark: create %s: %w", dir, err)
 	}
 
 	s := &Store{
-		path: filepath.Join(dir, sanitize(scope)+".json"),
+		path: filepath.Join(dir, pathElement(scope)+".json"),
 		state: state{
 			Conversations: make(map[string]Conversation),
 			Threads:       make(map[string]Thread),
@@ -167,8 +174,14 @@ func (s *Store) ThreadChanged(channel, threadTS, latestReply string) bool {
 // Ack records that the agent has been shown a conversation up to ts. It never
 // moves a watermark backwards, so acknowledging a stale read cannot re-surface
 // messages already reported.
+//
+// A timestamp that does not parse is ignored rather than stored. Storing one
+// would poison the watermark permanently: an out-of-range value clamps to a
+// position no real timestamp can exceed, and that conversation would never
+// report a change again. LastSeenAt is still refreshed for a stale but valid
+// ack, so a conversation an agent keeps looking at is not pruned as idle.
 func (s *Store) Ack(conversationID, ts string, now time.Time) {
-	if conversationID == "" || ts == "" {
+	if conversationID == "" || !validTS(ts) {
 		return
 	}
 	s.mu.Lock()
@@ -183,8 +196,9 @@ func (s *Store) Ack(conversationID, ts string, now time.Time) {
 }
 
 // AckThread records that the agent has been shown a thread up to latestReply.
+// Like Ack, it never moves backwards and ignores an unparseable timestamp.
 func (s *Store) AckThread(channel, threadTS, latestReply string, now time.Time) {
-	if channel == "" || threadTS == "" || latestReply == "" {
+	if channel == "" || threadTS == "" || !validTS(latestReply) {
 		return
 	}
 	s.mu.Lock()
@@ -256,6 +270,9 @@ func (s *Store) Prune(maxAge time.Duration, now time.Time) int {
 // Save writes the watermarks to disk, replacing the file atomically so a crash
 // mid-write cannot leave an agent with a truncated position.
 func (s *Store) Save() error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	s.mu.RLock()
 	data, err := json.Marshal(s.state)
 	s.mu.RUnlock()
@@ -300,21 +317,52 @@ func threadKey(channel, threadTS string) string { return channel + "\x00" + thre
 // "seconds.microseconds" strings; they are compared numerically rather than
 // lexicographically so that a change in the width of the seconds field cannot
 // silently invert the ordering.
+//
+// An unparseable value on either side reports true. The two failure modes here
+// are not symmetric: reporting a conversation that has not moved costs an agent
+// one redundant look, while failing to report one that has moved loses the
+// message silently and permanently. So comparison fails towards showing.
+// Storing a bad value is prevented separately, by validTS in Ack.
 func after(a, b string) bool {
 	if b == "" {
 		return a != ""
 	}
-	as, af := splitTS(a)
-	bs, bf := splitTS(b)
+	as, af, aok := splitTS(a)
+	bs, bf, bok := splitTS(b)
+	if !aok || !bok {
+		return true
+	}
 	if as != bs {
 		return as > bs
 	}
 	return af > bf
 }
 
-func splitTS(ts string) (sec, frac int64) {
+// validTS reports whether ts is a timestamp safe to store as a watermark.
+func validTS(ts string) bool {
+	_, _, ok := splitTS(ts)
+	return ok
+}
+
+// splitTS parses a "seconds.microseconds" Slack timestamp, reporting whether it
+// parsed cleanly. Parse errors are returned rather than ignored: ParseInt
+// reports ErrRange by clamping to MaxInt64, so an overflowed value would
+// otherwise be stored as a watermark no real timestamp can ever exceed —
+// freezing that conversation as unchanged forever.
+func splitTS(ts string) (sec, frac int64, ok bool) {
+	if ts == "" {
+		return 0, 0, false
+	}
+
 	s, f, _ := strings.Cut(ts, ".")
-	sec, _ = strconv.ParseInt(s, 10, 64)
+	sec, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || sec < 0 {
+		return 0, 0, false
+	}
+
+	if f == "" {
+		return sec, 0, true
+	}
 
 	// Pad or trim to a fixed width so "5" and "500000" compare as intended.
 	if len(f) > 6 {
@@ -323,25 +371,46 @@ func splitTS(ts string) (sec, frac int64) {
 	for len(f) < 6 {
 		f += "0"
 	}
-	frac, _ = strconv.ParseInt(f, 10, 64)
-	return sec, frac
+	frac, err = strconv.ParseInt(f, 10, 64)
+	if err != nil || frac < 0 {
+		return 0, 0, false
+	}
+	return sec, frac, true
 }
 
-// sanitize keeps a workspace or scope name usable as a single path element.
+// pathElement turns a workspace or scope name into a single path element that
+// is both filesystem-safe and unique to that name.
+//
+// Sanitizing alone is not injective — "acme/eng" and "acme-eng" both reduce to
+// "acme-eng" — and the workspace here is a Slack team display name rather than
+// an opaque ID, so collisions are reachable with ordinary input. Two workspaces
+// sharing one file would interleave their positions and lose messages in both.
+// The digest suffix makes distinct names distinct files; the readable prefix is
+// kept so the directory can still be understood by a human.
+func pathElement(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return sanitize(name) + "-" + hex.EncodeToString(sum[:4])
+}
+
+// sanitize keeps a name usable as a single path element. It is lossy by design;
+// pathElement restores uniqueness.
 func sanitize(name string) string {
 	cleaned := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			return r
-		case r == '-', r == '_', r == '.':
+		case r == '-', r == '_':
 			return r
 		default:
 			return '-'
 		}
 	}, name)
-	cleaned = strings.Trim(cleaned, ".")
+	cleaned = strings.Trim(cleaned, "-")
 	if cleaned == "" {
 		return "unnamed"
+	}
+	if len(cleaned) > 48 {
+		cleaned = cleaned[:48]
 	}
 	return cleaned
 }
