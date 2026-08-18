@@ -91,7 +91,7 @@ npm-metadata: ## Write shared metadata and a README into every platform package
 	@./scripts/npm-metadata.sh
 
 .PHONY: npm-publish
-npm-publish: npm-copy-binaries npm-set-version npm-metadata ## Publish all npm packages (requires NPM_TOKEN or npm login)
+npm-publish: npm-copy-binaries npm-set-version npm-metadata ## Publish all npm packages locally (requires npm login; CI publishes by OIDC)
 	cp README.md LICENSE ./npm/$(NPM_PKG_PREFIX)/
 	@# Every platform package publishes its own licence, not just the wrapper.
 	$(foreach os,$(OSES),$(foreach arch,$(ARCHS), \
