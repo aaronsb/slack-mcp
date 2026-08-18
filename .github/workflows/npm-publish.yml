@@ -1,4 +1,15 @@
-name: Publish to npm
+# Publish to npm and the MCP Registry, both by OIDC. See ADR-003 for the tool
+# surface; the publishing decision follows google-workspace-mcp's ADR-105.
+#
+# THE FILENAME IS LOAD-BEARING. npmjs.com registers a trusted publisher against
+# a repository AND a workflow filename; all seven packages are registered
+# against `npm-publish.yml`. Rename or move this file and npm stops recognising
+# the identity, with nothing in this repo to explain why.
+#
+# There is deliberately no NPM_TOKEN, no NODE_AUTH_TOKEN, and no `registry-url:`
+# on setup-node — that input exists to write a token into .npmrc, which is what
+# this replaces.
+name: Publish to npm and the MCP Registry
 
 on:
   push:
@@ -6,61 +17,159 @@ on:
 
 jobs:
   publish:
+    name: Publish to npm
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mints the OIDC token npm verifies; without it, publish is unauthenticated
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      # Node 24 ships an npm 11.x that is usually new enough, and Node 22
+      # shipped npm 10.x which is not. Neither is a promise: the bundled npm
+      # moves with whatever Node patch the runner image happens to have. An npm
+      # below the floor does not report a missing feature — it looks for a
+      # token, finds none, and fails with a 401 that says nothing about OIDC.
+      - name: Upgrade npm past the trusted-publishing floor
+        run: |
+          npm install -g npm@latest
+          V=$(npm --version)
+          echo "npm $V"
+          node -e '
+            const [maj, min, pat] = process.argv[1].split(".").map(Number);
+            const ok = maj > 11 || (maj === 11 && (min > 5 || (min === 5 && pat >= 1)));
+            if (!ok) {
+              console.error(`npm ${process.argv[1]} is below the 11.5.1 trusted-publishing floor.`);
+              process.exit(1);
+            }
+          ' "$V"
+
+      # The tag names one version; the repo records another. Publishing on a
+      # mismatch ships whatever the manifests say under a tag claiming
+      # something else. `make version-check` asserts every source at once —
+      # mcpb manifest, server.json twice over, and all seven package.json files.
+      - name: Check the tag matches every version source
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if echo "$VERSION" | grep -qE '(alpha|beta|rc)'; then
+            echo "tag=$(echo "$VERSION" | grep -oE '(alpha|beta|rc)')" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+          make version-check VERSION="$VERSION"
+
+      - name: Build and stage binaries
+        run: make npm-copy-binaries
+
+      # A PRE-RELEASE must not become `latest`. `npm publish` with no --tag
+      # publishes as `latest`, which every install and every ^x.y.z range picks
+      # up — so an alpha published bare is shipped to everyone, not offered to
+      # those who want it.
+      - name: Publish the platform packages
+        run: |
+          set -euo pipefail
+          for dir in npm/slack-mcp-server-*/; do
+            name=$(node -p "require('./$dir/package.json').name")
+            # An npm version is permanent and re-publishing exits 403, so a
+            # re-run must be a no-op rather than a red X on a release that
+            # actually succeeded.
+            if npm view "$name@${{ steps.meta.outputs.version }}" version >/dev/null 2>&1; then
+              echo "$name@${{ steps.meta.outputs.version }} already published — skipping."
+              continue
+            fi
+            echo "Publishing $name..."
+            (cd "$dir" && npm publish --provenance --access public --tag "${{ steps.meta.outputs.tag }}")
+          done
+
+      # Last, so the wrapper never resolves to platform packages that are not
+      # on the registry yet.
+      - name: Publish the wrapper
+        run: |
+          set -euo pipefail
+          cp LICENSE README.md npm/slack-mcp-server/
+          name=$(node -p "require('./npm/slack-mcp-server/package.json').name")
+          if npm view "$name@${{ steps.meta.outputs.version }}" version >/dev/null 2>&1; then
+            echo "$name@${{ steps.meta.outputs.version }} already published — nothing to do."
+            exit 0
+          fi
+          cd npm/slack-mcp-server
+          npm publish --provenance --access public --tag "${{ steps.meta.outputs.tag }}"
+
+      - name: Confirm the packages carry provenance
+        run: |
+          name=$(node -p "require('./npm/slack-mcp-server/package.json').name")
+          npm view "$name@${{ steps.meta.outputs.version }}" dist.attestations || \
+            echo "No attestation reported yet; the registry can lag a moment."
+
+  mcp-registry:
+    name: Publish to the MCP Registry
+    runs-on: ubuntu-latest
+    # server.json advertises the npm package AT THIS VERSION, so publishing the
+    # registry entry first points people at a tarball that does not exist.
+    # `needs` is the ordering; it is not decoration.
+    needs: publish
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Build all platforms
-        run: make build-all-platforms
-
-      - name: Copy binaries to npm packages
-        run: make npm-copy-binaries
-
-      - name: Determine version and npm tag
-        id: meta
-        run: |
-          VERSION=$(git describe --tags --always | sed 's/^v//' | cut -d- -f1)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-          if echo "$VERSION" | grep -qE 'alpha|beta|rc'; then
-            TAG=$(echo "$VERSION" | grep -oE 'alpha|beta|rc')
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set version in packages
-        run: make npm-set-version NPM_VERSION=${{ steps.meta.outputs.version }}
-
-      - name: Publish platform packages
+      # Pinned deliberately. This runs on tag push, where a surprise upstream
+      # change breaks a release at the worst possible moment and there is no
+      # green build to compare against. Bump it on purpose.
+      - name: Install mcp-publisher
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          MCP_PUBLISHER_VERSION: "1.8.1"
         run: |
-          for dir in npm/slack-mcp-server-*/; do
-            echo "Publishing $(basename $dir)..."
-            cd "$dir"
-            npm publish --access public --tag ${{ steps.meta.outputs.tag }}
-            cd ../..
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          tar -xzf mcp-publisher.tar.gz mcp-publisher
+          ./mcp-publisher --version
+
+      - name: Check server.json agrees with the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SERVER_VERSION=$(node -p "require('./server.json').version")
+          PKG_VERSION=$(node -p "require('./server.json').packages[0].version")
+          fail=0
+          [ "$SERVER_VERSION" = "$VERSION" ] || { echo "server.json version is $SERVER_VERSION, tag says $VERSION"; fail=1; }
+          [ "$PKG_VERSION" = "$VERSION" ] || { echo "server.json packages[0].version is $PKG_VERSION, tag says $VERSION"; fail=1; }
+          [ "$fail" = 0 ] || { echo "Run 'make version-sync VERSION=$VERSION' and commit the result."; exit 1; }
+          echo "server.json and its npm package both say $VERSION"
+
+      # No secret. The registry validates the token's issuer and audience, then
+      # grants io.github.<repository_owner>/* from the repository_owner claim —
+      # which means it needs no registry-side configuration, and equally offers
+      # no registry-side protection if this repository's owner ever changes.
+      - name: Authenticate by GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to the MCP Registry
+        run: |
+          set -euo pipefail
+          NAME=$(node -p "require('./server.json').name")
+          VERSION="${GITHUB_REF_NAME#v}"
+          published=$(curl -fsSL "https://registry.modelcontextprotocol.io/v0/servers?search=${NAME}&limit=100" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+                const j=JSON.parse(s);
+                const vs=(j.servers||[]).map(x=>x.version||(x.server&&x.server.version)).filter(Boolean);
+                console.log(vs.join(" "));
+              })' || echo "")
+          echo "already on the registry: ${published:-<none>}"
+          for v in $published; do
+            if [ "$v" = "$VERSION" ]; then
+              echo "$NAME $VERSION is already published — nothing to do."
+              exit 0
+            fi
           done
-
-      - name: Publish wrapper package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          cp LICENSE npm/slack-mcp-server/
-          cd npm/slack-mcp-server
-          npm publish --access public --tag ${{ steps.meta.outputs.tag }}
+          ./mcp-publisher publish server.json
