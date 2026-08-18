@@ -21,6 +21,12 @@ NPM_PKG_PREFIX = slack-mcp-server
 OSES = darwin linux windows
 ARCHS = amd64 arm64
 
+# Every file in the repo that records the release version. Listed explicitly
+# rather than globbed, so the untracked npm/slack-mcp-* directories left over
+# from the package rename cannot be swept into a release commit.
+NPM_PKG_DIRS = $(NPM_PKG_PREFIX) $(foreach os,$(OSES),$(foreach arch,$(ARCHS),$(NPM_PKG_PREFIX)-$(os)-$(arch)))
+VERSION_FILES = mcpb/manifest.json server.json $(foreach d,$(NPM_PKG_DIRS),npm/$(d)/package.json)
+
 CLEAN_TARGETS :=
 CLEAN_TARGETS += '$(BINARY_NAME)'
 CLEAN_TARGETS += $(foreach os,$(OSES),$(foreach arch,$(ARCHS),./build/$(BINARY_NAME)-$(os)-$(arch)$(if $(findstring windows,$(os)),.exe,)))
@@ -120,10 +126,58 @@ mcpb-all: build-all-platforms ## Build .mcpb for all platforms
 		$(MAKE) mcpb PLATFORM=$$plat; \
 	done
 
+.PHONY: version-sync
+version-sync: ## Write VERSION into every version source. Usage: make version-sync VERSION=1.4.0
+	@if [ -z "$(VERSION)" ]; then echo "VERSION not set. Usage: make version-sync VERSION=X.Y.Z"; exit 1; fi
+	@jq '.version = "$(VERSION)"' mcpb/manifest.json > mcpb/manifest.json.tmp && mv mcpb/manifest.json.tmp mcpb/manifest.json
+	@# server.json carries the version twice — once for the server entry and once
+	@# for the npm package it points at. A registry entry naming a tarball that
+	@# does not exist is not caught by anything on the npm side.
+	@jq '.version = "$(VERSION)" | .packages[0].version = "$(VERSION)"' server.json > server.json.tmp && mv server.json.tmp server.json
+	@$(MAKE) --no-print-directory npm-set-version NPM_VERSION=$(VERSION)
+	@echo "Synced $(VERSION) into $(words $(VERSION_FILES)) files"
+
+.PHONY: version-check
+version-check: ## Assert every version source agrees. Usage: make version-check VERSION=1.4.0
+	@if [ -z "$(VERSION)" ]; then echo "VERSION not set. Usage: make version-check VERSION=X.Y.Z"; exit 1; fi
+	@fail=0; \
+	check() { \
+	  got=$$(jq -r "$$2" "$$1"); \
+	  if [ "$$got" != "$(VERSION)" ]; then \
+	    echo "  $$1 ($$2) is $$got, want $(VERSION)"; fail=1; \
+	  fi; \
+	}; \
+	check mcpb/manifest.json .version; \
+	check server.json .version; \
+	check server.json '.packages[0].version'; \
+	for d in $(NPM_PKG_DIRS); do check "npm/$$d/package.json" .version; done; \
+	for dep in $$(jq -r '.optionalDependencies | keys[]' npm/$(NPM_PKG_PREFIX)/package.json); do \
+	  got=$$(jq -r ".optionalDependencies[\"$$dep\"]" npm/$(NPM_PKG_PREFIX)/package.json); \
+	  if [ "$$got" != "$(VERSION)" ]; then \
+	    echo "  npm/$(NPM_PKG_PREFIX)/package.json optionalDependencies.$$dep is $$got, want $(VERSION)"; fail=1; \
+	  fi; \
+	done; \
+	if [ "$$fail" != 0 ]; then \
+	  echo "Version sources disagree. Run 'make version-sync VERSION=$(VERSION)' and commit the result."; exit 1; \
+	fi; \
+	echo "All version sources agree on $(VERSION)"
+
 .PHONY: release
-release: ## Create release tag. Usage: make tag TAG=v1.2.3
+release: ## Sync versions, commit, tag, and push. Usage: make release TAG=v1.2.3
 	@if [ -z "$(TAG)" ]; then \
-	  echo "Usage: make tag TAG=vX.Y.Z"; exit 1; \
+	  echo "Usage: make release TAG=vX.Y.Z"; exit 1; \
 	fi
+	@case "$(TAG)" in v*.*.*) ;; *) echo "TAG must look like vX.Y.Z, got $(TAG)"; exit 1;; esac
+	@if [ -n "$$(git status --porcelain -- $(VERSION_FILES))" ]; then \
+	  echo "Version files have uncommitted changes; commit or stash them first."; exit 1; \
+	fi
+	@# Sync before tagging, so the tagged tree records the version it ships as.
+	@# Publishing previously read the version from git describe alone, which let
+	@# the checked-in manifests drift to 1.2.0 while releases went out as 1.4.0.
+	$(MAKE) --no-print-directory version-sync VERSION=$(TAG:v%=%)
+	$(MAKE) --no-print-directory version-check VERSION=$(TAG:v%=%)
+	git add $(VERSION_FILES)
+	git commit -m "chore(release): $(TAG)"
 	git tag -a "$(TAG)" -m "Release $(TAG)"
+	git push origin HEAD
 	git push origin "$(TAG)"

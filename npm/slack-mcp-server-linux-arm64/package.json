@@ -1,6 +1,6 @@
 {
   "name": "@aaronsb/slack-mcp-linux-arm64",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "Platform binary for @aaronsb/slack-mcp (linux-arm64)",
   "os": [
     "linux"

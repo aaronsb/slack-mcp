@@ -1,6 +1,6 @@
 {
   "name": "@aaronsb/slack-mcp-darwin-arm64",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "Platform binary for @aaronsb/slack-mcp (darwin-arm64)",
   "os": [
     "darwin"
