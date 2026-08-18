@@ -11,25 +11,29 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: "24"
 
       - name: Install mcpb CLI
         run: npm install -g @anthropic-ai/mcpb
 
-      - name: Set version in mcpb manifest
-        run: |
-          VERSION=$(git describe --tags --always | sed 's/^v//' | cut -d- -f1)
-          jq --arg v "$VERSION" '.version = $v' mcpb/manifest.json > mcpb/tmp.json && mv mcpb/tmp.json mcpb/manifest.json
+      # This used to rewrite mcpb/manifest.json from git describe at build
+      # time, which is how the checked-in manifest sat at 1.2.0 through releases
+      # that shipped as 1.4.0 — CI papered over the drift on every run, so
+      # nothing ever surfaced it. `make release` writes the version and commits
+      # it now, so the tagged tree already records what it ships as, and this
+      # asserts that rather than silently correcting it.
+      - name: Check the tag matches every version source
+        run: make version-check VERSION="${GITHUB_REF_NAME#v}"
 
       - name: Build all platforms
         run: make build-all-platforms
