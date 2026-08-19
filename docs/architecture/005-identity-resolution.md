@@ -43,6 +43,10 @@ if len(ap.users) == 0 {
 line starts `go ap.backgroundBackfill(ctx)` for channels; users have no equivalent. Anyone who
 joins the workspace after the first run is invisible until the cache file is deleted by hand.
 
+No cache in the codebase has age awareness. There is no TTL, no `fetchedAt`, and no
+revalidation path; `backfillDone` is a one-shot flag. Freshness is not a concept the storage
+layer can currently express.
+
 ### The server does not know who it is
 
 `AuthTest()` is called at `check_unreads.go:78`, `mentions_real.go:56`, and
@@ -171,11 +175,38 @@ and an identifier that misses the cache belongs to someone the agent is encounte
 3. The next sight of that person resolves from cache.
 
 The cache converges on the people who appear in the human's actual conversations, and
-`unresolved` decays toward empty without a directory sweep. A slow background revalidation
-covers profile drift for people already cached.
+`unresolved` decays toward empty without a directory sweep.
 
-This ADR decides the users cache only. Cache lifecycle as a general contract — channels,
-watermark, the XDG store — remains undecided.
+### Drift is repaired lazily, per entry
+
+Repair-from-traffic closes absence. It cannot close **drift** — a rename, a deactivation, or a
+title change on someone already cached produces no miss, so it triggers no repair.
+
+Each cached record carries `fetchedAt`. On read the record is served regardless of age, and an
+entry older than **24 hours** is queued for a background `users.info`. The queue is bounded;
+overflow is dropped rather than backing up.
+
+Revalidation therefore reaches whoever is being rendered and no one else. The ring model falls
+out of the access pattern rather than requiring separate bookkeeping, and the thousands of
+directory entries nobody names are never refetched.
+
+Twenty-four hours is chosen so that a working day costs nothing and a rename resolves by the
+next one.
+
+### A present cache is used immediately
+
+`if len(ap.users) == 0` is replaced. A cache on disk is loaded and served at once, and a
+staleness check runs in the background — the two-phase pattern `loadMemberChannels` and
+`backgroundBackfill` already apply to channels, applied to users.
+
+A full directory refetch runs only on an explicit trigger: setup, or a cache file older than
+seven days at startup. Neither blocks.
+
+### Scope
+
+This ADR decides the users cache only. Cache lifecycle as a general contract — channels, the
+watermark, and the XDG store — remains undecided, and the `fetchedAt` convention here is a
+candidate shape for it rather than a decision on its behalf.
 
 ### Session identity is resolved once and held
 
@@ -209,8 +240,10 @@ assumption.
 - `@` is deterministic and network-free, so its ladder is unit-testable against a fixture map.
 - The wrong-person send is closed off structurally rather than by caution.
 - `list-users` stops advertising an email match it does not perform.
-- Cache freshness costs one `users.info` per newly-encountered person instead of a directory
-  sweep.
+- Cache freshness costs one `users.info` per newly-encountered or stale-on-read person
+  instead of a directory sweep.
+- Startup stops depending on an empty cache to fetch anything, so a stale cache degrades
+  gradually rather than permanently.
 
 ### Negative
 
@@ -219,14 +252,18 @@ assumption.
 - The `@` ladder has four outcomes that every calling path must handle, against one today.
 - Ring membership is invisible to the user. Why `@dana` resolved on one call and returned
   candidates on the next is explicable only through the `seen` field.
+- `fetchedAt` is a schema change to the users cache file. Records written by earlier versions
+  carry no timestamp and must be treated as stale on first load.
 
 ### Risks
 
 - **Display-name collisions inside ring 1.** Two encountered people sharing a display name
   defeat recency ranking. The candidate list bounds the damage; step 1's handle path is the
   escape.
-- **Stale profiles.** Repair-from-traffic fixes absence, not drift. Someone who changes their
-  display name renders under the old one until background revalidation reaches them.
+- **Stale profiles.** A display name change renders under the old name until the entry's
+  24-hour TTL expires and revalidation reaches it. Bounded by the TTL rather than permanent.
+- **Queue starvation.** A briefing touching hundreds of stale entries at once overflows the
+  bounded revalidation queue, and the dropped entries stay stale until they are read again.
 - **Encounter history as a tracking surface.** The watermark gains a record of who the agent
   has seen. It is local, under XDG, and subject to the same handling as the caches beside it.
 
