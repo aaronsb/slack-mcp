@@ -43,15 +43,21 @@ if len(ap.users) == 0 {
 line starts `go ap.backgroundBackfill(ctx)` for channels; users have no equivalent. Anyone who
 joins the workspace after the first run is invisible until the cache file is deleted by hand.
 
-No cache in the codebase has age awareness. There is no TTL, no `fetchedAt`, and no
-revalidation path; `backfillDone` is a one-shot flag. Freshness is not a concept the storage
-layer can currently express.
+`cache.Store` exposes `Age(filename)`, and nothing calls it. There is no per-entry timestamp,
+no TTL, and no revalidation path; `backfillDone` is a one-shot flag. Freshness exists as a
+file-granularity primitive that no cache consults.
 
-### The server does not know who it is
+### The server knows who it is and never says so
 
-`AuthTest()` is called at `check_unreads.go:78`, `mentions_real.go:56`, and
-`check_unreads_real.go:72`. Each call builds a self-mention pattern and discards the result.
-The authed identity is never held, so no rendering path can mark a mention as the user's own.
+`captureIdentity` at `api.go:178` calls `AuthTestContext` once and holds the result;
+`ProvideIdentity` at `api.go:550` returns a populated `Identity` carrying `UserID`, `Username`,
+`DisplayName`, `Email`, and `Team`. `poll` and `ack` already consume it to key the watermark.
+
+The identity is held and unused where it matters. No rendering path reads it, so no mention can
+be marked as the user's own, and no tool exposes it, so the agent cannot ask. Meanwhile
+`check_unreads.go:78`, `mentions_real.go:56`, and `check_unreads_real.go:72` each call
+`AuthTest` again and discard the result — redundant calls inside the three tools ADR-003
+retires.
 
 ### What this cost in use
 
@@ -208,10 +214,11 @@ This ADR decides the users cache only. Cache lifecycle as a general contract —
 watermark, and the XDG store — remains undecided, and the `fetchedAt` convention here is a
 candidate shape for it rather than a decision on its behalf.
 
-### Session identity is resolved once and held
+### Session identity is rendered and exposed
 
-`AuthTest` runs once in the provider and its result is held, rather than fetched and discarded
-at three call sites. ADR-004's `(you)` marking reads it.
+`ProvideIdentity` already holds what is needed. ADR-004's `(you)` marking reads it on the
+render path, and it becomes answerable to the agent rather than internal-only. The redundant
+`AuthTest` calls disappear with the tools that make them.
 
 ### No new tool
 
@@ -235,7 +242,8 @@ assumption.
 
 ### Positive
 
-- "Is this me?" is answerable from cached state with no API call.
+- "Is this me?" is answerable from cached state with no API call, by wiring an identity the
+  provider already captures.
 - A recent joiner is reachable by email or search rather than permanently invisible.
 - `@` is deterministic and network-free, so its ladder is unit-testable against a fixture map.
 - The wrong-person send is closed off structurally rather than by caution.
