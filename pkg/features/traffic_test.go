@@ -29,8 +29,9 @@ func TestGetContextObservesEncounters(t *testing.T) {
 		}
 	})
 
+	ap := srv.Provider(t)
 	res, err := features.GetContext.Handler(context.Background(), map[string]any{
-		"_provider": srv.Provider(t),
+		"_provider": ap,
 		"channel":   "eng",
 	})
 	if err != nil || !res.Success {
@@ -70,9 +71,11 @@ func TestGetContextObservesEncounters(t *testing.T) {
 		t.Fatalf("missing encounters: self=%v other=%v", sawSelf, sawOther)
 	}
 
-	// The same read again appends nothing — the buckets are already seen.
+	// The same read on the same provider appends nothing — the buckets are
+	// already seen. (A fresh provider would be dropped by the writer
+	// election instead; per-bucket dedup itself is covered in pkg/estate.)
 	if _, err := features.GetContext.Handler(context.Background(), map[string]any{
-		"_provider": srv.Provider(t),
+		"_provider": ap,
 		"channel":   "eng",
 	}); err != nil {
 		t.Fatalf("second read: %v", err)

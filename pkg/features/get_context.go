@@ -119,15 +119,19 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 				}, nil
 			}
 
-			afterMsgs, _ := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
+			afterMsgs, afterErr := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
 				ChannelID: channelID,
 				Oldest:    messageTs,
 				Limit:     count / 2,
 				Inclusive: false,
 			})
 
-			// Combine: afterMsgs (newer) + beforeMsgs (older), both newest-first
-			messages = append(afterMsgs.Messages, beforeMsgs.Messages...)
+			// Combine: afterMsgs (newer) + beforeMsgs (older), both newest-first.
+			// The after fetch is best-effort; on error the before half stands alone.
+			messages = beforeMsgs.Messages
+			if afterErr == nil && afterMsgs != nil {
+				messages = append(afterMsgs.Messages, beforeMsgs.Messages...)
+			}
 		} else {
 			// Just get recent messages
 			history, err := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{

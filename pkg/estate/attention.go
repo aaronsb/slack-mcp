@@ -132,9 +132,9 @@ func OpenAttention(teamID, scope string, now time.Time) (*AttentionStore, error)
 }
 
 // replay loads the file, folding only events inside the window and under
-// the backstop. It returns the kept events in file order and whether the
-// rewrite pass has anything to drop.
-func (s *AttentionStore) replay(now time.Time) ([]attnEvent, bool, error) {
+// the backstop. It returns the kept lines verbatim, in file order, and
+// whether the rewrite pass has anything to drop.
+func (s *AttentionStore) replay(now time.Time) ([][]byte, bool, error) {
 	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
 		return nil, false, nil
@@ -144,7 +144,8 @@ func (s *AttentionStore) replay(now time.Time) ([]attnEvent, bool, error) {
 	}
 
 	cutoff := now.Add(-attentionWindow).UTC().Format("2006-01-02")
-	var kept []attnEvent
+	var kept [][]byte
+	var folds []attnEvent
 	dropped := false
 
 	for len(data) > 0 {
@@ -170,30 +171,43 @@ func (s *AttentionStore) replay(now time.Time) ([]attnEvent, bool, error) {
 			return nil, false, fmt.Errorf("estate: damaged attention line: %w", err)
 		}
 		if e.V > schemaVersion || e.Kind != "encounter" {
-			// Unknown events survive compaction unfolded — forward compat.
-			kept = append(kept, e)
+			// Unknown events survive compaction unfolded and byte-for-byte,
+			// so a v2 writer's extra fields are not stripped by a v1
+			// compaction pass.
+			kept = append(kept, line)
 			continue
 		}
 		if e.Day < cutoff {
 			dropped = true
 			continue
 		}
-		kept = append(kept, e)
+		kept = append(kept, line)
+		folds = append(folds, e)
 	}
 
 	if over := len(kept) - attentionBackstop; over > 0 {
 		kept = kept[over:]
 		dropped = true
+		if fo := len(folds) - attentionBackstop; fo > 0 {
+			folds = folds[fo:]
+		}
 	}
 
-	for i := range kept {
-		s.fold(&kept[i])
+	for i := range folds {
+		s.fold(&folds[i])
 	}
 	return kept, dropped, nil
 }
 
+// fold applies one encounter to the in-memory state. Idempotent: a
+// duplicate line in the file — or a re-observed bucket — folds to nothing,
+// so counts never inflate.
 func (s *AttentionStore) fold(e *attnEvent) {
-	s.seen[encounterKey(e.User, e.Conv, e.Day, e.Hour)] = struct{}{}
+	k := encounterKey(e.User, e.Conv, e.Day, e.Hour)
+	if _, dup := s.seen[k]; dup {
+		return
+	}
+	s.seen[k] = struct{}{}
 	convs, ok := s.byUser[e.User]
 	if !ok {
 		convs = map[string][]Encounter{}
@@ -211,9 +225,9 @@ func encounterKey(user, conv, day string, hour *int) string {
 	return k
 }
 
-// rewrite replaces the file with the kept events, atomically via a temp
+// rewrite replaces the file with the kept lines, atomically via a temp
 // file in the same directory.
-func (s *AttentionStore) rewrite(kept []attnEvent) error {
+func (s *AttentionStore) rewrite(kept [][]byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".attention-*")
 	if err != nil {
 		return fmt.Errorf("estate: compact attention: %w", err)
@@ -224,12 +238,7 @@ func (s *AttentionStore) rewrite(kept []attnEvent) error {
 		return fmt.Errorf("estate: compact attention: %w", err)
 	}
 	var buf bytes.Buffer
-	for i := range kept {
-		line, err := json.Marshal(&kept[i])
-		if err != nil {
-			tmp.Close()
-			return fmt.Errorf("estate: compact attention: %w", err)
-		}
+	for _, line := range kept {
 		buf.Write(line)
 		buf.WriteByte('\n')
 	}
@@ -295,14 +304,20 @@ func (s *AttentionStore) Observe(encounters []Encounter, at time.Time) (int, err
 	cutoff := at.Add(-attentionWindow).UTC().Format("2006-01-02")
 	var buf bytes.Buffer
 	var fresh []attnEvent
+	batch := map[string]struct{}{}
 
 	for _, enc := range encounters {
 		if enc.User == "" || enc.Conv == "" || enc.Day == "" || enc.Day < cutoff {
 			continue
 		}
-		if _, dup := s.seen[encounterKey(enc.User, enc.Conv, enc.Day, enc.Hour)]; dup {
+		k := encounterKey(enc.User, enc.Conv, enc.Day, enc.Hour)
+		if _, dup := s.seen[k]; dup {
 			continue
 		}
+		if _, dup := batch[k]; dup {
+			continue
+		}
+		batch[k] = struct{}{}
 		e := attnEvent{
 			V: schemaVersion, At: at.UTC(), Src: SourceTraffic, Kind: "encounter",
 			User: enc.User, Conv: enc.Conv, Day: enc.Day, Hour: enc.Hour,
@@ -314,28 +329,23 @@ func (s *AttentionStore) Observe(encounters []Encounter, at time.Time) (int, err
 		buf.Write(line)
 		buf.WriteByte('\n')
 		fresh = append(fresh, e)
-		// Mark seen immediately so duplicates inside one batch collapse.
-		s.seen[encounterKey(enc.User, enc.Conv, enc.Day, enc.Hour)] = struct{}{}
 	}
 
 	if len(fresh) == 0 {
 		return 0, nil
 	}
+	// The seen-set commits only after the write lands: a failed append
+	// leaves the buckets unrecorded and recordable, not silently burned.
 	if _, err := s.file.Write(buf.Bytes()); err != nil {
 		return 0, fmt.Errorf("estate: append encounters: %w", err)
 	}
+	// The lines are in the file, so the fold applies even when the sync
+	// fails — otherwise the fold runs behind its own ledger until reboot.
+	for i := range fresh {
+		s.fold(&fresh[i])
+	}
 	if err := s.file.Sync(); err != nil {
 		return len(fresh), fmt.Errorf("estate: sync attention: %w", err)
-	}
-	for i := range fresh {
-		e := &fresh[i]
-		convs, ok := s.byUser[e.User]
-		if !ok {
-			convs = map[string][]Encounter{}
-			s.byUser[e.User] = convs
-		}
-		convs[e.Conv] = append(convs[e.Conv], Encounter{User: e.User, Conv: e.Conv, Day: e.Day, Hour: e.Hour})
-		s.events++
 	}
 	return len(fresh), nil
 }
@@ -353,25 +363,20 @@ func (s *AttentionStore) Encounters(user string) map[string][]Encounter {
 	for conv, encs := range convs {
 		cp := make([]Encounter, len(encs))
 		copy(cp, encs)
-		sort.Slice(cp, func(i, j int) bool { return cp[i].Day < cp[j].Day })
+		sort.Slice(cp, func(i, j int) bool {
+			if cp[i].Day != cp[j].Day {
+				return cp[i].Day < cp[j].Day
+			}
+			hi, hj := -1, -1
+			if cp[i].Hour != nil {
+				hi = *cp[i].Hour
+			}
+			if cp[j].Hour != nil {
+				hj = *cp[j].Hour
+			}
+			return hi < hj
+		})
 		out[conv] = cp
-	}
-	return out
-}
-
-// AllEncounters returns a snapshot copy of every user's encounters.
-func (s *AttentionStore) AllEncounters() map[string]map[string][]Encounter {
-	s.mu.RLock()
-	users := make([]string, 0, len(s.byUser))
-	for u := range s.byUser {
-		users = append(users, u)
-	}
-	s.mu.RUnlock()
-	out := make(map[string]map[string][]Encounter, len(users))
-	for _, u := range users {
-		if encs := s.Encounters(u); encs != nil {
-			out[u] = encs
-		}
 	}
 	return out
 }
