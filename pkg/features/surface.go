@@ -164,19 +164,24 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 		if strings.HasPrefix(target, "@") {
 			// catch-up's resolver speaks channels; people resolve here,
 			// through the ladder, to their DM conversation.
-			ap, _ := params["_provider"].(*provider.ApiProvider)
+			ap, ok := params["_provider"].(*provider.ApiProvider)
+			if !ok {
+				return &FeatureResult{Success: false, Message: "Internal error: provider not available"}, nil
+			}
 			res := ap.ResolvePerson(target)
 			if !res.Resolved {
 				out := &FeatureResult{Success: true, Message: fmt.Sprintf("Could not resolve %q (%s)", target, res.Reason)}
 				out.Data = map[string]interface{}{"view": &personViewData{Miss: &res}}
 				out.RenderAs = "estate"
+				out.Echo = echoLine("messages", "target='"+target+"' since="+since, params, "limit", "cursor")
 				return out, nil
 			}
 			dm := dmChannelFor(ap, res.UserID)
 			if dm == "" {
 				return &FeatureResult{
-					Success: false,
-					Message: fmt.Sprintf("No DM conversation with %s is in the cache yet.", res.DisplayName),
+					Success:  false,
+					Message:  fmt.Sprintf("No DM conversation with %s is in the cache yet.", res.DisplayName),
+					Guidance: fmt.Sprintf("Read it directly: messages target='%s' — or search their traffic: messages query='from:@%s'", target, res.Handle),
 				}, nil
 			}
 			channel = dm

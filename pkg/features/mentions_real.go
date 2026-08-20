@@ -103,10 +103,8 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 			candidates++
 		}
 	}
-	stoppedEarly := false
 	for _, channel := range channels {
 		if totalScanned >= 10 && len(mentions) >= limit {
-			stoppedEarly = true
 			break // Stop if we have enough mentions
 		}
 
@@ -230,8 +228,8 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 	} else if len(mentions) == 0 {
 		result.Guidance = "✅ No pending mentions found"
 	}
-	if stoppedEarly && totalScanned < candidates {
-		note := fmt.Sprintf("Coverage: the page filled after %d of %d channels — a mention in an unscanned channel is not shown. Complete sweep: messages query='<@%s>' timeframe='%s'",
+	if totalScanned < candidates {
+		note := fmt.Sprintf("Coverage: %d of %d member channels scanned (page filled, or channels unreadable) — a mention in an unscanned channel is not shown. Complete sweep: messages query='<@%s>' timeframe='%s'",
 			totalScanned, candidates, currentUserID, timeframe)
 		if result.Guidance != "" {
 			result.Guidance += "\n" + note
@@ -243,11 +241,6 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 	result.NextActions = []string{
 		"Read a full thread: messages target='<channel>' around='<ts>'",
 		"Use messages target='#channel' since='1d' to see activity in specific channels",
-	}
-
-	if totalScanned < len(channels) {
-		result.NextActions = append(result.NextActions,
-			fmt.Sprintf("Note: Scanned %d of %d channels. Some mentions might be in unscanned channels.", totalScanned, len(channels)))
 	}
 
 	return result, nil

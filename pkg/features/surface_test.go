@@ -178,3 +178,16 @@ func TestLadderResolvesMe(t *testing.T) {
 		t.Fatalf("thin-coverage line missing:\n%s", out)
 	}
 }
+
+func TestMessagesSinceMissRendersCandidates(t *testing.T) {
+	srv := slacktest.New(t)
+	ap := bootedProvider(t, srv)
+
+	out := runTool(t, features.Messages, ap, map[string]any{"target": "@nosuchperson", "since": "1d"})
+	if !strings.Contains(out, "Could not resolve") {
+		t.Fatalf("miss not rendered:\n%s", out)
+	}
+	if !strings.Contains(out, "`messages target='@nosuchperson' since=1d`") {
+		t.Fatalf("miss result lost the echo:\n%s", out)
+	}
+}

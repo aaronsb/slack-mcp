@@ -34,7 +34,7 @@ type PersonResolution struct {
 	Handle      string
 	UserID      string
 	DisplayName string
-	Via         string // "user-id" | "exact-handle" | "unique-name" | "unique-match"
+	Via         string // "self" | "user-id" | "exact-handle" | "unique-name" | "unique-match"
 	// Reason is set when not Resolved: "empty", "ambiguous", "tombstoned",
 	// "never_seen", or "unswept". Candidates carry the near-matches for
 	// ambiguous and tombstoned outcomes.

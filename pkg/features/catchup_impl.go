@@ -68,7 +68,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	if channelID == cleanName && !strings.HasPrefix(channelID, "C") && !strings.HasPrefix(channelID, "D") && !strings.HasPrefix(channelID, "G") {
 		return &FeatureResult{
 			Success: false,
-			Message: fmt.Sprintf("Channel '%s' not found. Use estate view='channels' to see available channels.", channel),
+			Message: fmt.Sprintf("Channel '%s' not found. Use estate view='channels' to see available channels — for a person, use target='@name'.", channel),
 		}, nil
 	}
 
