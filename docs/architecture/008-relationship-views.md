@@ -74,9 +74,21 @@ unread scans — append encounter events to the attention ledger:
 ```
 
 No message text, ever. Append on change bounds volume: one encounter per
-user per conversation per day, with the fold's `lastSeen` scalar absorbing
-repeats (ADR-006's rule). The day bucket is the activity resolution;
-strips are maximal bucket runs. The attention ledger carries ADR-006's
+user per conversation per bucket, with the fold's `lastSeen` scalar
+absorbing repeats (ADR-006's rule). Strips are maximal bucket runs.
+
+**Resolution is asymmetric: the session's own user buckets by hour,
+everyone else by day.** Both pressures point the same way. Volume:
+hour buckets for everyone press the fifty-thousand backstop inside the
+ninety-day window, and the backstop would silently shorten the horizon;
+hour buckets for one user are dozens of events a day. Privacy: hour-level
+strips on colleagues is movement tracking, while "active in #eng Tuesday"
+is what the initiative and handoff joins need; the one person whose hours
+the ledger can hold without surveilling is the operator. Self-cadence
+questions — how many conversations overlapped within an hour, the
+parallelism distribution of a week — become fold math on the person view,
+and they must say "as observed": strips record what the agent saw, so
+their completeness follows the agent's own polling habit. The attention ledger carries ADR-006's
 retention unchanged: ninety days, fifty-thousand-event backstop, boot-pass
 compaction, one file per workspace and scope.
 
@@ -163,8 +175,8 @@ ADR-003 decided grows by exactly one read.
 - A twelfth tool, against #49's cut to eleven.
 - The attention ledger is a second ledger file with its own compaction —
   the machinery ADR-006 specified, now actually built and tested.
-- Day-bucketed encounters cap activity resolution at a day; finer strips
-  need finer buckets and proportionally more events.
+- Day-bucketed encounters cap colleague-activity resolution at a day by
+  design; only the operator's own strips carry hours.
 - View definitions are product judgments; a view nobody uses is surface
   cost forever.
 
