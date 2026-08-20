@@ -60,6 +60,18 @@ func (ap *ApiProvider) ResolvePerson(input string) PersonResolution {
 
 	lower := strings.ToLower(name)
 
+	// The operator's own identity resolves by name: 'me' answers the
+	// whoami question through the same ladder everything else uses.
+	if lower == "me" || lower == "self" || lower == "myself" {
+		if ap.selfUserID != "" {
+			if u, ok := users[ap.selfUserID]; ok {
+				return resolvedFrom(res, u, "self")
+			}
+		}
+		res.Reason = "unswept"
+		return res
+	}
+
 	if looksLikeUserID(name) {
 		if u, ok := users[name]; ok && !u.Deleted {
 			return resolvedFrom(res, u, "user-id")

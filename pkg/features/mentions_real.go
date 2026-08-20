@@ -94,9 +94,19 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 	renderer := newMessageRenderer(provider)
 	mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 
-	// Limit channels to scan based on activity
+	// The scan stops once the page is full, so completeness is stated in
+	// the result rather than implied (#24: a mention in an unscanned
+	// channel is otherwise invisibly missing).
+	candidates := 0
+	for _, ch := range channels {
+		if !ch.IsArchived {
+			candidates++
+		}
+	}
+	stoppedEarly := false
 	for _, channel := range channels {
 		if totalScanned >= 10 && len(mentions) >= limit {
+			stoppedEarly = true
 			break // Stop if we have enough mentions
 		}
 
@@ -208,7 +218,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 				"channelsScanned": totalScanned,
 			},
 		},
-		Message:     fmt.Sprintf("Found %d mentions across %d channels", len(mentions), totalScanned),
+		Message:     fmt.Sprintf("Found %d mentions; scanned %d of %d member channels", len(mentions), totalScanned, candidates),
 		ResultCount: len(mentions),
 	}
 
@@ -219,6 +229,15 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 		result.Guidance = fmt.Sprintf("📋 You have %d mention(s) that need a response", needsResponse)
 	} else if len(mentions) == 0 {
 		result.Guidance = "✅ No pending mentions found"
+	}
+	if stoppedEarly && totalScanned < candidates {
+		note := fmt.Sprintf("Coverage: the page filled after %d of %d channels — a mention in an unscanned channel is not shown. Complete sweep: messages query='<@%s>' timeframe='%s'",
+			totalScanned, candidates, currentUserID, timeframe)
+		if result.Guidance != "" {
+			result.Guidance += "\n" + note
+		} else {
+			result.Guidance = note
+		}
 	}
 
 	result.NextActions = []string{

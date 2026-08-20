@@ -200,6 +200,9 @@ type personViewData struct {
 	Miss         *provider.PersonResolution
 	Handle       string
 	Offset       int
+	// WindowEncounters is how many observed encounters back this view, so
+	// a thin ranking is distinguishable from a quiet person.
+	WindowEncounters int
 }
 
 func personView(ctx context.Context, ap *provider.ApiProvider, person string, days int) *personViewData {
@@ -223,6 +226,9 @@ func personView(ctx context.Context, ap *provider.ApiProvider, person string, da
 	data.Compiled = ensureCoverage(ctx, ap, ids, since, days, 3)
 
 	byConv := windowedByConv(ap.UserEncounters(id), since)
+	for _, encs := range byConv {
+		data.WindowEncounters += len(encs)
+	}
 	for conv, encs := range byConv {
 		data.Footprint = append(data.Footprint, footprintRow{
 			Conv:   conv,

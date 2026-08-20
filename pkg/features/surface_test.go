@@ -9,6 +9,7 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/slacktest"
+	"github.com/slack-go/slack"
 )
 
 // The v2 surface (ADR-009) is thin dispatch over the v1 handlers: these
@@ -138,5 +139,42 @@ func TestV2SurfaceIsExactlyEightTools(t *testing.T) {
 		if f.Name != want[i] {
 			t.Fatalf("tool %d named %q, want %q", i, f.Name, want[i])
 		}
+	}
+}
+
+func TestMessagesSinceResolvesAPerson(t *testing.T) {
+	srv := slacktest.New(t)
+	var dm slack.Channel
+	dm.ID = "D1"
+	dm.IsIM = true
+	dm.User = "U2"
+	srv.SeedChannels(dm)
+	srv.Handle("conversations.history", func(*http.Request) any {
+		return map[string]any{
+			"ok": true, "has_more": false,
+			"messages": []any{slacktest.Message("U2", "lunch?", "1782246200.000000")},
+		}
+	})
+	ap := bootedProvider(t, srv)
+
+	out := runTool(t, features.Messages, ap, map[string]any{"target": "@schen", "since": "1d"})
+	if !strings.Contains(out, "`messages target='@schen' since=1d`") {
+		t.Fatalf("echo missing:\n%s", out)
+	}
+	if strings.Contains(out, "not found") {
+		t.Fatalf("person target failed to resolve to the DM:\n%s", out)
+	}
+}
+
+func TestLadderResolvesMe(t *testing.T) {
+	srv := slacktest.New(t)
+	ap := bootedProvider(t, srv)
+
+	out := estateViewOut(t, ap, map[string]any{"view": "person", "person": "me"})
+	if !strings.Contains(out, "person view — Aaron Bockelie") {
+		t.Fatalf("'me' did not resolve to the session identity:\n%s", out)
+	}
+	if !strings.Contains(out, "observed encounters in the window") {
+		t.Fatalf("thin-coverage line missing:\n%s", out)
 	}
 }

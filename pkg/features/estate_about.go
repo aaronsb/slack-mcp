@@ -214,6 +214,7 @@ func formatPersonView(v *personViewData) string {
 	}
 
 	renderPlaneFooter(&b, v.Coverage, v.Attention, v.Compiled)
+	fmt.Fprintf(&b, "This view rests on %d observed encounters in the window — thin numbers mean barely observed, never quiet.\n", v.WindowEncounters)
 	fmt.Fprintf(&b, "**Next:** whole picture: estate view='about' person='%s' | shared windows: estate view='convergence' people='%s,<other>'", v.Handle, v.Handle)
 	return b.String()
 }

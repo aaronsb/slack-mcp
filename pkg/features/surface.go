@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/aaronsb/slack-mcp/pkg/provider"
 )
 
 // The v2 tool surface (ADR-009): eight tools by the assignment rule — verb
@@ -158,7 +160,28 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 		echo := echoLine("messages", "target='"+target+"' around="+around, params, "limit")
 		return delegate(ctx, GetContext, params, echo)
 	case target != "" && since != "":
-		params["channel"] = target
+		channel := target
+		if strings.HasPrefix(target, "@") {
+			// catch-up's resolver speaks channels; people resolve here,
+			// through the ladder, to their DM conversation.
+			ap, _ := params["_provider"].(*provider.ApiProvider)
+			res := ap.ResolvePerson(target)
+			if !res.Resolved {
+				out := &FeatureResult{Success: true, Message: fmt.Sprintf("Could not resolve %q (%s)", target, res.Reason)}
+				out.Data = map[string]interface{}{"view": &personViewData{Miss: &res}}
+				out.RenderAs = "estate"
+				return out, nil
+			}
+			dm := dmChannelFor(ap, res.UserID)
+			if dm == "" {
+				return &FeatureResult{
+					Success: false,
+					Message: fmt.Sprintf("No DM conversation with %s is in the cache yet.", res.DisplayName),
+				}, nil
+			}
+			channel = dm
+		}
+		params["channel"] = channel
 		echo := echoLine("messages", "target='"+target+"' since="+since, params, "limit", "cursor")
 		return delegate(ctx, CatchUpOnChannel, params, echo)
 	case target != "":
@@ -171,6 +194,16 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 			Message: "messages needs an address: target='<handle|#channel|@person>' (optionally with around=<ts> or since=<window>), or query='<slack search>'",
 		}, nil
 	}
+}
+
+// dmChannelFor finds the cached IM conversation with a user.
+func dmChannelFor(ap *provider.ApiProvider, userID string) string {
+	for _, ch := range ap.GetCachedChannels() {
+		if ch.IsIM && ch.User == userID {
+			return ch.ID
+		}
+	}
+	return ""
 }
 
 // ---- say: contribute content (the one visible write besides mark-read) ----
