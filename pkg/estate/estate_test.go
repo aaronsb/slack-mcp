@@ -520,9 +520,60 @@ func TestFilesArePrivateAndNoStrayFilesRemain(t *testing.T) {
 		t.Fatalf("readdir: %v", err)
 	}
 	for _, e := range entries {
-		if e.Name() != "estate.jsonl" {
+		// estate.lock is the writer-election inode; its existence carries
+		// no state.
+		if e.Name() != "estate.jsonl" && e.Name() != "estate.lock" {
 			t.Fatalf("stray file in ledger dir: %s", e.Name())
 		}
+	}
+}
+
+func TestTheSecondOpenerIsReadOnly(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	writer := open(t)
+	if writer.ReadOnly() {
+		t.Fatalf("first opener did not win the writer lock")
+	}
+	if _, err := writer.ObserveUsers([]slack.User{user("U1", "dana")}, true, estate.SourceSweep, base); err != nil {
+		t.Fatalf("writer observe: %v", err)
+	}
+
+	reader, err := estate.Open(team)
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	defer reader.Close()
+	if !reader.ReadOnly() {
+		t.Fatalf("second opener won a lock the first still holds")
+	}
+
+	// Reads serve the fold as replayed at open; writes refuse.
+	if _, ok := reader.User("U1"); !ok {
+		t.Fatalf("read-only store lost the fold")
+	}
+	if _, err := reader.ObserveUsers([]slack.User{user("U2", "kai")}, false, estate.SourceTraffic, base); err != estate.ErrReadOnly {
+		t.Fatalf("read-only observe returned %v, want ErrReadOnly", err)
+	}
+	if err := reader.RecordSweep(estate.SweepReport{}, base); err != estate.ErrReadOnly {
+		t.Fatalf("read-only sweep record returned %v, want ErrReadOnly", err)
+	}
+}
+
+func TestTheLockIsReleasedOnClose(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	first, err := estate.Open(team)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	second := open(t)
+	if second.ReadOnly() {
+		t.Fatalf("lock not released by close")
 	}
 }
 

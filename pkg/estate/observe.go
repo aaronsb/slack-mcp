@@ -52,6 +52,10 @@ func (s *Store) ObserveUsers(users []slack.User, complete bool, src Source, now 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
+	if s.readOnly {
+		return ObserveResult{}, ErrReadOnly
+	}
+
 	var events []event
 	seen := make(map[string]bool, len(users))
 
@@ -163,6 +167,10 @@ func (s *Store) ObserveChannels(channels []slack.Channel, complete bool, src Sou
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
+	if s.readOnly {
+		return ObserveResult{}, ErrReadOnly
+	}
+
 	var events []event
 	seen := make(map[string]bool, len(channels))
 
@@ -250,6 +258,10 @@ func (s *Store) ObserveChannels(channels []slack.Channel, complete bool, src Sou
 func (s *Store) RecordSweep(rep SweepReport, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+
+	if s.readOnly {
+		return ErrReadOnly
+	}
 
 	appended := rep.Appended
 	durationMs := rep.Duration.Milliseconds()

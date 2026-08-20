@@ -22,6 +22,7 @@ package estate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,7 +31,12 @@ import (
 	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/paths"
+	"github.com/gofrs/flock"
 )
+
+// ErrReadOnly is returned by write operations on a store that did not win
+// the writer lock.
+var ErrReadOnly = errors.New("estate: ledger is read-only (another instance holds the writer lock)")
 
 // Source identifies which observer produced an event. Only completed
 // enumerations (the sweep) may assert absence; the source field keeps the
@@ -53,9 +59,18 @@ const (
 )
 
 // Store is one workspace's estate: the append handle and the fold.
+//
+// Ownership is single-writer, many-reader. Open takes a non-blocking
+// exclusive flock on a lock file beside the ledger; the winner gets the
+// append handle, torn-tail truncation, and (through its owner) the sweep.
+// Every other instance opens read-only: full fold, no writes. The lock is
+// advisory and kernel-held — it dies with the process, so a crash leaves
+// nothing to reclaim, and the lock file's existence carries no meaning.
 type Store struct {
-	path string
-	file *os.File
+	path     string
+	file     *os.File
+	lock     *flock.Flock
+	readOnly bool
 
 	// writeMu serializes the whole observe unit — diff, append, fold
 	// mutation — as one critical section. Two concurrent observers diffing
@@ -88,28 +103,62 @@ func Open(teamID string) (*Store, error) {
 	path := filepath.Join(dir, "estate.jsonl")
 	s := &Store{path: path, fold: newFold()}
 
+	// Writer election: non-blocking exclusive flock, first opener wins.
+	// The kernel releases it when the process dies, so a crash leaves no
+	// stale lock. A failed try — or a filesystem that cannot lock — falls
+	// back to read-only rather than risking two writers.
+	s.lock = flock.New(filepath.Join(dir, "estate.lock"))
+	won, lockErr := s.lock.TryLock()
+	if lockErr != nil || !won {
+		s.lock = nil
+		s.readOnly = true
+	}
+
 	rep, err := replayFile(path, time.Time{}, &s.fold)
 	if err != nil {
+		s.closeLock()
 		return nil, err
-	}
-	if rep.torn {
-		if err := os.Truncate(path, rep.tornOffset); err != nil {
-			return nil, fmt.Errorf("estate: truncate torn tail: %w", err)
-		}
 	}
 	s.lines = rep.lines
 	s.bytes = rep.bytes
 
+	if s.readOnly {
+		// A read-only replay skips a torn tail; only the writer may
+		// truncate, because what looks torn may be the writer's in-flight
+		// batch.
+		return s, nil
+	}
+
+	if rep.torn {
+		if err := os.Truncate(path, rep.tornOffset); err != nil {
+			s.closeLock()
+			return nil, fmt.Errorf("estate: truncate torn tail: %w", err)
+		}
+	}
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
+		s.closeLock()
 		return nil, fmt.Errorf("estate: open ledger: %w", err)
 	}
 	if err := f.Chmod(0o600); err != nil {
 		f.Close()
+		s.closeLock()
 		return nil, fmt.Errorf("estate: chmod ledger: %w", err)
 	}
 	s.file = f
 	return s, nil
+}
+
+// ReadOnly reports whether this store lost the writer election. Reads are
+// served from the boot-time fold; writes return ErrReadOnly.
+func (s *Store) ReadOnly() bool { return s.readOnly }
+
+func (s *Store) closeLock() {
+	if s.lock != nil {
+		_ = s.lock.Unlock()
+		s.lock = nil
+	}
 }
 
 // Close releases the append handle. The fold needs no flush: every appended
@@ -117,6 +166,7 @@ func Open(teamID string) (*Store, error) {
 func (s *Store) Close() error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	defer s.closeLock()
 	if s.file == nil {
 		return nil
 	}
