@@ -16,6 +16,7 @@ var (
 	channelTag = regexp.MustCompile(`<#([CDG][A-Z0-9]+)(?:\|([^>]*))?>`)
 	bangTag    = regexp.MustCompile(`<!(here|channel|everyone)(?:\|@?[^>]*)?>`)
 	groupTag   = regexp.MustCompile(`<!subteam\^([A-Z0-9]+)(?:\|@?([^>]*))?>`)
+	linkTag    = regexp.MustCompile(`<((?:https?://|mailto:|tel:)[^>|]*)(?:\|([^>]*))?>`)
 )
 
 // TagKind names what a tag refers to, for the resolver callback.
@@ -74,5 +75,39 @@ func ResolveTagsReport(s string, resolve func(kind TagKind, id, label string) (s
 		return m
 	})
 	s = bangTag.ReplaceAllString(s, "@$1")
+	s = linkTag.ReplaceAllStringFunc(s, func(m string) string {
+		parts := linkTag.FindStringSubmatch(m)
+		return flattenLink(parts[1], parts[2])
+	})
 	return s, unresolved
+}
+
+// flattenLink renders Slack's <url|label> form. A label that is just the
+// url again — verbatim or elided — loses to the full url; any other label
+// is the author's words and keeps the url beside it.
+func flattenLink(url, label string) string {
+	bare := strings.TrimPrefix(strings.TrimPrefix(url, "mailto:"), "tel:")
+	if label == "" || labelElidesURL(label, bare) {
+		return bare
+	}
+	return label + " (" + bare + ")"
+}
+
+// labelElidesURL reports whether the label is the url in elided form:
+// every fragment between ellipsis markers appears in the url, in order.
+func labelElidesURL(label, url string) bool {
+	l := strings.NewReplacer("[…]", "…", "...", "…").Replace(strings.TrimSpace(label))
+	rest := url
+	for _, frag := range strings.Split(l, "…") {
+		frag = strings.TrimSpace(frag)
+		if frag == "" {
+			continue
+		}
+		i := strings.Index(rest, frag)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(frag):]
+	}
+	return true
 }

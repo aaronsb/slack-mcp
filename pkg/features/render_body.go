@@ -8,6 +8,7 @@ package features
 // happen once, not per message.
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/aaronsb/slack-mcp/pkg/estate"
@@ -28,24 +29,34 @@ func newBodyRenderer(ap *provider.ApiProvider) func(string) string {
 	}
 }
 
+// tagLookupBudget bounds on-demand users.info calls per renderer
+// invocation. Each hit patches the cache and the estate, so an external
+// user costs one call ever; the budget bounds the first encounter with a
+// message that names many strangers at once.
+const tagLookupBudget = 5
+
 // newTagResolver is the one tag-resolution chain both the body renderer
 // and the message normalizer share.
 func newTagResolver(ap *provider.ApiProvider, users map[string]slack.User, selfID string) func(text.TagKind, string, string) (string, bool) {
+	lookups := tagLookupBudget
+	renderUser := func(u slack.User, id string) (string, bool) {
+		name := displayNameFor(u)
+		if id == selfID {
+			return "@" + name + " (you)", true
+		}
+		if u.Deleted {
+			if rec, ok := ap.EstateUser(id); ok && rec.Gone != nil {
+				return fmt.Sprintf("@%s (%s)", name, goneNote(rec.Gone)), true
+			}
+			return "@" + name + " (deactivated)", true
+		}
+		return "@" + name, true
+	}
 	return func(kind text.TagKind, id, label string) (string, bool) {
 		switch kind {
 		case text.TagUser:
 			if u, ok := users[id]; ok {
-				name := displayNameFor(u)
-				if id == selfID {
-					return "@" + name + " (you)", true
-				}
-				if u.Deleted {
-					if rec, ok := ap.EstateUser(id); ok && rec.Gone != nil {
-						return fmt.Sprintf("@%s (%s)", name, goneNote(rec.Gone)), true
-					}
-					return "@" + name + " (deactivated)", true
-				}
-				return "@" + name, true
+				return renderUser(u, id)
 			}
 			if rec, ok := ap.EstateUser(id); ok {
 				name := rec.Props.RealName
@@ -59,6 +70,20 @@ func newTagResolver(ap *provider.ApiProvider, users map[string]slack.User, selfI
 					return fmt.Sprintf("@%s (%s)", name, goneNote(rec.Gone)), true
 				}
 				return "@" + name, true
+			}
+			// Slack Connect externals are visible to users.info and
+			// invisible to users.list, so the bulk caches never learn
+			// them. One on-demand fetch patches the cache and the estate,
+			// and the miss heals for good.
+			if lookups > 0 {
+				lookups--
+				u, err := ap.ResolveUser(context.Background(), id)
+				// A response with no name at all repairs nothing; the raw
+				// tag stays visible for the repair queue.
+				if err == nil && u != nil && displayNameFor(*u) != "" {
+					users[id] = *u
+					return renderUser(*u, id)
+				}
 			}
 			if label != "" {
 				return "@" + label, true
