@@ -35,6 +35,28 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	channels := stringList(params["in"])
 	people := stringList(params["from"])
 
+	// Resolve every person before rendering the query: a guessed handle in
+	// from: makes Slack return an empty result indistinguishable from "this
+	// person said nothing" (ADR-005; the ladder runs on cached state only).
+	resolvedFrom := make([]string, 0, len(people))
+	fromResolutions := make([]map[string]interface{}, 0, len(people))
+	var unresolved []provider.PersonResolution
+	for _, person := range people {
+		r := p.ResolvePerson(person)
+		if !r.Resolved {
+			unresolved = append(unresolved, r)
+			continue
+		}
+		resolvedFrom = append(resolvedFrom, r.Handle)
+		fromResolutions = append(fromResolutions, map[string]interface{}{
+			"input": r.Input, "handle": r.Handle, "via": r.Via,
+		})
+	}
+	if len(unresolved) > 0 {
+		return unresolvedPeopleResult(p, unresolved), nil
+	}
+	people = resolvedFrom
+
 	built, since := buildQuery(p, query, timeframe, channels, people)
 	messages, err := runSearch(ctx, api, built)
 	if err != nil {
@@ -99,6 +121,9 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		"totalMatches":  messages.Total,
 		"returned":      len(results),
 		"complete":      messages.Total <= len(results),
+	}
+	if len(fromResolutions) > 0 {
+		coverage["fromResolved"] = fromResolutions
 	}
 
 	result := &FeatureResult{

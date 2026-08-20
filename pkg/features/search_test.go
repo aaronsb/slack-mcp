@@ -103,14 +103,45 @@ func TestChannelFilterIsActuallyApplied(t *testing.T) {
 	}
 }
 
-func TestPersonFilterIsActuallyApplied(t *testing.T) {
-	_, cap := searchWith(t, map[string]any{
+// A person named any way — display name, real name, fragment — resolves to
+// their actual handle before the query renders (ADR-005). Passing the input
+// through verbatim made Slack return an empty result indistinguishable from
+// "this person said nothing".
+func TestPersonFilterResolvesToTheRealHandle(t *testing.T) {
+	res, cap := searchWith(t, map[string]any{
 		"query": "deploy",
 		"from":  []any{"sarah"},
 	}, []any{aMatch("C1", "1782246118.543969", "deploy rollback")})
 
-	if q := cap.last(); !strings.Contains(q, "from:@sarah") {
-		t.Errorf("query %q carries no from: filter", q)
+	if q := cap.last(); !strings.Contains(q, "from:@schen") {
+		t.Errorf("query %q does not carry the resolved handle", q)
+	}
+	coverage := res.Data.(map[string]any)["coverage"].(map[string]any)
+	resolved, ok := coverage["fromResolved"].([]map[string]any)
+	if !ok || len(resolved) != 1 || resolved[0]["handle"] != "schen" {
+		t.Errorf("coverage does not say how the person resolved: %+v", coverage["fromResolved"])
+	}
+}
+
+// An unresolvable person stops the search before it runs: a doomed from:
+// filter must never masquerade as an empty result.
+func TestAnUnresolvablePersonReturnsInsteadOfSearching(t *testing.T) {
+	res, cap := searchWith(t, map[string]any{
+		"query": "deploy",
+		"from":  []any{"zorptangle"},
+	}, []any{aMatch("C1", "1782246118.543969", "deploy rollback")})
+
+	if cap.count() != 0 {
+		t.Errorf("search ran %d time(s) with an unresolved from:", cap.count())
+	}
+	unresolved, ok := res.Data.(map[string]any)["unresolved"].([]map[string]any)
+	if !ok || len(unresolved) != 1 {
+		t.Fatalf("no unresolved report: %+v", res.Data)
+	}
+	// The test fixture has no completed sweep, so the honest reason is
+	// unswept — absence cannot be asserted.
+	if unresolved[0]["reason"] != "unswept" {
+		t.Errorf("reason = %v, want unswept", unresolved[0]["reason"])
 	}
 }
 

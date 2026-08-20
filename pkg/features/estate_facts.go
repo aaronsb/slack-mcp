@@ -6,6 +6,7 @@ package features
 // block and the dated-fact entries list-users and list-channels carry.
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -106,6 +107,56 @@ func tombstonedUserMatches(ap *provider.ApiProvider, queryLower string) []map[st
 		out = append(out, tombstonedUserEntry(rec))
 	}
 	return out
+}
+
+// unresolvedPeopleResult answers a search whose from: filter named someone
+// the ladder could not resolve. It runs no search — a guessed handle
+// returns an empty result indistinguishable from silence — and instead
+// hands back each miss with its candidates, so the retry needs no extra
+// lookup.
+func unresolvedPeopleResult(ap *provider.ApiProvider, misses []provider.PersonResolution) *FeatureResult {
+	var lines []string
+	data := make([]map[string]interface{}, 0, len(misses))
+	for _, r := range misses {
+		entry := map[string]interface{}{"input": r.Input, "reason": r.Reason}
+		switch r.Reason {
+		case "ambiguous", "tombstoned":
+			entry["candidates"] = r.Candidates
+			var opts []string
+			for _, c := range r.Candidates {
+				opt := fmt.Sprintf("@%s (%s", c.Handle, c.DisplayName)
+				if c.Title != "" {
+					opt += " — " + c.Title
+				}
+				if c.Deleted && len(c.GoneBetween) == 2 {
+					opt += fmt.Sprintf("; %s between %s and %s", c.GoneReason, c.GoneBetween[0], c.GoneBetween[1])
+				}
+				opts = append(opts, opt+")")
+			}
+			label := "matches several people"
+			if r.Reason == "tombstoned" {
+				label = "matches only departed people"
+			}
+			lines = append(lines, fmt.Sprintf("'%s' %s: %s", r.Input, label, strings.Join(opts, ", ")))
+		case "unswept":
+			lines = append(lines, fmt.Sprintf("'%s' matches nobody cached, and no full sweep has completed — they may exist unswept", r.Input))
+		default:
+			lines = append(lines, fmt.Sprintf("'%s' matches nobody in the workspace", r.Input))
+		}
+		data = append(data, entry)
+	}
+
+	return &FeatureResult{
+		Success: true,
+		Message: fmt.Sprintf("Search not run: %d name(s) in from: did not resolve", len(misses)),
+		Data: map[string]interface{}{
+			"unresolved": data,
+			"results":    []map[string]interface{}{},
+			"coverage":   estateCoverage(ap),
+		},
+		Guidance:    strings.Join(lines, "\n"),
+		NextActions: []string{"Retry with a listed handle: search query='...' from=['<handle>']"},
+	}
 }
 
 // tombstonedChannelMatches renders the fold's gone channels matching a
