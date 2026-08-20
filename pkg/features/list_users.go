@@ -160,7 +160,7 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 				Success:  true,
 				Message:  fmt.Sprintf("No users found matching '%s'", query),
 				Data:     data,
-				Guidance: "No full sweep has completed, so absence cannot be asserted — this user may exist unswept. Try a different spelling or a shorter query.",
+				Guidance: "No full sweep yet — this user may exist unseen. Try another spelling, or estate view='people' person='<first name>'.",
 			}, nil
 		}
 

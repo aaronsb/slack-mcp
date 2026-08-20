@@ -229,7 +229,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 		result.Guidance = "✅ No pending mentions found"
 	}
 	if totalScanned < candidates {
-		note := fmt.Sprintf("Coverage: %d of %d member channels scanned (page filled, or channels unreadable) — a mention in an unscanned channel is not shown. Complete sweep: messages query='<@%s>' timeframe='%s'",
+		note := fmt.Sprintf("Scanned %d of %d member channels; unscanned channels may hold mentions. Full sweep: messages query='<@%s>' timeframe='%s'",
 			totalScanned, candidates, currentUserID, timeframe)
 		if result.Guidance != "" {
 			result.Guidance += "\n" + note

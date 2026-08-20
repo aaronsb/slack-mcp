@@ -112,12 +112,12 @@ func renderPlaneFooter(b *strings.Builder, cov provider.EstateCoverageInfo, att 
 		b.WriteString("Coverage: fold executor, 0 Slack calls.\n")
 	}
 	if att.Available && att.Stats.Events > 0 {
-		fmt.Fprintf(b, "Activity plane: %d encounters, %d people, %d conversations (%s → %s), as observed by this agent's reading; the ninety-day window bounds it.\n",
+		fmt.Fprintf(b, "Activity plane: %d encounters, %d people, %d conversations (%s → %s), as observed from reads through this server (90-day window).\n",
 			att.Stats.Events, att.Stats.Users, att.Stats.Convs, att.Stats.FirstDay, att.Stats.LastDay)
 	} else if att.Available {
-		b.WriteString("Activity plane: observing — nothing recorded yet; rankings will sharpen as reads accumulate.\n")
+		b.WriteString("Activity plane: empty — fills as you read.\n")
 	} else {
-		b.WriteString("Activity plane: no attention ledger open — activity claims unavailable.\n")
+		b.WriteString("Activity plane: unavailable (no attention ledger).\n")
 	}
 	if !cov.LastFullSweep.IsZero() {
 		fmt.Fprintf(b, "Estate: %d channels, last full sweep %s.\n", cov.Channels, cov.LastFullSweep.Format("2006-01-02 15:04"))
@@ -214,7 +214,7 @@ func formatPersonView(v *personViewData) string {
 	}
 
 	renderPlaneFooter(&b, v.Coverage, v.Attention, v.Compiled)
-	fmt.Fprintf(&b, "This view rests on %d observed encounters in the window — thin numbers mean barely observed, never quiet.\n", v.WindowEncounters)
+	fmt.Fprintf(&b, "Backed by %d observed encounters in the window; a low count is thin observation.\n", v.WindowEncounters)
 	fmt.Fprintf(&b, "**Next:** whole picture: estate view='about' person='%s' | shared windows: estate view='convergence' people='%s,<other>'", v.Handle, v.Handle)
 	return b.String()
 }

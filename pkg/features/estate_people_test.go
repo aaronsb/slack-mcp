@@ -61,7 +61,7 @@ func TestPersonViewRendersFootprintAndCounterparts(t *testing.T) {
 	if !strings.Contains(out, "fold executor, 0 Slack calls") {
 		t.Fatalf("coverage does not name the executor:\n%s", out)
 	}
-	if !strings.Contains(out, "as observed by this agent's reading") {
+	if !strings.Contains(out, "as observed from reads through this server") {
 		t.Fatalf("as-observed caveat missing:\n%s", out)
 	}
 }
