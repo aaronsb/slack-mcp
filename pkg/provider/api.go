@@ -252,22 +252,47 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 	return nil
 }
 
-// loadUsersFromCache loads users from XDG cache file
+// loadUsersFromCache loads users from the XDG snapshot, with the estate
+// fold as the authority on existence (ADR-007): a tombstoned user loads
+// with Deleted forced so the render and filter paths see the fact, and a
+// fold-live user the snapshot lost hydrates as a skeleton — a deleted or
+// corrupt snapshot self-heals instead of needing a hand-deleted file.
 func (ap *ApiProvider) loadUsersFromCache() {
-	if ap.store == nil {
-		return
-	}
-
 	var cachedUsers []slack.User
-	if err := ap.store.Load(usersCacheFile, &cachedUsers); err != nil {
-		return
+	if ap.store != nil {
+		if err := ap.store.Load(usersCacheFile, &cachedUsers); err != nil {
+			cachedUsers = nil
+		}
 	}
 
+	var estateUsers map[string]estate.UserRecord
+	if ap.estate != nil {
+		estateUsers = ap.estate.Users()
+	}
+
+	hydrated := 0
 	ap.usersMutex.Lock()
 	for _, u := range cachedUsers {
+		if rec, ok := estateUsers[u.ID]; ok && rec.Gone != nil {
+			u.Deleted = true
+		}
 		ap.users[u.ID] = u
 	}
+	for id, rec := range estateUsers {
+		if rec.Gone != nil {
+			continue
+		}
+		if _, ok := ap.users[id]; !ok {
+			ap.users[id] = estate.HydrateUser(rec)
+			hydrated++
+		}
+	}
 	ap.usersMutex.Unlock()
+
+	if hydrated > 0 {
+		log.Printf("Loaded %d users from cache, hydrated %d from the estate", len(cachedUsers), hydrated)
+		return
+	}
 	log.Printf("Loaded %d users from cache", len(cachedUsers))
 }
 
@@ -303,19 +328,44 @@ func (ap *ApiProvider) fetchAndCacheUsers(ctx context.Context) error {
 	return nil
 }
 
-// loadChannelsFromCache loads channels from XDG cache file
+// loadChannelsFromCache loads channels from the XDG snapshot, with the
+// estate fold as the authority on existence (ADR-007): a tombstoned channel
+// stays out of the live map — its dated absence is served by the estate
+// read APIs, not by a silent gap in a listing — and a fold-live channel the
+// snapshot lost hydrates as a skeleton.
 func (ap *ApiProvider) loadChannelsFromCache() {
-	if ap.store == nil {
-		return
+	var cachedChannels []slack.Channel
+	if ap.store != nil {
+		if err := ap.store.Load(channelsCacheFile, &cachedChannels); err != nil {
+			cachedChannels = nil
+		}
 	}
 
-	var cachedChannels []slack.Channel
-	if err := ap.store.Load(channelsCacheFile, &cachedChannels); err != nil {
-		return
+	var estateChannels map[string]estate.ChannelRecord
+	if ap.estate != nil {
+		estateChannels = ap.estate.Channels()
+	}
+
+	loaded := make([]slack.Channel, 0, len(cachedChannels))
+	loadedIDs := make(map[string]bool, len(cachedChannels))
+	for _, ch := range cachedChannels {
+		if rec, ok := estateChannels[ch.ID]; ok && rec.Gone != nil {
+			continue
+		}
+		loaded = append(loaded, ch)
+		loadedIDs[ch.ID] = true
+	}
+	hydrated := 0
+	for id, rec := range estateChannels {
+		if rec.Gone != nil || loadedIDs[id] {
+			continue
+		}
+		loaded = append(loaded, estate.HydrateChannel(rec))
+		hydrated++
 	}
 
 	ap.channelsMutex.Lock()
-	for _, ch := range cachedChannels {
+	for _, ch := range loaded {
 		ap.channels[ch.ID] = ch
 		ap.indexChannel(ch)
 	}
@@ -323,19 +373,26 @@ func (ap *ApiProvider) loadChannelsFromCache() {
 	ap.channelsMutex.Unlock()
 
 	// Index DM mappings outside channelsMutex
-	for _, ch := range cachedChannels {
+	for _, ch := range loaded {
 		ap.indexChannelDM(ch)
 	}
 
 	// Load DM map
-	var dmMap map[string]string
-	if err := ap.store.Load(dmMapCacheFile, &dmMap); err == nil {
-		ap.dmMapMutex.Lock()
-		ap.dmMap = dmMap
-		ap.dmMapMutex.Unlock()
+	if ap.store != nil {
+		var dmMap map[string]string
+		if err := ap.store.Load(dmMapCacheFile, &dmMap); err == nil {
+			ap.dmMapMutex.Lock()
+			ap.dmMap = dmMap
+			ap.dmMapMutex.Unlock()
+		}
 	}
 
-	log.Printf("Loaded %d channels from cache", len(cachedChannels))
+	if excluded := len(cachedChannels) + hydrated - len(loaded); excluded > 0 || hydrated > 0 {
+		log.Printf("Loaded %d channels from cache (%d tombstoned excluded, %d hydrated from the estate)",
+			len(loaded), excluded, hydrated)
+		return
+	}
+	log.Printf("Loaded %d channels from cache", len(loaded))
 }
 
 // indexChannel adds name mappings for a channel (caller must hold channelsMutex write lock)

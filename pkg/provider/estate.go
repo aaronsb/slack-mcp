@@ -208,6 +208,36 @@ func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
 	return nil
 }
 
+// EstateUsers returns the fold's user records — tombstoned included, which
+// is the point: dated absence a listing can serve instead of a silent gap.
+// Nil when the ledger is unavailable.
+func (ap *ApiProvider) EstateUsers() map[string]estate.UserRecord {
+	if ap.estate == nil {
+		return nil
+	}
+	return ap.estate.Users()
+}
+
+// EstateChannels returns the fold's channel records, tombstoned included.
+// Nil when the ledger is unavailable.
+func (ap *ApiProvider) EstateChannels() map[string]estate.ChannelRecord {
+	if ap.estate == nil {
+		return nil
+	}
+	return ap.estate.Channels()
+}
+
+// EstateLastFullSweep reports when the estate last had a complete picture.
+// Zero means absence cannot be asserted — either no full sweep has
+// completed or the ledger is unavailable — and coverage reporting must say
+// which state it is in rather than implying an empty estate.
+func (ap *ApiProvider) EstateLastFullSweep() time.Time {
+	if ap.estate == nil {
+		return time.Time{}
+	}
+	return ap.estate.LastFullSweep()
+}
+
 // fetchMemberChannelIDs walks users.conversations and returns the set of
 // conversation IDs the authed user belongs to, with the same pacing
 // loadMemberChannels uses.
