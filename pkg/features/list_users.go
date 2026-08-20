@@ -24,6 +24,11 @@ var ListUsers = &Feature{
 				"description": "Include bot/app users in results (default false)",
 				"default":     false,
 			},
+			"includeDeleted": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Include deactivated and deleted users as dated facts — when they left, and what they were called (default false)",
+				"default":     false,
+			},
 		},
 		"required": []string{"query"},
 	},
@@ -47,6 +52,11 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 		includeBots = b
 	}
 
+	includeDeleted := false
+	if b, ok := params["includeDeleted"].(bool); ok {
+		includeDeleted = b
+	}
+
 	apiProvider, ok := params["_provider"].(*provider.ApiProvider)
 	if !ok {
 		return &FeatureResult{
@@ -56,11 +66,13 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 	}
 
 	usersMap := apiProvider.ProvideUsersMap()
+	estateUsers := apiProvider.EstateUsers()
 
 	var matches []map[string]interface{}
+	matchedIDs := make(map[string]bool)
 
 	for _, user := range usersMap {
-		if user.Deleted {
+		if user.Deleted && !includeDeleted {
 			continue
 		}
 		if !includeBots && user.IsBot {
@@ -95,16 +107,68 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 			if user.IsBot {
 				entry["isBot"] = true
 			}
+			if user.Deleted {
+				entry["deleted"] = true
+				if rec, ok := estateUsers[user.ID]; ok && rec.Gone != nil {
+					entry["reason"] = rec.Gone.Reason
+					entry[goneIntervalKey(rec.Gone)] = goneInterval(rec.Gone)
+				}
+			}
 
 			matches = append(matches, entry)
+			matchedIDs[user.ID] = true
 		}
 	}
 
+	// Tombstoned users the snapshot lost live only in the fold; with
+	// includeDeleted they join the results as dated facts.
+	if includeDeleted {
+		for _, entry := range tombstonedUserMatches(apiProvider, queryLower) {
+			if id, _ := entry["id"].(string); !matchedIDs[id] {
+				matches = append(matches, entry)
+				matchedIDs[id] = true
+			}
+		}
+	}
+
+	coverage := estateCoverage(apiProvider)
+	swept := apiProvider.EstateLastFullSweep()
+
 	if len(matches) == 0 {
+		data := map[string]interface{}{
+			"users":    []map[string]interface{}{},
+			"coverage": coverage,
+		}
+
+		// A departed person answers as a dated fact, never as a silent gap
+		// (ADR-007). Beyond that, "not in the estate" and "never swept" are
+		// different claims and the response says which one it makes.
+		if tombstoned := tombstonedUserMatches(apiProvider, queryLower); len(tombstoned) > 0 {
+			data["tombstoned"] = tombstoned
+			return &FeatureResult{
+				Success:     true,
+				Message:     fmt.Sprintf("No active users match '%s'; %d tombstoned user(s) did", query, len(tombstoned)),
+				ResultCount: len(tombstoned),
+				Data:        data,
+				Guidance:    "These users existed and are gone; each entry carries the interval in which they left.",
+			}, nil
+		}
+
+		if swept.IsZero() {
+			data["reason"] = "unswept"
+			return &FeatureResult{
+				Success:  true,
+				Message:  fmt.Sprintf("No users found matching '%s'", query),
+				Data:     data,
+				Guidance: "No full sweep has completed, so absence cannot be asserted — this user may exist unswept. Try a different spelling or a shorter query.",
+			}, nil
+		}
+
+		data["reason"] = "never_seen"
 		return &FeatureResult{
 			Success:  true,
-			Message:  fmt.Sprintf("No users found matching '%s'", query),
-			Data:     map[string]interface{}{"users": []map[string]interface{}{}},
+			Message:  fmt.Sprintf("No users found matching '%s' — not in the estate as of %s", query, swept.Format("2006-01-02")),
+			Data:     data,
 			Guidance: "Try a different spelling or a shorter query. Use list-users query='<first name>' for broad matches.",
 		}, nil
 	}
@@ -114,7 +178,8 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 		Message:     fmt.Sprintf("Found %d user(s) matching '%s'", len(matches), query),
 		ResultCount: len(matches),
 		Data: map[string]interface{}{
-			"users": matches,
+			"users":    matches,
+			"coverage": coverage,
 		},
 		NextActions: []string{
 			"Send a DM: send-message channel='<displayName>' message='...'",

@@ -60,6 +60,12 @@ type ChannelRecord struct {
 	LastConfirmed time.Time
 	Gone          *Tombstone
 	Prior         []Interval
+	// Archived is the observation interval in which the archiving was
+	// seen — an archive is a change, not a tombstone. Nil when the channel
+	// is unarchived, and nil when it was first seen already archived,
+	// because the estate never saw the transition and asserts no date for
+	// it.
+	Archived *Interval
 }
 
 func (r *ChannelRecord) clone() ChannelRecord {
@@ -70,6 +76,10 @@ func (r *ChannelRecord) clone() ChannelRecord {
 	}
 	if r.Prior != nil {
 		out.Prior = append([]Interval(nil), r.Prior...)
+	}
+	if r.Archived != nil {
+		a := *r.Archived
+		out.Archived = &a
 	}
 	return out
 }
@@ -188,6 +198,8 @@ func (f *fold) applyChannel(e *event) {
 			rec.Prior = append(rec.Prior, Interval{From: rec.FirstSeen, To: rec.Gone.At})
 			rec.Gone = nil
 			rec.FirstSeen = e.At
+			// A fresh existence interval observed no archive transition.
+			rec.Archived = nil
 		}
 		rec.Props = props
 		rec.LastChanged = e.At
@@ -200,6 +212,12 @@ func (f *fold) applyChannel(e *event) {
 		if rec == nil {
 			f.channels[e.ID] = &ChannelRecord{ID: e.ID, Props: props, FirstSeen: e.At, LastChanged: e.At}
 			return
+		}
+		if !rec.Props.IsArchived && props.IsArchived {
+			rec.Archived = &Interval{From: e.NotBefore, To: e.At}
+		}
+		if rec.Props.IsArchived && !props.IsArchived {
+			rec.Archived = nil
 		}
 		rec.Props = props
 		rec.LastChanged = e.At
