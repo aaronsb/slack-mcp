@@ -127,6 +127,26 @@ overlap, stem grouping, and creator-activity correlation are deterministic
 fold math — unit-testable against fixture ledgers, free of context-window
 cost, and identical on every call.
 
+### Two executors per view
+
+A view is a question, not a data source, and it carries two execution
+plans. The **fold executor** answers from local state: instant, free, the
+ninety-day activity horizon, as-observed. The **compiled executor**
+deterministically constructs a bounded set of Slack-side queries — the
+counterpart ranking compiles to `search from:@handle after:date` grouped by
+conversation, convergence to one such search per person over the window —
+complete where Slack's index reaches, at API cost, paced under the rate
+tiers.
+
+This scales the resolution ladder's rule from parameters to plans: agents
+hand-composing Slack query grammar fail silently, so the server owns the
+grammar end to end. Same view and parameters, same compiled queries —
+testable as string construction. Execution is fold-first; the compiled plan
+runs when the question exceeds the fold's coverage (a window past ninety
+days, or an ask where as-observed is not good enough), and the coverage
+block names which executor answered, so a ranking says whether the agent's
+reading habit or Slack's index is speaking.
+
 ### One read-only tool, named views
 
 A new `estate` tool with a `view` parameter:
