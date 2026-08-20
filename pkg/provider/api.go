@@ -59,6 +59,11 @@ type ApiProvider struct {
 	estateSweepInterval time.Duration
 	estateSweepStop     chan struct{}
 
+	// Live channel-walk progress, so coverage reporting can show the
+	// mapping advancing instead of a bare "not swept yet".
+	walkMu      sync.Mutex
+	channelWalk WalkProgress
+
 	// Cache management
 	lastChannelRefresh time.Time
 	refreshCalls       int
@@ -238,8 +243,10 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 	// Fetch member channels (fast — only channels user belongs to)
 	go ap.loadMemberChannels(ctx)
 
-	// Start background backfill on relaxed schedule
-	go ap.backgroundBackfill(ctx)
+	// Start background backfill on relaxed schedule, unless the estate
+	// proves a recent complete enumeration — the watermark survives
+	// restarts, so a bounced server stops re-walking the workspace.
+	go ap.backfillIfStale(ctx)
 
 	// Start periodic cache flush
 	if ap.store != nil {
@@ -548,7 +555,15 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack.Channel)) ([]slack.Channel, bool) {
 	cursor := ""
 	var all []slack.Channel
-	batchCount := 0
+
+	ap.walkMu.Lock()
+	ap.channelWalk = WalkProgress{Active: true, Started: time.Now()}
+	ap.walkMu.Unlock()
+	defer func() {
+		ap.walkMu.Lock()
+		ap.channelWalk.Active = false
+		ap.walkMu.Unlock()
+	}()
 
 	for {
 		channels, nextCursor, err := ap.client.GetConversations(&slack.GetConversationsParameters{
@@ -570,19 +585,20 @@ func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack
 		if onPage != nil {
 			onPage(channels)
 		}
-		batchCount++
+		ap.walkMu.Lock()
+		ap.channelWalk.Seen = len(all)
+		ap.walkMu.Unlock()
 
 		if nextCursor == "" {
 			return all, true
 		}
 		cursor = nextCursor
 
-		// Relaxed pacing: longer delays to avoid rate limits
-		if batchCount%3 == 0 {
-			time.Sleep(3 * time.Second)
-		} else {
-			time.Sleep(1 * time.Second)
-		}
+		// conversations.list is a ~20 req/min tier. The old 1s/3s pacing ran
+		// ~36/min, so past page twenty every page ate a 30s penalty and a
+		// 3,000-conversation walk took ~13 minutes; a flat 3s stays under
+		// the limit and finishes the same walk in ~2.
+		time.Sleep(3 * time.Second)
 	}
 }
 

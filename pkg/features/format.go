@@ -83,6 +83,113 @@ func formatMapList(s *strings.Builder, v interface{}, fn func(map[string]string)
 	}
 }
 
+// --- Estate facts (ADR-007) ---
+// The rendered markdown is the agent's entire world (ADR-004), so the dated
+// facts and coverage the handlers attach must appear in it, not only in the
+// data map.
+
+// datedInterval renders one of the estate's interval fields as dates.
+func datedInterval(entry map[string]interface{}, key string) string {
+	iv, ok := entry[key].([]string)
+	if !ok || len(iv) != 2 || len(iv[0]) < 10 || len(iv[1]) < 10 {
+		return ""
+	}
+	from, to := iv[0][:10], iv[1][:10]
+	if from == to {
+		return from
+	}
+	return fmt.Sprintf("between %s and %s", from, to)
+}
+
+// goneTag renders a tombstoned entry's dated exit.
+func goneTag(entry map[string]interface{}) string {
+	if iv := datedInterval(entry, "deactivatedBetween"); iv != "" {
+		return " [deactivated " + iv + "]"
+	}
+	if iv := datedInterval(entry, "absentBetween"); iv != "" {
+		return " [gone " + iv + "]"
+	}
+	if v, ok := entry["deleted"].(bool); ok && v {
+		return " [deleted]"
+	}
+	return ""
+}
+
+// writeTombstoned renders the dated-fact list the handlers attach under
+// "tombstoned".
+func writeTombstoned(b *strings.Builder, data map[string]interface{}) {
+	stones := asList(data["tombstoned"])
+	if len(stones) == 0 {
+		return
+	}
+	b.WriteString(fmt.Sprintf("\n## Tombstoned (%d)\n\n", len(stones)))
+	for _, s := range stones {
+		name := str(s, "displayName")
+		if name == "" {
+			name = str(s, "name")
+		}
+		line := "**" + name + "**"
+		if username := str(s, "username"); username != "" {
+			line += " (@" + username + ")"
+		}
+		b.WriteString(line + goneTag(s) + "\n")
+	}
+}
+
+// estateFooter states the coverage claim in plain language: what the estate
+// has mapped, what it is mapping right now, and whether "not found" can
+// mean "does not exist". During a walk, repeated queries show the seen
+// count advancing.
+func estateFooter(data map[string]interface{}) string {
+	cov, _ := data["coverage"].(map[string]interface{})
+	est, _ := cov["estate"].(map[string]interface{})
+	if est == nil {
+		return ""
+	}
+	if avail, ok := est["available"].(bool); ok && !avail {
+		return "\nEstate: ledger unavailable this session — no workspace history\n"
+	}
+
+	if swept, _ := est["swept"].(bool); swept {
+		ts, _ := est["lastFullSweep"].(string)
+		return fmt.Sprintf("\nEstate: complete picture as of %s (%s users, %s channels mapped)\n",
+			ts, countOf(est, "users"), countOf(est, "channels"))
+	}
+
+	var parts []string
+	if lc := classComplete(est, "users"); lc != "" {
+		parts = append(parts, fmt.Sprintf("users mapped (%s, as of %s)", countOf(est, "users"), lc))
+	} else {
+		parts = append(parts, "users not yet mapped")
+	}
+	channels, _ := est["channels"].(map[string]interface{})
+	if enum, ok := channels["enumerating"].(map[string]interface{}); ok {
+		seen, _ := enum["seen"].(int)
+		secs, _ := enum["startedSecsAgo"].(int)
+		parts = append(parts, fmt.Sprintf("mapping channels now — %d seen so far (%ds in, re-query to watch progress)", seen, secs))
+	} else if lc := classComplete(est, "channels"); lc != "" {
+		parts = append(parts, fmt.Sprintf("channels mapped (%s, as of %s)", countOf(est, "channels"), lc))
+	} else {
+		parts = append(parts, "channels not yet mapped")
+	}
+	return "\nEstate: " + strings.Join(parts, "; ") +
+		" — until both are mapped, \"not found\" may mean \"not yet seen\"\n"
+}
+
+func countOf(est map[string]interface{}, class string) string {
+	m, _ := est[class].(map[string]interface{})
+	if n, ok := m["count"].(int); ok {
+		return fmt.Sprintf("%d", n)
+	}
+	return "?"
+}
+
+func classComplete(est map[string]interface{}, class string) string {
+	m, _ := est[class].(map[string]interface{})
+	ts, _ := m["lastComplete"].(string)
+	return ts
+}
+
 func dataMap(result *FeatureResult) map[string]interface{} {
 	if m, ok := result.Data.(map[string]interface{}); ok {
 		return m
@@ -323,12 +430,18 @@ func formatChannels(result *FeatureResult) string {
 		if v, ok := ch["isMember"].(bool); ok && v {
 			member = " [member]"
 		}
+		if iv := datedInterval(ch, "archivedBetween"); iv != "" {
+			member += " [archived " + iv + "]"
+		}
 		if purpose != "" {
 			b.WriteString(fmt.Sprintf("%s%s — %s\n", display, member, purpose))
 		} else {
 			b.WriteString(fmt.Sprintf("%s%s\n", display, member))
 		}
 	}
+
+	writeTombstoned(&b, data)
+	b.WriteString(estateFooter(data))
 
 	b.WriteString(footer(result))
 	return b.String()
@@ -358,8 +471,17 @@ func formatUsers(result *FeatureResult) string {
 		if v, ok := u["isBot"].(bool); ok && v {
 			line += " [bot]"
 		}
+		line += goneTag(u)
 		b.WriteString(line + "\n")
 	}
+
+	if len(users) == 0 && result.Message != "" {
+		// The message carries the coverage-shaped claim: tombstoned matches,
+		// never seen under a sweep, or unswept.
+		b.WriteString(result.Message + "\n")
+	}
+	writeTombstoned(&b, data)
+	b.WriteString(estateFooter(data))
 
 	b.WriteString(footer(result))
 	return b.String()

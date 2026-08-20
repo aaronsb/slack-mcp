@@ -36,6 +36,11 @@ var ListChannels = &Feature{
 				"description": "Include archived channels",
 				"default":     false,
 			},
+			"includeDeleted": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Include deleted/vanished channels as dated facts — when they left the workspace, and what they were (default false)",
+				"default":     false,
+			},
 			"limit": map[string]interface{}{
 				"type":        "number",
 				"description": "Maximum channels to return (default: 50, max: 500)",
@@ -83,6 +88,11 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 		includeArchived = i
 	}
 
+	includeDeleted := false
+	if i, ok := params["includeDeleted"].(bool); ok {
+		includeDeleted = i
+	}
+
 	limit := 50
 	if l, ok := params["limit"].(float64); ok {
 		limit = int(l)
@@ -122,6 +132,7 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 	// Get channels from cache
 	channels := apiProvider.GetCachedChannels()
 	cacheInfo := apiProvider.GetCacheInfo()
+	estateChannels := apiProvider.EstateChannels()
 
 	// Filter and process channels
 	filteredChannels := []map[string]interface{}{}
@@ -202,6 +213,18 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 			"isArchived":  ch.IsArchived,
 		}
 
+		// The archive as a dated fact, when the estate observed the
+		// transition; a channel first seen already archived carries no date
+		// because none was observed.
+		if ch.IsArchived {
+			if rec, ok := estateChannels[ch.ID]; ok && rec.Archived != nil {
+				channelInfo["archivedBetween"] = []string{
+					rec.Archived.From.Format(time.RFC3339),
+					rec.Archived.To.Format(time.RFC3339),
+				}
+			}
+		}
+
 		// Add optional fields
 		if ch.Purpose.Value != "" {
 			channelInfo["purpose"] = ch.Purpose.Value
@@ -250,13 +273,24 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 	}
 	summary["byType"] = typeCounts
 
+	data := map[string]interface{}{
+		"channels": filteredChannels,
+		"filter":   filter,
+		"summary":  summary,
+		"coverage": estateCoverage(apiProvider),
+	}
+
+	// Gone channels ride in their own list: dated facts, not actionable
+	// listings — there is nothing to catch up on in a deleted channel.
+	if includeDeleted {
+		if tombstoned := tombstonedChannelMatches(apiProvider, search); len(tombstoned) > 0 {
+			data["tombstoned"] = tombstoned
+		}
+	}
+
 	result := &FeatureResult{
-		Success: true,
-		Data: map[string]interface{}{
-			"channels": filteredChannels,
-			"filter":   filter,
-			"summary":  summary,
-		},
+		Success:     true,
+		Data:        data,
 		Message:     fmt.Sprintf("Found %d channels (showing %d)", totalFound, len(filteredChannels)),
 		ResultCount: len(filteredChannels),
 	}
