@@ -79,6 +79,22 @@ func batchHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 	list, _ := params["list"].(bool)
 	rawCommands, hasCommands := params["commands"]
 
+	selectors := 0
+	for _, v := range []string{save, run, del} {
+		if v != "" {
+			selectors++
+		}
+	}
+	if list {
+		selectors++
+	}
+	if selectors > 1 {
+		return &FeatureResult{
+			Success: false,
+			Message: "batch takes one of save=, run=, list=, delete= at a time.",
+		}, nil
+	}
+
 	switch {
 	case del != "":
 		return batchDelete(ap, del)
@@ -105,7 +121,7 @@ func batchHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 			Success:     true,
 			Message:     doc,
 			ResultCount: len(cmds),
-			Echo:        fmt.Sprintf("batch %d commands", len(cmds)),
+			Echo:        "batch " + nCommands(len(cmds)),
 		}, nil
 	default:
 		return &FeatureResult{
@@ -149,6 +165,12 @@ func parseCommands(raw interface{}) ([]playbook.Command, *FeatureResult) {
 	cmds := make([]playbook.Command, 0, len(items))
 	for i, m := range items {
 		tool, _ := m["tool"].(string)
+		if tool == "" {
+			return nil, &FeatureResult{
+				Success: false,
+				Message: fmt.Sprintf("Command %d is missing tool='inbox'|'messages'|'estate'.", i+1),
+			}
+		}
 		if tool == "batch" {
 			return nil, &FeatureResult{Success: false, Message: "batch may not contain batch."}
 		}
@@ -172,6 +194,14 @@ func executeBatch(ctx context.Context, ap *provider.ApiProvider, cmds []playbook
 	sections := make([]string, 0, len(cmds))
 	for _, c := range cmds {
 		f := batchable[c.Tool]
+		if f == nil {
+			// A stored playbook bypasses parseCommands, so a hand-edited or
+			// version-skewed playbooks.json can carry a tool the executor
+			// does not admit. It renders like any other failing item.
+			sections = append(sections, "`"+commandEcho(c)+"`\n\n**Error:** "+
+				fmt.Sprintf("%q is not batchable — the executor admits only reads: inbox, messages, estate.", c.Tool))
+			continue
+		}
 		p := make(map[string]interface{}, len(c.Params)+1)
 		for k, v := range c.Params {
 			p[k] = v
@@ -192,6 +222,14 @@ func executeBatch(ctx context.Context, ap *provider.ApiProvider, cmds []playbook
 		}
 	}
 	return strings.Join(sections, "\n\n---\n\n")
+}
+
+// nCommands renders a command count with its noun.
+func nCommands(n int) string {
+	if n == 1 {
+		return "1 command"
+	}
+	return fmt.Sprintf("%d commands", n)
 }
 
 // commandEcho reconstructs an item's effective-invocation line for results
@@ -270,13 +308,17 @@ func batchRun(ctx context.Context, ap *provider.ApiProvider, name string) (*Feat
 	}
 	doc := executeBatch(ctx, ap, cmds)
 	// Best-effort bookkeeping: the run already happened, and the output
-	// claims nothing about statistics.
-	_ = store.MarkRun(name, time.Now())
+	// claims nothing about statistics. The store is reopened because the
+	// instance above predates a possibly long execution, and writing its
+	// stale snapshot would erase a concurrent save.
+	if fresh, errRes := openPlaybooks(ap); errRes == nil {
+		_ = fresh.MarkRun(name, time.Now())
+	}
 	return &FeatureResult{
 		Success:     true,
 		Message:     doc,
 		ResultCount: len(cmds),
-		Echo:        fmt.Sprintf("batch run='%s' %d commands", name, len(cmds)),
+		Echo:        fmt.Sprintf("batch run='%s' %s", name, nCommands(len(cmds))),
 	}, nil
 }
 
@@ -296,7 +338,7 @@ func batchList(ap *provider.ApiProvider) (*FeatureResult, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Playbooks (%d)\n\n", len(summaries))
 	for _, s := range summaries {
-		fmt.Fprintf(&b, "**%s** — %d commands, saved %s", s.Name, s.Commands, s.SavedAt.Format("2006-01-02"))
+		fmt.Fprintf(&b, "**%s** — %s, saved %s", s.Name, nCommands(s.Commands), s.SavedAt.Format("2006-01-02"))
 		if s.LastRun != nil {
 			fmt.Fprintf(&b, ", last run %s (%d runs)", s.LastRun.Format("2006-01-02"), s.Runs)
 		} else {

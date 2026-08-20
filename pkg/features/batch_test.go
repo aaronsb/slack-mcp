@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/features"
+	"github.com/aaronsb/slack-mcp/pkg/playbook"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/slacktest"
 	"github.com/slack-go/slack"
@@ -160,7 +161,7 @@ func TestPlaybookSaveRunListDeleteRoundTrip(t *testing.T) {
 	}
 
 	listed := batchOut(t, ap, map[string]any{"list": true})
-	if !strings.Contains(listed, "morning") || !strings.Contains(listed, "1 commands") {
+	if !strings.Contains(listed, "morning") || !strings.Contains(listed, "1 command") {
 		t.Fatalf("listing missing the saved playbook:\n%s", listed)
 	}
 
@@ -193,6 +194,39 @@ func TestPlaybookSaveValidatesTheBoundaryToo(t *testing.T) {
 	after := runBatch(t, ap, map[string]any{"run": "sneaky"})
 	if after.Success || !strings.Contains(after.Message, "No playbook") {
 		t.Fatalf("rejected save still persisted something: %+v", after)
+	}
+}
+
+func TestStoredPlaybookWithUnknownToolRendersErrorInPlace(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(twoChannels()...)
+	ap := bootedProvider(t, srv)
+
+	// A hand-edited or version-skewed playbooks.json bypasses batch's
+	// validation; write one through the store directly.
+	store, err := playbook.Open(ap.ProvideIdentity().Team)
+	if err != nil {
+		t.Fatalf("playbook.Open: %v", err)
+	}
+	skewed := []playbook.Command{
+		{Tool: "say", Params: map[string]any{"to": "#general", "text": "hi"}},
+		{Tool: "estate", Params: map[string]any{"view": "channels"}},
+	}
+	if err := store.Save("skewed", skewed, time.Now()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	out := batchOut(t, ap, map[string]any{"run": "skewed"})
+	errAt := strings.Index(out, "not batchable")
+	channelsAt := strings.Index(out, "## Channels")
+	if errAt < 0 {
+		t.Fatalf("unknown tool did not render an in-place error:\n%s", out)
+	}
+	if channelsAt < 0 || channelsAt < errAt {
+		t.Fatalf("execution did not continue past the unknown tool:\n%s", out)
+	}
+	if !strings.Contains(out, "`say ") {
+		t.Fatalf("the skewed item's section does not open with an echo line:\n%s", out)
 	}
 }
 
