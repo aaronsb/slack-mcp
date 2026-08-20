@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/bbalet/stopwords v1.0.0
+	github.com/gofrs/flock v0.13.0
 	github.com/joho/godotenv v1.5.1
 	github.com/mark3labs/mcp-go v0.46.0
 	github.com/slack-go/slack v0.20.0
