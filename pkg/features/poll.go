@@ -201,7 +201,7 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 	t.rm = newMessageRenderer(apiProvider)
 
 	observe := func(conv string, msgs []slack.Message) { observeTraffic(apiProvider, conv, msgs) }
-	hydrateConversations(ctx, api, store, hydrated, naming, usersMap, limit, now.Add(-firstLookWindow), observe, t)
+	hydrateConversations(ctx, api, store, hydrated, naming, limit, now.Add(-firstLookWindow), observe, t)
 	tickThreads(ctx, api, internal, store, naming, usersMap, limit, now, t)
 
 	return buildPollResult(t, counts.Threads.UnreadCountByChannel), nil
@@ -244,7 +244,6 @@ func hydrateConversations(
 	store *watermark.Store,
 	conversations []conversation,
 	naming func(conversation) string,
-	usersMap map[string]slack.User,
 	limit int,
 	cutoff time.Time,
 	observe func(string, []slack.Message),

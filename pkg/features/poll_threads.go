@@ -67,10 +67,10 @@ func tickThreads(
 			}
 			t.events = append(t.events, threadEvent(
 				root.Channel, root.ThreadTS, root.LatestReply,
-				preview(t.render(root.Text)),
+				preview(t.rm.RenderText(root.Text)),
 				root.ReplyCount, entry.UnreadReplies,
 				naming(conversation{ID: root.Channel, Kind: "channel"}),
-				getUserName(root.User, usersMap)))
+				t.rm.AuthorByID(root.User)))
 		}
 	}
 

@@ -80,25 +80,7 @@ func (r *messageRenderer) RenderText(s string) string {
 // blocks-only announcement usually carries, then the raw ID.
 func (r *messageRenderer) authorName(m slack.Message) string {
 	if m.User != "" {
-		if u, ok := r.users[m.User]; ok {
-			name := displayNameFor(u)
-			if m.User == r.selfID {
-				return name + " (you)"
-			}
-			return name
-		}
-		if rec, ok := r.ap.EstateUser(m.User); ok {
-			name := rec.Props.RealName
-			if name == "" {
-				name = rec.Props.Name
-			}
-			if name != "" {
-				if rec.Gone != nil {
-					return name + " (departed)"
-				}
-				return name
-			}
-		}
+		return r.AuthorByID(m.User)
 	}
 	if m.Username != "" {
 		return m.Username + " (app)"
@@ -106,10 +88,37 @@ func (r *messageRenderer) authorName(m slack.Message) string {
 	if m.BotProfile != nil && m.BotProfile.Name != "" {
 		return m.BotProfile.Name + " (app)"
 	}
-	if m.User != "" {
-		return m.User
-	}
 	return "unknown"
+}
+
+// AuthorByID attributes a bare user ID through the same chain, for
+// surfaces that carry an ID without a full message (thread-feed roots).
+// The unknown-ID form matches userLabel so every view labels the same
+// person the same way.
+func (r *messageRenderer) AuthorByID(id string) string {
+	if u, ok := r.users[id]; ok {
+		name := displayNameFor(u)
+		if id == r.selfID {
+			return name + " (you)"
+		}
+		if u.Deleted {
+			return name + " (departed)"
+		}
+		return name
+	}
+	if rec, ok := r.ap.EstateUser(id); ok {
+		name := rec.Props.RealName
+		if name == "" {
+			name = rec.Props.Name
+		}
+		if name != "" {
+			if rec.Gone != nil {
+				return name + " (departed)"
+			}
+			return name
+		}
+	}
+	return "external (" + id + ")"
 }
 
 // flattenBlocks renders Block Kit content as plain text. User and channel
@@ -209,7 +218,7 @@ func flattenSectionElements(elements []slack.RichTextSectionElement) string {
 		case *slack.RichTextSectionEmojiElement:
 			b.WriteString(":" + e.Name + ":")
 		case *slack.RichTextSectionBroadcastElement:
-			b.WriteString("@" + string(e.Range))
+			b.WriteString("@" + e.Range)
 		}
 	}
 	return b.String()

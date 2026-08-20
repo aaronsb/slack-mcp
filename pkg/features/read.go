@@ -88,15 +88,11 @@ func readHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 
 // readRef fetches whatever a handle points at.
 func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.Client, ref handle.Ref, limit int) (*FeatureResult, error) {
-	usersMap := apiProvider.ProvideUsersMap()
 	where, named := conversationLabel(apiProvider, ref.Channel)
-	// One renderer for whichever branch runs: a new branch that forgot to
-	// construct one would compile fine and leak raw tags.
-	render := newBodyRenderer(apiProvider)
 
 	switch ref.Kind {
 	case handle.KindThread:
-		return readThread(ctx, apiProvider, api, ref.Channel, ref.TS, where, named, usersMap, render, limit)
+		return readThread(ctx, apiProvider, api, ref.Channel, ref.TS, where, named, limit)
 
 	case handle.KindMessage:
 		// A message that turns out to have replies is more usefully read as its
@@ -107,10 +103,10 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 			Limit:     limit,
 		})
 		if err == nil && len(replies) > 1 {
-			return readThread(ctx, apiProvider, api, ref.Channel, ref.TS, where, named, usersMap, render, limit)
+			return readThread(ctx, apiProvider, api, ref.Channel, ref.TS, where, named, limit)
 		}
 		if err == nil && len(replies) == 1 {
-			return messagesResult(apiProvider, where, "message", ref.Channel, replies, usersMap, render, named, false)
+			return messagesResult(apiProvider, where, "message", ref.Channel, replies, named, false)
 		}
 		if err == nil {
 			// Slack answered and had nothing. Saying "error: <nil>" here
@@ -139,13 +135,13 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 		}
 		msgs := resp.Messages
 		reverse(msgs)
-		return messagesResult(apiProvider, where, "conversation", ref.Channel, msgs, usersMap, render, named, resp.HasMore)
+		return messagesResult(apiProvider, where, "conversation", ref.Channel, msgs, named, resp.HasMore)
 	}
 
 	return &FeatureResult{Success: false, Message: "Unrecognised handle."}, nil
 }
 
-func readThread(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.Client, channel, threadTS, where string, named bool, usersMap map[string]slack.User, render func(string) string, limit int) (*FeatureResult, error) {
+func readThread(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.Client, channel, threadTS, where string, named bool, limit int) (*FeatureResult, error) {
 	msgs, _, _, err := api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channel,
 		Timestamp: threadTS,
@@ -157,10 +153,10 @@ func readThread(ctx context.Context, apiProvider *provider.ApiProvider, api *sla
 			Message: fmt.Sprintf("Could not read that thread in %s: %v", where, err),
 		}, nil
 	}
-	return messagesResult(apiProvider, where, "thread", channel, msgs, usersMap, render, named, false)
+	return messagesResult(apiProvider, where, "thread", channel, msgs, named, false)
 }
 
-func messagesResult(apiProvider *provider.ApiProvider, where, kind, channel string, msgs []slack.Message, usersMap map[string]slack.User, render func(string) string, named, more bool) (*FeatureResult, error) {
+func messagesResult(apiProvider *provider.ApiProvider, where, kind, channel string, msgs []slack.Message, named, more bool) (*FeatureResult, error) {
 	observeTraffic(apiProvider, channel, msgs)
 	r := newMessageRenderer(apiProvider)
 	out := make([]map[string]interface{}, 0, len(msgs))

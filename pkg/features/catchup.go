@@ -160,7 +160,10 @@ func isImportantMessage(msg slack.Message) bool {
 		return true
 	}
 
-	// Contains decision keywords
+	// Contains decision keywords. Known gap: this reads the raw text
+	// field, so a blocks-only message saying "approved" passes the gate
+	// only via reactions, files, or replies — the rendered body is not
+	// built until analyzeMessage, after this filter has run.
 	decisionKeywords := []string{"decided", "decision", "will", "moving forward", "approved", "rejected"}
 	for _, keyword := range decisionKeywords {
 		// In real implementation, use better text analysis
