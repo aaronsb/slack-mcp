@@ -20,12 +20,16 @@ type ObserveResult struct {
 }
 
 // ClassReport is one entity class's slice of a sweep: whether its
-// enumeration ran to completion, and what the absence pass did.
+// enumeration ran to completion, and what the absence pass did. Skipped
+// marks a class the sweep deliberately did not enumerate because another
+// observer completed it recently — distinct from a failed enumeration, and
+// it leaves the class's watermark where that observer set it.
 type ClassReport struct {
 	Complete         bool
 	Count            int
 	ArchivedIncluded bool
 	AbsenceAborted   bool
+	Skipped          bool
 }
 
 // SweepReport closes a sweep pass. Recording it appends the sweep event the
@@ -251,8 +255,8 @@ func (s *Store) RecordSweep(rep SweepReport, now time.Time) error {
 	durationMs := rep.Duration.Milliseconds()
 	e := event{
 		V: schemaVersion, At: now, Src: SourceSweep, Kind: kindSweep,
-		Users:      &classReport{Complete: rep.Users.Complete, Count: rep.Users.Count, AbsenceAborted: rep.Users.AbsenceAborted},
-		Channels:   &classReport{Complete: rep.Channels.Complete, Count: rep.Channels.Count, ArchivedIncluded: rep.Channels.ArchivedIncluded, AbsenceAborted: rep.Channels.AbsenceAborted},
+		Users:      &classReport{Complete: rep.Users.Complete, Count: rep.Users.Count, AbsenceAborted: rep.Users.AbsenceAborted, Skipped: rep.Users.Skipped},
+		Channels:   &classReport{Complete: rep.Channels.Complete, Count: rep.Channels.Count, ArchivedIncluded: rep.Channels.ArchivedIncluded, AbsenceAborted: rep.Channels.AbsenceAborted, Skipped: rep.Channels.Skipped},
 		Membership: &classReport{Complete: rep.Membership.Complete, Count: rep.Membership.Count},
 		Appended:   &appended,
 		DurationMs: &durationMs,

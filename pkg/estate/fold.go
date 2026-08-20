@@ -109,10 +109,13 @@ func (f *fold) apply(e *event) {
 			f.applyChannel(e)
 		}
 	case kindSweep:
-		if e.Users != nil && e.Users.Complete {
+		// A skipped class never advances its watermark: the sweep did not
+		// enumerate it, and claiming it did would be the false assertion
+		// ADR-004 prohibits.
+		if e.Users != nil && e.Users.Complete && !e.Users.Skipped {
 			f.userSweep = e.At
 		}
-		if e.Channels != nil && e.Channels.Complete {
+		if e.Channels != nil && e.Channels.Complete && !e.Channels.Skipped {
 			f.channelSweep = e.At
 		}
 	}
