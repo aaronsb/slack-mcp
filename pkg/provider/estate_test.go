@@ -267,3 +267,28 @@ func TestAProviderWithoutALedgerStillServes(t *testing.T) {
 		t.Fatalf("sweep without a ledger should error")
 	}
 }
+
+func TestASecondSweepSkipsTheFreshChannelWalk(t *testing.T) {
+	srv, p := sweptProvider(t)
+
+	if err := p.RunEstateSweep(context.Background()); err != nil {
+		t.Fatalf("first sweep: %v", err)
+	}
+
+	srv.ResetCalls()
+	if err := p.RunEstateSweep(context.Background()); err != nil {
+		t.Fatalf("second sweep: %v", err)
+	}
+
+	// The channel enumeration is fresh, so the second sweep re-walks
+	// neither conversations.list nor the membership walk — only users.
+	if got := srv.Calls("conversations.list"); got != 0 {
+		t.Fatalf("second sweep walked channels %d times, want 0", got)
+	}
+	if got := srv.Calls("users.conversations"); got != 0 {
+		t.Fatalf("second sweep walked membership %d times, want 0", got)
+	}
+	if got := srv.Calls("users.list"); got != 1 {
+		t.Fatalf("second sweep listed users %d times, want 1", got)
+	}
+}

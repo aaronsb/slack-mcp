@@ -27,6 +27,10 @@ const (
 	// First check waits out member-load and backfill so the sweep never
 	// competes with boot traffic for rate limit headroom.
 	estateSweepBootDelay = time.Minute
+	// How long the scheduler waits for the boot backfill before sweeping
+	// anyway. A backfill that errors leaves backfillDone false forever, and
+	// the sweep must not inherit that silence.
+	estateSweepBackfillWait = 20 * time.Minute
 )
 
 // openEstate opens the workspace's estate ledger. Failure degrades to a
@@ -108,6 +112,12 @@ func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 		case <-stop:
 			return
 		}
+		// The boot backfill is already walking conversations.list, and two
+		// concurrent walkers starve each other under its rate limit (~20
+		// requests/min) — observed live as paired 30s backoffs on a
+		// 3,000-conversation workspace. Wait for it, bounded so a backfill
+		// that dies never silences the sweep forever.
+		ap.waitForBackfill(stop, estateSweepBackfillWait)
 		for {
 			if time.Since(ap.estate.LastFullSweep()) >= interval {
 				if err := ap.RunEstateSweep(ctx); err != nil {
@@ -121,6 +131,25 @@ func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// waitForBackfill blocks until the boot channel backfill has completed, the
+// bound elapses, or stop closes.
+func (ap *ApiProvider) waitForBackfill(stop chan struct{}, bound time.Duration) {
+	deadline := time.Now().Add(bound)
+	for time.Now().Before(deadline) {
+		ap.backfillMutex.Lock()
+		done := ap.backfillDone
+		ap.backfillMutex.Unlock()
+		if done {
+			return
+		}
+		select {
+		case <-time.After(5 * time.Second):
+		case <-stop:
+			return
+		}
+	}
 }
 
 // RunEstateSweep performs one synchronous full estate sweep: users.list,
@@ -154,6 +183,29 @@ func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
 		res := ap.observeUsersEstate(users, true, estate.SourceSweep)
 		rep.Users = estate.ClassReport{Complete: true, Count: len(users), AbsenceAborted: res.AbsenceAborted}
 		rep.Appended += res.Appended
+	}
+
+	// Channels: skip the walk when another observer — usually the boot
+	// backfill, which records its completion as a channels-class sweep
+	// event — enumerated them within the sweep interval. The full walk is
+	// the sweep's dominant API cost, and re-walking a fresh enumeration
+	// buys nothing.
+	interval := ap.estateSweepInterval
+	if interval <= 0 {
+		interval = defaultEstateSweepInterval
+	}
+	if last := ap.estate.LastChannelSweep(); !last.IsZero() && time.Since(last) < interval {
+		rep.Membership = estate.ClassReport{Skipped: true}
+		rep.Channels = estate.ClassReport{Skipped: true, ArchivedIncluded: true}
+		ap.markDirty()
+		rep.Duration = time.Since(start)
+		ap.recordEstateSweep(rep)
+		if !rep.Users.Complete {
+			return fmt.Errorf("estate sweep incomplete: users enumeration failed")
+		}
+		log.Printf("Estate sweep complete: %d users, channels skipped (enumerated %s ago), %d events appended in %s",
+			rep.Users.Count, time.Since(last).Round(time.Second), rep.Appended, rep.Duration.Round(time.Millisecond))
+		return nil
 	}
 
 	// Membership: users.conversations is the authority on isMember;
