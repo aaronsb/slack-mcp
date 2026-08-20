@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/cache"
+	"github.com/aaronsb/slack-mcp/pkg/estate"
 	"github.com/aaronsb/slack-mcp/pkg/transport"
 	"github.com/slack-go/slack"
 )
@@ -52,6 +53,12 @@ type ApiProvider struct {
 	// Cache persistence
 	store *cache.Store
 
+	// Estate ledger (ADR-007): nil when the ledger could not open, and
+	// every call site degrades on nil.
+	estate              *estate.Store
+	estateSweepInterval time.Duration
+	estateSweepStop     chan struct{}
+
 	// Cache management
 	lastChannelRefresh time.Time
 	refreshCalls       int
@@ -83,6 +90,17 @@ type providerConfig struct {
 	// internal client. Set it to point at a fake in tests, or at a custom
 	// endpoint. Empty means normal team-endpoint discovery via auth.test.
 	baseURL string
+
+	// estateSweepInterval overrides the 24h estate sweep cadence. Zero
+	// keeps the default. A construction option only — no env var and no
+	// CLI flag, because the estate maintains itself.
+	estateSweepInterval time.Duration
+}
+
+// WithEstateSweepInterval overrides how often the estate sweep runs. Meant
+// for tests; production uses the default.
+func WithEstateSweepInterval(d time.Duration) Option {
+	return func(c *providerConfig) { c.estateSweepInterval = d }
 }
 
 // WithBaseURL overrides the Slack host for the API requests this provider
@@ -151,12 +169,13 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 
 			return api
 		},
-		internalClient: internal,
-		users:          make(map[string]slack.User),
-		channels:       make(map[string]slack.Channel),
-		channelNames:   make(map[string]string),
-		dmMap:          make(map[string]string),
-		store:          store,
+		internalClient:      internal,
+		users:               make(map[string]slack.User),
+		channels:            make(map[string]slack.Channel),
+		channelNames:        make(map[string]string),
+		dmMap:               make(map[string]string),
+		store:               store,
+		estateSweepInterval: cfg.estateSweepInterval,
 	}
 
 	return ap
@@ -198,6 +217,10 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 		})
 	}
 
+	// Open the estate ledger before any fetch path runs, so every complete
+	// enumeration below is observed. captureIdentity has already run.
+	ap.openEstate()
+
 	// Load users from cache
 	ap.loadUsersFromCache()
 
@@ -222,6 +245,9 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 	if ap.store != nil {
 		ap.store.StartPeriodicFlush(flushInterval, ap.flushCaches)
 	}
+
+	// Self-schedule the estate sweep (ADR-007)
+	ap.startEstateSweepScheduler(ctx)
 
 	return nil
 }
@@ -265,6 +291,14 @@ func (ap *ApiProvider) fetchAndCacheUsers(ctx context.Context) error {
 			log.Printf("Saved %d users to cache", len(users))
 		}
 	}
+
+	// users.list paginated to exhaustion is a complete enumeration, so the
+	// estate may assert user absences from it.
+	res := ap.observeUsersEstate(users, true, estate.SourceBoot)
+	ap.recordEstateSweep(estate.SweepReport{
+		Users:    estate.ClassReport{Complete: true, Count: len(users), AbsenceAborted: res.AbsenceAborted},
+		Appended: res.Appended,
+	})
 
 	return nil
 }
@@ -408,8 +442,55 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 	ap.backfillMutex.Unlock()
 
 	log.Println("Starting background channel backfill...")
+	fetched, complete := ap.fetchAllChannels(ctx, ap.mergeNewChannels)
+
+	// Observe the map's reconciled view of the enumerated channels, not the
+	// raw fetch: member-loaded entries carry the authoritative IsMember, and
+	// both observers must feed the estate the same values or the ledger
+	// records a flip-flop that never happened.
+	observed := make([]slack.Channel, 0, len(fetched))
+	ap.channelsMutex.RLock()
+	for _, ch := range fetched {
+		if current, ok := ap.channels[ch.ID]; ok {
+			observed = append(observed, current)
+		}
+	}
+	ap.channelsMutex.RUnlock()
+
+	res := ap.observeChannelsEstate(observed, complete, estate.SourceBoot)
+
+	if !complete {
+		// Walk failed partway: merged pages stay, backfillDone stays false
+		// so RefreshChannelCache can retry, and no absences were asserted.
+		return
+	}
+
+	ap.backfillMutex.Lock()
+	ap.backfillDone = true
+	ap.backfillMutex.Unlock()
+
+	ap.recordEstateSweep(estate.SweepReport{
+		Channels: estate.ClassReport{
+			Complete: true, Count: len(observed),
+			ArchivedIncluded: true, AbsenceAborted: res.AbsenceAborted,
+		},
+		Appended: res.Appended,
+	})
+
+	log.Printf("Background backfill complete: %d channels", len(fetched))
+	ap.markDirty()
+	ap.flushCaches()
+}
+
+// fetchAllChannels walks conversations.list to cursor exhaustion — archived
+// channels included, which ADR-007 makes a requirement rather than the
+// accident it was — with the relaxed pacing backfill has always used. Each
+// page is handed to onPage as it lands so channels stay progressively
+// available during a long walk. Returns every fetched channel and whether
+// the walk completed.
+func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack.Channel)) ([]slack.Channel, bool) {
 	cursor := ""
-	totalLoaded := 0
+	var all []slack.Channel
 	batchCount := 0
 
 	for {
@@ -420,36 +501,22 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 		})
 		if err != nil {
 			if rateLimitErr, ok := err.(*slack.RateLimitedError); ok {
-				log.Printf("Backfill rate limited, waiting %v", rateLimitErr.RetryAfter)
+				log.Printf("Channel walk rate limited, waiting %v", rateLimitErr.RetryAfter)
 				time.Sleep(rateLimitErr.RetryAfter)
 				continue
 			}
-			log.Printf("Backfill failed: %v", err)
-			return
+			log.Printf("Channel walk failed: %v", err)
+			return all, false
 		}
 
-		var newDMs []slack.Channel
-		ap.channelsMutex.Lock()
-		for _, ch := range channels {
-			if _, exists := ap.channels[ch.ID]; !exists {
-				ap.channels[ch.ID] = ch
-				ap.indexChannel(ch)
-				if ch.IsIM {
-					newDMs = append(newDMs, ch)
-				}
-			}
+		all = append(all, channels...)
+		if onPage != nil {
+			onPage(channels)
 		}
-		ap.channelsMutex.Unlock()
-
-		for _, ch := range newDMs {
-			ap.indexChannelDM(ch)
-		}
-
-		totalLoaded += len(channels)
 		batchCount++
 
 		if nextCursor == "" {
-			break
+			return all, true
 		}
 		cursor = nextCursor
 
@@ -460,14 +527,27 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 			time.Sleep(1 * time.Second)
 		}
 	}
+}
 
-	ap.backfillMutex.Lock()
-	ap.backfillDone = true
-	ap.backfillMutex.Unlock()
+// mergeNewChannels adds channels the map does not hold yet, leaving
+// existing entries — member-loaded ones especially — untouched.
+func (ap *ApiProvider) mergeNewChannels(channels []slack.Channel) {
+	var newDMs []slack.Channel
+	ap.channelsMutex.Lock()
+	for _, ch := range channels {
+		if _, exists := ap.channels[ch.ID]; !exists {
+			ap.channels[ch.ID] = ch
+			ap.indexChannel(ch)
+			if ch.IsIM {
+				newDMs = append(newDMs, ch)
+			}
+		}
+	}
+	ap.channelsMutex.Unlock()
 
-	log.Printf("Background backfill complete: %d channels", totalLoaded)
-	ap.markDirty()
-	ap.flushCaches()
+	for _, ch := range newDMs {
+		ap.indexChannelDM(ch)
+	}
 }
 
 // markDirty flags the cache store as needing a flush
@@ -715,6 +795,7 @@ func (ap *ApiProvider) fetchAndCacheChannel(ctx context.Context, channelID strin
 	ap.channelsMutex.Unlock()
 
 	ap.indexChannelDM(*info)
+	ap.observeChannelsEstate([]slack.Channel{*info}, false, estate.SourceTraffic)
 	ap.markDirty()
 	return info, nil
 }
@@ -780,6 +861,7 @@ func (ap *ApiProvider) ResolveUser(ctx context.Context, userID string) (*slack.U
 	ap.usersMutex.Lock()
 	ap.users[user.ID] = *user
 	ap.usersMutex.Unlock()
+	ap.observeUsersEstate([]slack.User{*user}, false, estate.SourceTraffic)
 	ap.markDirty()
 
 	return user, nil
