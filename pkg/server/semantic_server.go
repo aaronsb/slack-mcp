@@ -192,6 +192,18 @@ func (s *SemanticMCPServer) createToolOption(name string, prop map[string]interf
 		// Just skip default for now
 		options = append(options, opt)
 
+	case "number":
+		opt := mcp.WithNumber(name, mcp.Description(desc))
+		if isRequired {
+			opt = mcp.WithNumber(name, mcp.Required(), mcp.Description(desc))
+		}
+		if def, ok := prop["default"].(float64); ok {
+			opt = mcp.WithNumber(name, mcp.DefaultNumber(def), mcp.Description(desc))
+		} else if def, ok := prop["default"].(int); ok {
+			opt = mcp.WithNumber(name, mcp.DefaultNumber(float64(def)), mcp.Description(desc))
+		}
+		options = append(options, opt)
+
 	case "array":
 		items := map[string]any{"type": "string"}
 		if itemsProp, ok := prop["items"].(map[string]interface{}); ok {
