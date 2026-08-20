@@ -56,6 +56,7 @@ type classReport struct {
 	Count            int  `json:"count,omitempty"`
 	ArchivedIncluded bool `json:"archivedIncluded,omitempty"`
 	AbsenceAborted   bool `json:"absenceAborted,omitempty"`
+	Skipped          bool `json:"skipped,omitempty"`
 }
 
 func mustRaw(v any) json.RawMessage {
