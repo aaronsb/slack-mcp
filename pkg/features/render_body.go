@@ -22,8 +22,16 @@ func newBodyRenderer(ap *provider.ApiProvider) func(string) string {
 	if id := ap.ProvideIdentity(); id != nil {
 		selfID = id.UserID
 	}
+	resolve := newTagResolver(ap, users, selfID)
+	return func(s string) string {
+		return text.ResolveTags(s, resolve)
+	}
+}
 
-	resolve := func(kind text.TagKind, id, label string) (string, bool) {
+// newTagResolver is the one tag-resolution chain both the body renderer
+// and the message normalizer share.
+func newTagResolver(ap *provider.ApiProvider, users map[string]slack.User, selfID string) func(text.TagKind, string, string) (string, bool) {
+	return func(kind text.TagKind, id, label string) (string, bool) {
 		switch kind {
 		case text.TagUser:
 			if u, ok := users[id]; ok {
@@ -82,10 +90,6 @@ func newBodyRenderer(ap *provider.ApiProvider) func(string) string {
 		default:
 			return "", false
 		}
-	}
-
-	return func(s string) string {
-		return text.ResolveTags(s, resolve)
 	}
 }
 

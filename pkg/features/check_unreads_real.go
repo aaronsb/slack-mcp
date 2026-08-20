@@ -78,7 +78,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	}
 	currentUserID := authTest.UserID
 	usersMap := apiProvider.ProvideUsersMap()
-	render := newBodyRenderer(apiProvider)
+	renderer := newMessageRenderer(apiProvider)
 
 	// Initialize result categories
 	unreads := map[string]interface{}{
@@ -164,10 +164,11 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 							isUrgent = true
 						}
 
+						rm := renderer.Render(msg)
 						messages = append(messages, map[string]interface{}{
-							"text":      render(msg.Text),
+							"text":      rm.Body,
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
-							"user":      getUserName(msg.User, usersMap),
+							"user":      rm.Author,
 						})
 					}
 
@@ -232,7 +233,8 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 				for _, msg := range resp.Messages {
 					if strings.Contains(msg.Text, mentionPattern) {
-						authorName := getUserName(msg.User, usersMap)
+						rm := renderer.Render(msg)
+						authorName := rm.Author
 						msgIsBot := false
 						if u, ok := usersMap[msg.User]; ok {
 							msgIsBot = u.IsBot
@@ -247,7 +249,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 							"type":      "mention",
 							"channel":   info.Name,
 							"author":    authorName,
-							"message":   render(msg.Text),
+							"message":   rm.Body,
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 							"channelId": mpim.ID,
 							"threadId":  fmt.Sprintf("%s:%s", mpim.ID, msg.Timestamp),
@@ -292,7 +294,8 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 
 				for _, msg := range resp.Messages {
 					if strings.Contains(msg.Text, mentionPattern) {
-						authorName := getUserName(msg.User, usersMap)
+						rm := renderer.Render(msg)
+						authorName := rm.Author
 						msgIsBot := false
 						if u, ok := usersMap[msg.User]; ok {
 							msgIsBot = u.IsBot
@@ -307,7 +310,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 							"type":      "mention",
 							"channel":   info.Name,
 							"author":    authorName,
-							"message":   render(msg.Text),
+							"message":   rm.Body,
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 							"channelId": ch.ID,
 							"threadId":  fmt.Sprintf("%s:%s", ch.ID, msg.Timestamp),
@@ -364,8 +367,9 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				if err == nil && len(resp.Messages) > 0 {
 					observeTraffic(apiProvider, ch.ID, resp.Messages)
 					lastMsg := resp.Messages[0]
-					authorName := getUserName(lastMsg.User, usersMap)
-					channelData["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(render(lastMsg.Text), 100))
+					rm := renderer.Render(lastMsg)
+					authorName := rm.Author
+					channelData["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(rm.Body, 100))
 					channelData["timestamp"] = formatTimestamp(parseSlackTimestamp(lastMsg.Timestamp))
 				}
 

@@ -86,27 +86,21 @@ func getThreadContextImpl(ctx context.Context, params map[string]interface{}, th
 	// Process messages
 	messages := []map[string]interface{}{}
 	usersMap := apiProvider.ProvideUsersMap()
-	render := newBodyRenderer(apiProvider)
+	renderer := newMessageRenderer(apiProvider)
 
 	for _, msg := range replies {
-		// Get user info
-		userName := "unknown"
-		if user, ok := usersMap[msg.User]; ok {
-			userName = user.Name
-			if user.RealName != "" {
-				userName = user.RealName
-			}
-		}
-
-		// Parse timestamp
+		rm := renderer.Render(msg)
 		msgTime := parseSlackTimestamp(msg.Timestamp)
 		timeAgo := formatTimestamp(msgTime)
 
 		message := map[string]interface{}{
-			"user":      userName,
-			"text":      render(msg.Text),
+			"user":      rm.Author,
+			"text":      rm.Body,
 			"timestamp": timeAgo,
 			"ts":        msg.Timestamp,
+		}
+		if len(rm.Unresolved) > 0 {
+			message["unresolved"] = rm.Unresolved
 		}
 
 		messages = append(messages, message)

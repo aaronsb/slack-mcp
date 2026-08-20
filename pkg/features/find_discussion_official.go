@@ -92,15 +92,11 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		}
 	}
 
-	usersMap := p.ProvideUsersMap()
 	render := newBodyRenderer(p)
 	results := make([]map[string]interface{}, 0, len(messages.Matches))
 
 	for _, match := range messages.Matches {
-		who := "unknown"
-		if user, ok := usersMap[match.User]; ok {
-			who = displayName(user)
-		}
+		who := userLabel(p, match.User)
 
 		entry := map[string]interface{}{
 			// A handle, not a channel ID and a timestamp for the caller to

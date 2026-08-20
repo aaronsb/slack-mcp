@@ -162,13 +162,18 @@ func readThread(ctx context.Context, apiProvider *provider.ApiProvider, api *sla
 
 func messagesResult(apiProvider *provider.ApiProvider, where, kind, channel string, msgs []slack.Message, usersMap map[string]slack.User, render func(string) string, named, more bool) (*FeatureResult, error) {
 	observeTraffic(apiProvider, channel, msgs)
+	r := newMessageRenderer(apiProvider)
 	out := make([]map[string]interface{}, 0, len(msgs))
 	for _, m := range msgs {
+		rm := r.Render(m)
 		entry := map[string]interface{}{
 			"handle": handle.Message(channel, m.Timestamp),
-			"who":    getUserName(m.User, usersMap),
+			"who":    rm.Author,
 			"when":   formatTimestamp(parseSlackTimestamp(m.Timestamp)),
-			"text":   render(m.Text),
+			"text":   rm.Body,
+		}
+		if len(rm.Unresolved) > 0 {
+			entry["unresolved"] = rm.Unresolved
 		}
 		if len(m.Files) > 0 {
 			files := make([]map[string]interface{}, 0, len(m.Files))

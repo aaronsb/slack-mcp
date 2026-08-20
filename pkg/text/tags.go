@@ -32,15 +32,26 @@ const (
 // keeps its original form. <!here>-style broadcasts need no resolver and
 // always rewrite.
 func ResolveTags(s string, resolve func(kind TagKind, id, label string) (string, bool)) string {
+	out, _ := ResolveTagsReport(s, resolve)
+	return out
+}
+
+// ResolveTagsReport is ResolveTags plus the repair queue: the second
+// return lists every tag left raw in the output, so callers can carry
+// misses as data (ADR-004's unresolved field) instead of losing them in
+// the body.
+func ResolveTagsReport(s string, resolve func(kind TagKind, id, label string) (string, bool)) (string, []string) {
 	if !strings.ContainsRune(s, '<') {
-		return s
+		return s, nil
 	}
+	var unresolved []string
 
 	s = userTag.ReplaceAllStringFunc(s, func(m string) string {
 		parts := userTag.FindStringSubmatch(m)
 		if out, ok := resolve(TagUser, parts[1], parts[2]); ok {
 			return out
 		}
+		unresolved = append(unresolved, m)
 		return m
 	})
 	s = channelTag.ReplaceAllStringFunc(s, func(m string) string {
@@ -48,6 +59,7 @@ func ResolveTags(s string, resolve func(kind TagKind, id, label string) (string,
 		if out, ok := resolve(TagChannel, parts[1], parts[2]); ok {
 			return out
 		}
+		unresolved = append(unresolved, m)
 		return m
 	})
 	s = groupTag.ReplaceAllStringFunc(s, func(m string) string {
@@ -58,8 +70,9 @@ func ResolveTags(s string, resolve func(kind TagKind, id, label string) (string,
 		if parts[2] != "" {
 			return "@" + parts[2]
 		}
+		unresolved = append(unresolved, m)
 		return m
 	})
 	s = bangTag.ReplaceAllString(s, "@$1")
-	return s
+	return s, unresolved
 }
