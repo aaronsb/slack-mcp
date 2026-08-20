@@ -111,13 +111,17 @@ func renderPlaneFooter(b *strings.Builder, cov provider.EstateCoverageInfo, att 
 	} else {
 		b.WriteString("Coverage: fold executor, 0 Slack calls.\n")
 	}
-	if att.Available && att.Stats.Events > 0 {
+	switch {
+	case att.Available && att.Stats.Events > 0:
 		fmt.Fprintf(b, "Activity plane: %d encounters, %d people, %d conversations (%s → %s), as observed from reads through this server (90-day window).\n",
 			att.Stats.Events, att.Stats.Users, att.Stats.Convs, att.Stats.FirstDay, att.Stats.LastDay)
-	} else if att.Available {
+	case att.Available:
 		b.WriteString("Activity plane: empty — fills as you read.\n")
-	} else {
+	default:
 		b.WriteString("Activity plane: unavailable (no attention ledger).\n")
+	}
+	if att.Available && !att.Writable {
+		b.WriteString("Read-only instance: another server holds the ledger — this session's reads are not recorded.\n")
 	}
 	if !cov.LastFullSweep.IsZero() {
 		fmt.Fprintf(b, "Estate: %d channels, last full sweep %s.\n", cov.Channels, cov.LastFullSweep.Format("2006-01-02 15:04"))

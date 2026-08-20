@@ -109,12 +109,15 @@ func (ap *ApiProvider) AttentionWritable() bool {
 // AttentionInfo is AttentionStats in one coverage-friendly value.
 type AttentionInfo struct {
 	Available bool
-	Stats     estate.AttentionStats
+	// Writable is false when this instance lost the writer election —
+	// its reads are not recorded, and views must say so.
+	Writable bool
+	Stats    estate.AttentionStats
 }
 
 func (ap *ApiProvider) AttentionInfo() AttentionInfo {
 	st, ok := ap.AttentionStats()
-	return AttentionInfo{Available: ok, Stats: st}
+	return AttentionInfo{Available: ok, Writable: ap.AttentionWritable(), Stats: st}
 }
 
 // slackTSTime parses a Slack "seconds.micros" timestamp; zero on failure.

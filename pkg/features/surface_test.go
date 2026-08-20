@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aaronsb/slack-mcp/pkg/features"
+	"github.com/aaronsb/slack-mcp/pkg/handle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/slacktest"
 	"github.com/slack-go/slack"
@@ -189,5 +190,25 @@ func TestMessagesSinceMissRendersCandidates(t *testing.T) {
 	}
 	if !strings.Contains(out, "`messages target='@nosuchperson' since=1d`") {
 		t.Fatalf("miss result lost the echo:\n%s", out)
+	}
+}
+
+func TestSinceModeAcceptsAnInboxHandle(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.Handle("conversations.history", func(*http.Request) any {
+		return map[string]any{
+			"ok": true, "has_more": false,
+			"messages": []any{slacktest.Message("U2", "group update", "1782246200.000000")},
+		}
+	})
+	ap := bootedProvider(t, srv)
+
+	h := handle.Conversation("C1")
+	out := runTool(t, features.Messages, ap, map[string]any{"target": h, "since": "1d"})
+	if strings.Contains(out, "not found") {
+		t.Fatalf("event handle rejected as a since-mode target:\n%s", out)
+	}
+	if !strings.Contains(out, "group update") {
+		t.Fatalf("handle target did not reach the conversation:\n%s", out)
 	}
 }

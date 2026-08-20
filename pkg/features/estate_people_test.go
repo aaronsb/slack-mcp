@@ -224,6 +224,9 @@ func TestCompiledExecutorRefusesAReadOnlyLedger(t *testing.T) {
 	if !strings.Contains(out, "fold executor, 0 Slack calls") {
 		t.Fatalf("coverage does not admit the fold-only answer:\n%s", out)
 	}
+	if !strings.Contains(out, "Read-only instance") {
+		t.Fatalf("read-only instance not stated — silent observation loss:\n%s", out)
+	}
 }
 
 func TestDMDaysCountOnceWhenBothSidesObserved(t *testing.T) {
