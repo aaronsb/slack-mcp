@@ -13,19 +13,40 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 )
 
-// estateCoverage builds the coverage block every listing carries. A null
-// lastFullSweep means absence cannot be asserted, and callers phrase their
-// empty results accordingly.
+// estateCoverage builds the coverage block every listing carries: the
+// swept/lastFullSweep claim, per-class enumeration times and counts, and
+// live walk progress so repeated queries show the mapping advancing.
 func estateCoverage(ap *provider.ApiProvider) map[string]interface{} {
-	last := ap.EstateLastFullSweep()
-	if last.IsZero() {
-		return map[string]interface{}{
-			"estate": map[string]interface{}{"lastFullSweep": nil, "swept": false},
+	info := ap.EstateCoverage()
+	est := map[string]interface{}{
+		"lastFullSweep": nil,
+		"swept":         false,
+	}
+	if !info.Available {
+		est["available"] = false
+		return map[string]interface{}{"estate": est}
+	}
+	if !info.LastFullSweep.IsZero() {
+		est["lastFullSweep"] = info.LastFullSweep.Format(time.RFC3339)
+		est["swept"] = true
+	}
+	users := map[string]interface{}{"count": info.Users}
+	if !info.UserSweep.IsZero() {
+		users["lastComplete"] = info.UserSweep.Format(time.RFC3339)
+	}
+	channels := map[string]interface{}{"count": info.Channels}
+	if !info.ChannelSweep.IsZero() {
+		channels["lastComplete"] = info.ChannelSweep.Format(time.RFC3339)
+	}
+	if info.ChannelWalk.Active {
+		channels["enumerating"] = map[string]interface{}{
+			"seen":           info.ChannelWalk.Seen,
+			"startedSecsAgo": int(time.Since(info.ChannelWalk.Started).Seconds()),
 		}
 	}
-	return map[string]interface{}{
-		"estate": map[string]interface{}{"lastFullSweep": last.Format(time.RFC3339), "swept": true},
-	}
+	est["users"] = users
+	est["channels"] = channels
+	return map[string]interface{}{"estate": est}
 }
 
 // goneInterval renders a tombstone's honesty bound: the change lies in
