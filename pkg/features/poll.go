@@ -195,7 +195,8 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 	usersMap := apiProvider.ProvideUsersMap()
 	t.render = newBodyRenderer(apiProvider)
 
-	hydrateConversations(ctx, api, store, hydrated, naming, usersMap, limit, now.Add(-firstLookWindow), t)
+	observe := func(conv string, msgs []slack.Message) { observeTraffic(apiProvider, conv, msgs) }
+	hydrateConversations(ctx, api, store, hydrated, naming, usersMap, limit, now.Add(-firstLookWindow), observe, t)
 	tickThreads(ctx, api, internal, store, naming, usersMap, limit, now, t)
 
 	return buildPollResult(t, counts.Threads.UnreadCountByChannel), nil
@@ -241,6 +242,7 @@ func hydrateConversations(
 	usersMap map[string]slack.User,
 	limit int,
 	cutoff time.Time,
+	observe func(string, []slack.Message),
 	t *tick,
 ) {
 	t.events = make([]map[string]interface{}, 0, limit)
@@ -259,6 +261,9 @@ func hydrateConversations(
 		where := naming(c)
 		messages, overflow, err := fetchSince(ctx, api, c.ID, oldest, c.Latest)
 		t.read++
+		if err == nil {
+			observe(c.ID, messages)
+		}
 
 		if err != nil {
 			// One unreadable conversation must not cost the rest of the tick —
