@@ -41,24 +41,18 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	// Create feature registry
 	registry := features.NewRegistry()
 
-	// Register all available features
-	registry.Register(features.Poll)
-	registry.Register(features.Ack)
-	registry.Register(features.Read)
-	registry.Register(features.CheckUnreads)
-	registry.Register(features.CatchUpOnChannel)
-	registry.Register(features.ListChannels)
-	registry.Register(features.CheckMyMentions)
-	registry.Register(features.FindDiscussion)
-	registry.Register(features.PaceConversation)
-	registry.Register(features.WriteMessage)
-	registry.Register(features.MarkAsRead)
-	registry.Register(features.GetContext)
-	registry.Register(features.React)
-	registry.Register(features.ListUsers)
-	registry.Register(features.AuthSetup)
-	registry.Register(features.DownloadFile)
+	// The v2 surface (ADR-009): three read-only nouns carrying the depth,
+	// five verbs whose names state their blast radius. The v1 features
+	// stay exported for the nouns to delegate to; only these eight are
+	// advertised.
+	registry.Register(features.Inbox)
+	registry.Register(features.Messages)
 	registry.Register(features.EstateViews)
+	registry.Register(features.Say)
+	registry.Register(features.Dismiss)
+	registry.Register(features.MarkAsRead)
+	registry.Register(features.Auth)
+	registry.Register(features.Download)
 
 	semanticServer := &SemanticMCPServer{
 		server:   s,
@@ -127,11 +121,11 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 
 		// Add provider to params for features that need it
 		p := s.provider.Load()
-		if p == nil && feature.Name != "auth-setup" {
+		if p == nil && feature.Name != "auth" {
 			guidance := map[string]interface{}{
 				"status":  "setup_needed",
-				"message": "Slack credentials are not configured yet. Use the auth-setup tool to connect a workspace.",
-				"hint":    "Call auth-setup to start a browser-based setup flow. Tokens are stored locally and never leave your machine.",
+				"message": "Slack credentials are not configured yet. Use the auth tool to connect a workspace.",
+				"hint":    "Call auth to start a browser-based setup flow. Tokens are stored locally and never leave your machine.",
 			}
 			jsonData, _ := json.MarshalIndent(guidance, "", "  ")
 			return mcp.NewToolResultText(string(jsonData)), nil
@@ -236,7 +230,7 @@ func (s *SemanticMCPServer) registerResources() {
 					mcp.TextResourceContents{
 						URI:      "slack-mcp://identity",
 						MIMEType: "application/json",
-						Text:     `{"status": "not_authenticated", "message": "Use auth-setup to connect a workspace"}`,
+						Text:     `{"status": "not_authenticated", "message": "Use the auth tool to connect a workspace"}`,
 					},
 				}, nil
 			}

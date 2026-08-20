@@ -225,8 +225,8 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 	}
 
 	result.NextActions = []string{
-		"Use 'search' with threadId to see full thread context",
-		"Use 'catch-up' to see activity in specific channels",
+		"Read a full thread: messages target='<channel>' around='<ts>'",
+		"Use messages target='#channel' since='1d' to see activity in specific channels",
 	}
 
 	if totalScanned < len(channels) {

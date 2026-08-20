@@ -75,7 +75,7 @@ func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*F
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Failed to look up file %s: %v", fileID, err),
-			Guidance: "Verify the fileId from a recent get-context or search result. External files are not downloadable.",
+			Guidance: "Verify the fileId from a recent messages result. External files are not downloadable.",
 		}, nil
 	}
 

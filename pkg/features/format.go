@@ -9,16 +9,27 @@ import (
 // optimized for AI consumption. Returns compact, scannable text
 // instead of raw JSON.
 func FormatResult(toolName string, result *FeatureResult) string {
+	if result.RenderAs != "" {
+		toolName = result.RenderAs
+	}
+	out := formatResultBody(toolName, result)
+	if result.Echo != "" {
+		out = "`" + result.Echo + "`\n\n" + out
+	}
+	return out
+}
+
+func formatResultBody(toolName string, result *FeatureResult) string {
 	if !result.Success {
 		return formatError(result)
 	}
 
 	switch toolName {
-	case "check-unreads":
+	case "inbox view='unreads'":
 		return formatUnreads(result)
-	case "check-mentions":
+	case "inbox view='mentions'":
 		return formatMentions(result)
-	case "list-channels":
+	case "estate view='channels'":
 		return formatChannels(result)
 	case "list-users":
 		return formatUsers(result)
@@ -28,18 +39,22 @@ func FormatResult(toolName string, result *FeatureResult) string {
 		return formatContext(result)
 	case "search":
 		return formatSearch(result)
-	case "send-message":
+	case "say":
 		return formatSendMessage(result)
 	case "mark-read":
 		return formatMarkRead(result)
 	case "react":
 		return formatReact(result)
-	case "check-timing":
-		return formatTiming(result)
 	case "auth-setup":
 		return formatAuthSetup(result)
 	case "download-file":
 		return formatDownloadFile(result)
+	case "read":
+		return formatRead(result)
+	case "ack":
+		return formatAck(result)
+	case "poll":
+		return formatPoll(result)
 	case "estate":
 		return formatEstate(result)
 	default:
@@ -230,7 +245,7 @@ func formatError(result *FeatureResult) string {
 	return s
 }
 
-// --- check-unreads ---
+// --- inbox view='unreads' ---
 
 func formatUnreads(result *FeatureResult) string {
 	data := dataMap(result)
@@ -339,7 +354,7 @@ func formatUnreads(result *FeatureResult) string {
 	return b.String()
 }
 
-// --- check-mentions ---
+// --- inbox view='mentions' ---
 
 func formatMentions(result *FeatureResult) string {
 	data := dataMap(result)
@@ -376,7 +391,7 @@ func formatMentions(result *FeatureResult) string {
 	return b.String()
 }
 
-// --- list-channels ---
+// --- estate view='channels' ---
 
 func formatChannels(result *FeatureResult) string {
 	data := dataMap(result)
@@ -497,7 +512,7 @@ func formatCatchUp(result *FeatureResult) string {
 			name := str(f, "name")
 			id := str(f, "id")
 			mime := str(f, "mimetype")
-			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download-file fileId='%s'\n", name, mime, id, id))
+			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download fileId='%s'\n", name, mime, id, id))
 		}
 		b.WriteString("\n")
 	}
@@ -546,7 +561,7 @@ func formatContext(result *FeatureResult) string {
 			name := str(f, "name")
 			id := str(f, "id")
 			mime := str(f, "mimetype")
-			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download-file fileId='%s'\n", name, mime, id, id))
+			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download fileId='%s'\n", name, mime, id, id))
 		}
 		b.WriteString("\n")
 	}
@@ -603,7 +618,7 @@ func formatSearch(result *FeatureResult) string {
 
 		b.WriteString(fmt.Sprintf("#%s | %s | %s%s%s\n%s\n", channel, user, ts, threadTag, attachTag, text))
 		if attachTag != "" {
-			b.WriteString(fmt.Sprintf("  (has attachments — get-context channel='%s' messageTs='%s' for file IDs)\n", channel, ts))
+			b.WriteString(fmt.Sprintf("  (has attachments — messages target='%s' around='%s' for file IDs)\n", channel, ts))
 		}
 		if link := str(msg, "permalink"); link != "" {
 			b.WriteString(fmt.Sprintf("%s\n", link))
@@ -615,7 +630,7 @@ func formatSearch(result *FeatureResult) string {
 	return b.String()
 }
 
-// --- send-message ---
+// --- say ---
 
 func formatSendMessage(result *FeatureResult) string {
 	data := dataMap(result)
@@ -639,35 +654,6 @@ func formatMarkRead(result *FeatureResult) string {
 
 func formatReact(result *FeatureResult) string {
 	return result.Message + footer(result)
-}
-
-// --- check-timing ---
-
-func formatTiming(result *FeatureResult) string {
-	data := dataMap(result)
-	if data == nil {
-		return formatGeneric(result)
-	}
-
-	var b strings.Builder
-	channel := str(data, "channel")
-	b.WriteString(fmt.Sprintf("## Conversation Timing — %s\n\n", channel))
-
-	if mode := str(data, "mode"); mode != "" {
-		b.WriteString(fmt.Sprintf("**Mode:** %s\n", mode))
-	}
-	if since := str(data, "timeSinceLastMessage"); since != "" {
-		b.WriteString(fmt.Sprintf("**Since last message:** %s\n", since))
-	}
-	if rec := str(data, "recommendation"); rec != "" {
-		b.WriteString(fmt.Sprintf("**Recommendation:** %s\n", rec))
-	}
-	if prompt := str(data, "thinkingPrompt"); prompt != "" {
-		b.WriteString(fmt.Sprintf("\n%s\n", prompt))
-	}
-
-	b.WriteString(footer(result))
-	return b.String()
 }
 
 // --- auth-setup ---
@@ -760,6 +746,82 @@ func formatDownloadFile(result *FeatureResult) string {
 }
 
 // --- Generic fallback ---
+
+// --- poll (inbox view='new') ---
+
+func formatPoll(result *FeatureResult) string {
+	data, _ := result.Data.(map[string]interface{})
+	events, _ := data["events"].([]map[string]interface{})
+	if len(events) == 0 {
+		return formatGeneric(result)
+	}
+	var b strings.Builder
+	b.WriteString(result.Message + "\n\n")
+	for _, e := range events {
+		kind, _ := e["kind"].(string)
+		where, _ := e["where"].(string)
+		switch kind {
+		case "unreadable":
+			fmt.Fprintf(&b, "- ⚠️ %s could not be read: %v\n", where, e["error"])
+		case "backlog":
+			fmt.Fprintf(&b, "- 📚 %s — %v\n  handle: %v\n", where, e["preview"], e["handle"])
+		default:
+			fmt.Fprintf(&b, "- **%s** %v (%v)", where, e["who"], e["when"])
+			if kind == "thread" {
+				fmt.Fprintf(&b, " [thread, %v replies]", e["replyCount"])
+			}
+			fmt.Fprintf(&b, "\n  %v\n  handle: %v\n", e["preview"], e["handle"])
+		}
+	}
+	return strings.TrimRight(b.String(), "\n") + footer(result)
+}
+
+// --- ack (dismiss) ---
+
+func formatAck(result *FeatureResult) string {
+	out := result.Message
+	if data, ok := result.Data.(map[string]interface{}); ok {
+		if rejected, ok := data["rejected"].([]map[string]interface{}); ok && len(rejected) > 0 {
+			out += "\n\nRejected:"
+			for _, r := range rejected {
+				out += fmt.Sprintf("\n- %v: %v", r["handle"], r["reason"])
+			}
+		}
+	}
+	return out + footer(result)
+}
+
+// --- read ---
+
+func formatRead(result *FeatureResult) string {
+	data, _ := result.Data.(map[string]interface{})
+	if cands, ok := data["candidates"].([]map[string]interface{}); ok && len(cands) > 0 {
+		var b strings.Builder
+		b.WriteString(result.Message + "\n\n")
+		for _, c := range cands {
+			fmt.Fprintf(&b, "- %v (%v) — messages target='%v'\n", c["where"], c["kind"], c["handle"])
+		}
+		return strings.TrimRight(b.String(), "\n") + footer(result)
+	}
+	msgs, _ := data["messages"].([]map[string]interface{})
+	if len(msgs) == 0 {
+		return formatGeneric(result)
+	}
+	var b strings.Builder
+	where, _ := data["where"].(string)
+	kind, _ := data["kind"].(string)
+	fmt.Fprintf(&b, "## %s (%s) — %d messages\n\n", where, kind, len(msgs))
+	for _, m := range msgs {
+		fmt.Fprintf(&b, "**%v** (%v)\n%v\n", m["who"], m["when"], m["text"])
+		if files, ok := m["files"].([]map[string]interface{}); ok {
+			for _, f := range files {
+				fmt.Fprintf(&b, "📎 %v (%v) — download fileId='%v'\n", f["name"], f["mimetype"], f["id"])
+			}
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n") + footer(result)
+}
 
 func formatGeneric(result *FeatureResult) string {
 	s := result.Message

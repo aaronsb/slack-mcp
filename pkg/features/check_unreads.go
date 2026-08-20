@@ -10,7 +10,7 @@ import (
 
 // CheckUnreads provides a comprehensive view of all unread activity
 var CheckUnreads = &Feature{
-	Name:        "check-unreads",
+	Name:        "inbox view='unreads'",
 	Description: "Get a summary of all your unread messages - DMs, mentions, and important channel activity",
 	Schema: map[string]interface{}{
 		"type": "object",
@@ -263,7 +263,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 	// Add next actions
 	result.NextActions = []string{}
 	if stats["totalDMs"].(int) > 0 {
-		result.NextActions = append(result.NextActions, "Use 'catch-up' with a DM channel ID to see full conversation")
+		result.NextActions = append(result.NextActions, "Use messages target='<dm channel>' since='1d' to see the full conversation")
 	}
 	if stats["totalMentions"].(int) > 0 {
 		result.NextActions = append(result.NextActions, "Use 'search' with threadId to see full thread context")

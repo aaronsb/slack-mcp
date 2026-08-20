@@ -42,7 +42,7 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 		return &FeatureResult{
 			Success:  false,
 			Message:  "Query must be at least 2 characters",
-			Guidance: "Provide a name or partial name to search for, e.g. list-users query='clayton'",
+			Guidance: "Provide a name or partial name to search for, e.g. estate view='people' person='clayton'",
 		}, nil
 	}
 	queryLower := strings.ToLower(query)
@@ -169,7 +169,7 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 			Success:  true,
 			Message:  fmt.Sprintf("No users found matching '%s' — not in the estate as of %s", query, swept.Format("2006-01-02")),
 			Data:     data,
-			Guidance: "Try a different spelling or a shorter query. Use list-users query='<first name>' for broad matches.",
+			Guidance: "Try a different spelling or a shorter query. Use estate view='people' person='<first name>' for broad matches.",
 		}, nil
 	}
 
@@ -182,8 +182,8 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 			"coverage": coverage,
 		},
 		NextActions: []string{
-			"Send a DM: send-message channel='<displayName>' message='...'",
-			"See DM history: get-context channel='<displayName>'",
+			"Send a DM: say to='<displayName>' text='...'",
+			"See DM history: messages target='<displayName>'",
 		},
 	}, nil
 }

@@ -27,16 +27,16 @@ var Ack = &Feature{
 		"properties": map[string]interface{}{
 			"handle": map[string]interface{}{
 				"type":        "string",
-				"description": "A handle from a poll event.",
+				"description": "A handle from an inbox event.",
 			},
 			"handles": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "Several handles from poll events, acknowledged together.",
+				"description": "Several handles from inbox events, dismissed together.",
 			},
 			"scope": map[string]interface{}{
 				"type":        "string",
-				"description": "The scope whose position to advance. Must match the poll that produced the handles.",
+				"description": "The scope whose position to advance. Must match the inbox view='new' call that produced the handles.",
 				"default":     watermark.DefaultScope,
 			},
 		},
@@ -65,8 +65,8 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 	if len(raw) == 0 {
 		return &FeatureResult{
 			Success:  false,
-			Message:  "Nothing to acknowledge.",
-			Guidance: "Pass a handle from a poll event, or several as handles.",
+			Message:  "Nothing to dismiss.",
+			Guidance: "Pass a handle from an inbox event, or several as handles.",
 		}, nil
 	}
 
@@ -151,14 +151,14 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 	if err := store.Save(); err != nil {
 		return &FeatureResult{
 			Success: false,
-			Message: fmt.Sprintf("Acknowledged nothing: the position could not be saved: %v", err),
+			Message: fmt.Sprintf("Dismissed nothing: the position could not be saved: %v", err),
 		}, nil
 	}
 
 	result := &FeatureResult{
 		Success:     true,
 		ResultCount: acked + threads,
-		Message:     fmt.Sprintf("Acknowledged %d.", acked+threads),
+		Message:     fmt.Sprintf("Dismissed %d.", acked+threads),
 		Data: map[string]interface{}{
 			"acknowledged":      acked,
 			"threads":           threads,
@@ -166,7 +166,7 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 			"markedReadInSlack": false,
 		},
 		NextActions: []string{
-			"See what is still outstanding: poll",
+			"See what is still outstanding: inbox view='new'",
 		},
 	}
 

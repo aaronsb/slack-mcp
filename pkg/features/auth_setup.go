@@ -146,7 +146,7 @@ func flowToFeatureResult(resp *setup.FlowResponse) *FeatureResult {
 	// Map FlowResponse actions to NextActions
 	var nextActions []string
 	for _, a := range resp.Actions {
-		nextActions = append(nextActions, fmt.Sprintf("auth-setup action=%q", a))
+		nextActions = append(nextActions, fmt.Sprintf("auth action=%q", a))
 	}
 
 	return &FeatureResult{

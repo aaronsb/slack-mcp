@@ -194,7 +194,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					stats["totalDMs"] = stats["totalDMs"].(int) + 1
 					dmCount++
 
-					// Stealth: never auto-mark as read from check-unreads
+					// Stealth: never auto-mark as read from inbox view='unreads'
 					// Use mark-read tool explicitly when ready
 				}
 			}
@@ -414,7 +414,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	// Add next actions
 	result.NextActions = []string{}
 	if stats["totalDMs"].(int) > 0 {
-		result.NextActions = append(result.NextActions, "Use 'catch-up' with a DM channel ID to see full conversation")
+		result.NextActions = append(result.NextActions, "See the full conversation: messages target='@<person>' since='1d'")
 	}
 	if stats["totalMentions"].(int) > 0 {
 		result.NextActions = append(result.NextActions, "Use 'search' with threadId to see full thread context")
@@ -423,10 +423,10 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	// Add contextual search hint based on volume
 	totalMessages := stats["totalChannelMessages"].(int) + stats["totalDMs"].(int)
 	if totalMessages > 50 {
-		result.NextActions = append(result.NextActions, "Too many messages? Search for specific topics: search query='<topic>' timeframe='1d'")
+		result.NextActions = append(result.NextActions, "Too many messages? Search for specific topics: messages query='<topic>' timeframe='1d'")
 	} else if totalMessages == 0 && result.ResultCount > 0 {
 		// If we have channels but no messages, suggest search
-		result.NextActions = append(result.NextActions, "Looking for something specific? search query='<topic>'")
+		result.NextActions = append(result.NextActions, "Looking for something specific? messages query='<topic>'")
 	}
 
 	return result, nil

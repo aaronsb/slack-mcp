@@ -97,7 +97,7 @@ func catchUpHandler(ctx context.Context, params map[string]interface{}) (*Featur
 		Message: fmt.Sprintf("Found 2 important items in #%s from the last %s", channel, since),
 		NextActions: []string{
 			"Use 'search' to see the full API v2 thread",
-			"Use 'check-mentions' to see all pending mentions",
+			"See all pending mentions: inbox view='mentions'",
 		},
 		Guidance:    "💡 The API v2 discussion has 8 replies - this seems to be an active decision thread you might want to review",
 		ResultCount: 2,

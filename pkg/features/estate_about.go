@@ -48,9 +48,9 @@ func aboutView(ctx context.Context, ap *provider.ApiProvider, person string, day
 			break
 		}
 		label := labelFor(data.Person.Labels, row.Conv)
-		next := fmt.Sprintf("catch-up channel='%s'", label)
+		next := fmt.Sprintf("messages target='%s'", label)
 		if info, ok := data.Person.Labels[row.Conv]; ok && info.IsIM {
-			next = fmt.Sprintf("get-context channel='%s'", strings.TrimPrefix(info.Label, "DM "))
+			next = fmt.Sprintf("messages target='%s'", strings.TrimPrefix(info.Label, "DM "))
 		}
 		data.Plan = append(data.Plan, readingStep{
 			Why:  fmt.Sprintf("%s — their densest observed surface (%d active days) — read for current state", label, row.Days),
@@ -140,7 +140,7 @@ func renderMiss(b *strings.Builder, res *provider.PersonResolution) {
 		}
 		b.WriteString("\n**Next:** re-query with a handle from the list.")
 	} else {
-		b.WriteString("**Next:** search the directory: list-users query='<name>'")
+		b.WriteString("**Next:** search the directory: estate view='people' person='<name>'")
 	}
 }
 
@@ -239,7 +239,7 @@ func formatInitiativesView(v *initiativesViewData) string {
 		fmt.Fprintf(&b, "… %d more creators with observed movement — next page: estate view='initiatives' days=%d offset=%d\n\n", rleft, v.Days, rto)
 	}
 	renderPlaneFooter(&b, v.Coverage, v.Attention, nil)
-	b.WriteString("**Next:** read a moving channel: catch-up channel='#<name>' | the people: estate view='person' person='@<handle>'")
+	b.WriteString("**Next:** read a moving channel: messages target='#<name>' | the people: estate view='person' person='@<handle>'")
 	return b.String()
 }
 
@@ -294,7 +294,7 @@ func formatConvergenceView(v *convergenceViewData) string {
 	}
 
 	renderPlaneFooter(&b, v.Coverage, v.Attention, v.Compiled)
-	b.WriteString("**Next:** read a shared window: catch-up channel='#<name>' since='" + fmt.Sprintf("%dd", v.Days) + "'")
+	b.WriteString("**Next:** read a shared window: messages target='#<name>' since='" + fmt.Sprintf("%dd", v.Days) + "'")
 	return b.String()
 }
 

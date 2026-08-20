@@ -7,7 +7,7 @@ import (
 
 // CheckMyMentions finds all unread mentions requiring attention
 var CheckMyMentions = &Feature{
-	Name:        "check-mentions",
+	Name:        "inbox view='mentions'",
 	Description: "See all your unread mentions across channels, grouped by urgency and context",
 	Schema: map[string]interface{}{
 		"type": "object",
@@ -126,7 +126,7 @@ func checkMentionsHandler(ctx context.Context, params map[string]interface{}) (*
 		Message: fmt.Sprintf("You have %d unread mentions (%d urgent)", len(filteredMentions), urgentCount),
 		NextActions: []string{
 			"Use 'search' with threadId to see full context",
-			"Use 'catch-up' to see related discussions",
+			"Use messages target='#channel' since='1d' to see related discussions",
 		},
 		Guidance:    "🚨 You have 1 urgent mention about a blocking PR review that needs immediate attention",
 		ResultCount: len(filteredMentions),

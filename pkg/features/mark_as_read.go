@@ -141,8 +141,8 @@ func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvi
 	if err != nil {
 		return &FeatureResult{
 			Success:  false,
-			Message:  fmt.Sprintf("Channel '%s' not found. Use list-channels to see available channels.", channel),
-			Guidance: "💡 Use 'list-channels' to see available channels",
+			Message:  fmt.Sprintf("Channel '%s' not found. Use estate view='channels' to see available channels.", channel),
+			Guidance: "💡 See available channels: estate view='channels'",
 		}, nil
 	}
 
@@ -203,16 +203,17 @@ func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvi
 
 	// Add next actions
 	result.NextActions = []string{
-		"Check remaining unreads: check-unreads",
-		fmt.Sprintf("Catch up on #%s again: catch-up channel='%s'", channelInfo.Name, channelInfo.Name),
+		"Check remaining unreads: inbox view='unreads'",
+		fmt.Sprintf("Catch up on #%s again: messages target='%s'", channelInfo.Name, channelInfo.Name),
 	}
 
 	return result, nil
 }
 
 func handleThreadMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, threadId string) (*FeatureResult, error) {
-	// Parse thread ID (format: channelId.threadTs)
-	parts := strings.Split(threadId, ".")
+	// Parse thread ID (format: channelId.threadTs). A Slack ts contains a
+	// dot itself, so split on the first dot only.
+	parts := strings.SplitN(threadId, ".", 2)
 	if len(parts) != 2 {
 		return &FeatureResult{
 			Success: false,
@@ -257,8 +258,8 @@ func handleThreadMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 		Message:  "Thread marked as read",
 		Guidance: "✅ Thread and its replies marked as read",
 		NextActions: []string{
-			"Check for more threads: check-unreads focus='threads'",
-			"Find related discussions: search",
+			"Check for more threads: inbox view='new'",
+			"Find related discussions: messages query='<topic>'",
 		},
 	}, nil
 }
@@ -351,8 +352,8 @@ func handleDMMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, 
 		Message:  fmt.Sprintf("Marked DM with %s as read", userName),
 		Guidance: "✅ Direct messages marked as read",
 		NextActions: []string{
-			"Check other DMs: check-unreads focus='dms'",
-			fmt.Sprintf("Catch up with %s: catch-up channel='%s'", userName, imChannel.ID),
+			"Check other DMs: inbox view='unreads' focus='dms'",
+			fmt.Sprintf("Catch up with %s: messages target='@%s'", userName, userName),
 		},
 	}, nil
 }
@@ -430,7 +431,7 @@ func handleAllDMsMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 	}
 
 	result.NextActions = []string{
-		"Check remaining unreads: check-unreads",
+		"Check remaining unreads: inbox view='unreads'",
 		"Mark channels as read: mark-read target='all-channels'",
 	}
 
@@ -523,8 +524,8 @@ func handleAllChannelsMarkAsRead(ctx context.Context, apiProvider *provider.ApiP
 	}
 
 	result.NextActions = []string{
-		"Check what's left: check-unreads",
-		"Review important channels: catch-up channel='general'",
+		"Check what's left: inbox view='unreads'",
+		"Review important channels: messages target='general'",
 	}
 
 	return result, nil
@@ -563,8 +564,8 @@ func handleEverythingMarkAsRead(ctx context.Context, apiProvider *provider.ApiPr
 		Message:  fmt.Sprintf("Marked %d conversations as read", totalMarked),
 		Guidance: fmt.Sprintf("✅ Slack inbox cleared! (%d DMs, %d channels)", dmMarked, channelMarked),
 		NextActions: []string{
-			"See what's new: check-unreads",
-			"Catch up on important stuff: catch-up channel='general'",
+			"See what's new: inbox view='unreads'",
+			"Catch up on important stuff: messages target='general'",
 		},
 	}, nil
 }
@@ -665,7 +666,7 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 	})
 
 	options = append(options, map[string]interface{}{
-		"command":     "mark-read target='dm:john.doe'",
+		"command":     "mark-read channel='dm:john.doe'",
 		"description": "Mark a specific DM as read",
 		"example":     true,
 	})
@@ -683,7 +684,7 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 		Message:  fmt.Sprintf("You have %d unread conversations", unreadChannels+unreadDMs),
 		Guidance: "💡 Choose an option above or specify what to mark as read",
 		NextActions: []string{
-			"See unread details: check-unreads",
+			"See unread details: inbox view='unreads'",
 			"Mark all as read: mark-read target='everything'",
 			"Keep mentions: mark-read target='everything' filter='no-mentions'",
 		},

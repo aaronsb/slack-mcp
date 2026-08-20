@@ -12,7 +12,7 @@ import (
 
 // ListChannels provides channel listing with smart caching
 var ListChannels = &Feature{
-	Name:        "list-channels",
+	Name:        "estate view='channels'",
 	Description: "Search for channels by name, or list channels you belong to. Without a search query, returns only your member channels. Use filter='all' to see everything in the workspace.",
 	Schema: map[string]interface{}{
 		"type": "object",
@@ -304,8 +304,8 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 			result.Guidance += " — note: no full workspace mapping has completed, so \"not found\" may mean \"not yet seen\""
 		}
 		result.NextActions = []string{
-			"Try a different filter: list-channels filter='all'",
-			"Force refresh the cache: list-channels forceRefresh=true",
+			"Try a different filter: estate view='channels' filter='all'",
+			"Force refresh the cache: estate view='channels' forceRefresh=true",
 		}
 	} else {
 		if time.Since(cacheInfo.LastRefresh) > 30*time.Minute {
@@ -316,9 +316,9 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 		}
 
 		result.NextActions = []string{
-			"Catch up on a channel: catch-up channel='[name]'",
-			"Search for specific channels: list-channels search='engineering'",
-			"Refresh cache: list-channels forceRefresh=true",
+			"Catch up on a channel: messages target='[name]'",
+			"Search for specific channels: estate view='channels' search='engineering'",
+			"Refresh cache: estate view='channels' forceRefresh=true",
 		}
 	}
 

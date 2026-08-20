@@ -50,7 +50,7 @@ var Poll = &Feature{
 	Name: "poll",
 	Description: "What changed since you last looked, across every channel and DM. " +
 		"Takes no arguments. Reads only — never advances your Slack read marker, and " +
-		"never advances this agent's position either; call 'ack' for that.",
+		"never advances this agent's position either; call 'dismiss' for that.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -144,7 +144,7 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 		return &FeatureResult{
 			Success:  false,
 			Message:  "Change detection needs the internal Slack endpoints, which are unavailable.",
-			Guidance: "Run auth-setup to re-authenticate.",
+			Guidance: "Run auth to re-authenticate.",
 		}, nil
 	}
 
@@ -374,6 +374,13 @@ func reverse(msgs []slack.Message) {
 	}
 }
 
+func plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
 func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 	result := &FeatureResult{
 		Success:     true,
@@ -401,15 +408,15 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 	}
 
 	if len(t.events) == 0 {
-		result.Message = fmt.Sprintf("Nothing new across %d conversations.", t.scanned)
-		result.Guidance = "Nothing moved past your position. Poll again later."
+		result.Message = fmt.Sprintf("Nothing new across %s.", plural(t.scanned, "conversation"))
+		result.Guidance = "Nothing moved past your position. Check inbox view='new' again later."
 		return result
 	}
 
-	result.Message = fmt.Sprintf("%d new messages across %d conversations.", len(t.events), t.read)
+	result.Message = fmt.Sprintf("%s across %s.", plural(len(t.events), "new message"), plural(t.read, "conversation"))
 	result.NextActions = []string{
-		"Read one in full: read handle='<handle from an event>'",
-		"Record that you have seen these: ack handle='<handle>'",
+		"Read one in full: messages target='<handle from an event>'",
+		"Record that you have seen these: dismiss handle='<handle>'",
 	}
 
 	var notes []string
@@ -430,7 +437,7 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 	}
 	if len(notes) > 0 {
 		result.Guidance = capitalize(notes[0]) + strings.Join(prefixEach("; ", notes[1:]), "") +
-			". Ack what you have seen, then poll again."
+			". Dismiss what you have seen, then check inbox view='new' again."
 	}
 	if t.firstLook {
 		result.Guidance = strings.TrimSpace(result.Guidance +

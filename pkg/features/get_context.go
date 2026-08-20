@@ -75,7 +75,7 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Could not find channel or user '%s'", channel),
-			Guidance: "Use 'list-channels' to see available channels, or provide a username for DMs",
+			Guidance: "See available channels: estate view='channels' — or provide a username for DMs",
 		}, nil
 	}
 
@@ -209,8 +209,8 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 			"messageCount": len(formatted),
 		},
 		NextActions: []string{
-			fmt.Sprintf("Send a reply: send-message channel='%s'", channel),
-			fmt.Sprintf("Search for related: search query='<topic>' in:'%s'", channel),
+			fmt.Sprintf("Send a reply: say to='%s'", channel),
+			fmt.Sprintf("Search for related: messages query='<topic> in:%s'", channel),
 		},
 	}
 

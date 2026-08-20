@@ -97,19 +97,18 @@ export SLACK_MCP_XOXD_TOKEN="xoxd-..."
 
 ## Tools
 
-| Tool | What it does |
-|------|-------------|
-| `check-unreads` | Unread messages across DMs, channels, and mentions |
-| `catch-up` | Recent channel activity with time filtering |
-| `list-channels` | Browse channels and membership |
-| `check-mentions` | Your @-mentions grouped by urgency |
-| `search` | Find messages (full Slack query syntax) |
-| `get-context` | Thread history and conversation context |
-| `check-timing` | Conversation pacing analysis |
-| `send-message` | Post to channel, DM, or thread |
-| `mark-read` | Mark conversations as read (only tool that triggers read receipts) |
-| `react` | Add or remove emoji reactions |
-| `auth-setup` | Browser-automated token extraction |
+| Tool | Kind | What it does |
+|------|------|-------------|
+| `inbox` | noun | What needs you: `view='new'` (since your last dismiss), `'unreads'`, `'mentions'` |
+| `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` full Slack search syntax |
+| `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'` |
+| `say` | verb | Contribute content (Slack-visible): a message, or an emoji reaction |
+| `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
+| `mark-read` | verb | Fire read receipts — the one visibly-public read signal |
+| `auth` | verb | Interactive token setup (localhost only) |
+| `download` | verb | Download a shared file |
+
+Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009). Every noun echoes its effective parameters and pages every capped list.
 
 ## Privacy
 
