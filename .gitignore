@@ -41,3 +41,8 @@ slack-stealth-mcp/
 npm/slack-mcp-darwin-*/
 npm/slack-mcp-linux-*/
 npm/slack-mcp-windows-*/
+
+# npm packaging artifacts (assembled by make, published by CI)
+npm/*/bin/
+npm/slack-mcp-server*/LICENSE
+npm/slack-mcp-server/README.md
