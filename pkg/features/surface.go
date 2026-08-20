@@ -101,7 +101,7 @@ func inboxHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 
 var Messages = &Feature{
 	Name:        "messages",
-	Description: "Conversation content, addressed four ways: target alone reads it in full (a handle, '#channel', '@person', or a description); target+around fetches context around a timestamp; target+since renders a time window with triage; query searches with full Slack syntax (from:, in:, before:...). Read-only; never marks anything read.",
+	Description: "Conversation content, addressed four ways (precedence: query beats target; around beats since): target alone reads it in full (a handle, '#channel', '@person', or a description); target+around fetches context around a timestamp; target+since renders a time window with triage; query searches with full Slack syntax (from:, in:, before:...). Read-only; never marks anything read.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -123,7 +123,7 @@ var Messages = &Feature{
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
-				"description": "Maximum messages (default 50, capped 200)",
+				"description": "Maximum messages. Per mode: bare target default 50 cap 200; around default 10 cap 100; since default 20 cap 50; ignored for query.",
 			},
 			"cursor": map[string]interface{}{
 				"type":        "string",
@@ -147,7 +147,7 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 
 	switch {
 	case query != "":
-		echo := echoLine("messages", "query='"+query+"'", params, "limit", "cursor", "timeframe")
+		echo := echoLine("messages", "query='"+query+"'", params, "cursor", "timeframe")
 		return delegate(ctx, FindDiscussion, params, echo)
 	case target != "" && around != "":
 		params["channel"] = target
@@ -219,6 +219,12 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 
 	switch {
 	case emoji != "":
+		if ts, _ := params["messageTs"].(string); ts == "" {
+			return &FeatureResult{
+				Success: false,
+				Message: "Reaction mode needs messageTs='<timestamp of the message to react to>'",
+			}, nil
+		}
 		params["channel"] = to
 		echo := echoLine("say", "reaction :"+emoji+": to='"+to+"'", params, "messageTs", "remove")
 		return delegate(ctx, React, params, echo)

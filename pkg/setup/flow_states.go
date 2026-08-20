@@ -342,7 +342,7 @@ func (f *Flow) handleTokenResult(r *TokenResult) *FlowResponse {
 		State:   StateComplete,
 		Message: fmt.Sprintf("Connected to **%s** as **%s**.", r.Team, r.User),
 		Guidance: "Authentication is complete. All Slack tools are now ready to use. " +
-			"Try check-unreads, check-mentions, or catch-up to get started.",
+			"Try inbox view='unreads' or messages target='#channel' since='1d' to get started.",
 		Done:    true,
 		OK:      true,
 		Context: map[string]any{"team": r.Team, "user": r.User},

@@ -144,7 +144,7 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 		return &FeatureResult{
 			Success:  false,
 			Message:  "Change detection needs the internal Slack endpoints, which are unavailable.",
-			Guidance: "Run auth-setup to re-authenticate.",
+			Guidance: "Run auth to re-authenticate.",
 		}, nil
 	}
 

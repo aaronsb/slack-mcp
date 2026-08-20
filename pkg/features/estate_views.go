@@ -35,7 +35,7 @@ var EstateViews = &Feature{
 			},
 			"search": map[string]interface{}{
 				"type":        "string",
-				"description": "families only: filter by stem or channel name (partial match); relaxes the default criteria",
+				"description": "families: filter by stem or channel name (partial match; relaxes the default criteria). channels: name/purpose filter.",
 			},
 			"days": map[string]interface{}{
 				"type":        "number",
@@ -48,8 +48,7 @@ var EstateViews = &Feature{
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
-				"description": "families/people/channels: maximum items to return",
-				"default":     10,
+				"description": "families/channels: maximum items to return (families default 10, channels default 50)",
 			},
 			"includeDeleted": map[string]interface{}{
 				"type":        "boolean",

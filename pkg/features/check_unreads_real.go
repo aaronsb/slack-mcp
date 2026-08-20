@@ -414,7 +414,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	// Add next actions
 	result.NextActions = []string{}
 	if stats["totalDMs"].(int) > 0 {
-		result.NextActions = append(result.NextActions, "Use 'catch-up' with a DM channel ID to see full conversation")
+		result.NextActions = append(result.NextActions, "See the full conversation: messages target='@<person>' since='1d'")
 	}
 	if stats["totalMentions"].(int) > 0 {
 		result.NextActions = append(result.NextActions, "Use 'search' with threadId to see full thread context")

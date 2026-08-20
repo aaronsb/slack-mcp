@@ -155,7 +155,7 @@ func unresolvedPeopleResult(ap *provider.ApiProvider, misses []provider.PersonRe
 			"coverage":   estateCoverage(ap),
 		},
 		Guidance:    strings.Join(lines, "\n"),
-		NextActions: []string{"Retry with a listed handle: messages query='...' from=['<handle>']"},
+		NextActions: []string{"Retry with a listed handle: messages query='from:@<handle> ...'"},
 	}
 }
 

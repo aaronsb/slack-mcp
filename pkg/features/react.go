@@ -40,9 +40,15 @@ var React = &Feature{
 }
 
 func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
-	channel := params["channel"].(string)
-	messageTs := params["messageTs"].(string)
-	emoji := params["emoji"].(string)
+	channel, _ := params["channel"].(string)
+	messageTs, _ := params["messageTs"].(string)
+	emoji, _ := params["emoji"].(string)
+	if channel == "" || messageTs == "" || emoji == "" {
+		return &FeatureResult{
+			Success: false,
+			Message: "A reaction needs a channel, a messageTs, and an emoji.",
+		}, nil
+	}
 
 	remove := false
 	if r, ok := params["remove"].(bool); ok {

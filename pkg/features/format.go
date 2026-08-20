@@ -51,6 +51,8 @@ func formatResultBody(toolName string, result *FeatureResult) string {
 		return formatDownloadFile(result)
 	case "read":
 		return formatRead(result)
+	case "ack":
+		return formatAck(result)
 	case "poll":
 		return formatPoll(result)
 	case "estate":
@@ -510,7 +512,7 @@ func formatCatchUp(result *FeatureResult) string {
 			name := str(f, "name")
 			id := str(f, "id")
 			mime := str(f, "mimetype")
-			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download-file fileId='%s'\n", name, mime, id, id))
+			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download fileId='%s'\n", name, mime, id, id))
 		}
 		b.WriteString("\n")
 	}
@@ -559,7 +561,7 @@ func formatContext(result *FeatureResult) string {
 			name := str(f, "name")
 			id := str(f, "id")
 			mime := str(f, "mimetype")
-			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download-file fileId='%s'\n", name, mime, id, id))
+			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download fileId='%s'\n", name, mime, id, id))
 		}
 		b.WriteString("\n")
 	}
@@ -774,10 +776,33 @@ func formatPoll(result *FeatureResult) string {
 	return strings.TrimRight(b.String(), "\n") + footer(result)
 }
 
+// --- ack (dismiss) ---
+
+func formatAck(result *FeatureResult) string {
+	out := result.Message
+	if data, ok := result.Data.(map[string]interface{}); ok {
+		if rejected, ok := data["rejected"].([]map[string]interface{}); ok && len(rejected) > 0 {
+			out += "\n\nRejected:"
+			for _, r := range rejected {
+				out += fmt.Sprintf("\n- %v: %v", r["handle"], r["reason"])
+			}
+		}
+	}
+	return out + footer(result)
+}
+
 // --- read ---
 
 func formatRead(result *FeatureResult) string {
 	data, _ := result.Data.(map[string]interface{})
+	if cands, ok := data["candidates"].([]map[string]interface{}); ok && len(cands) > 0 {
+		var b strings.Builder
+		b.WriteString(result.Message + "\n\n")
+		for _, c := range cands {
+			fmt.Fprintf(&b, "- %v (%v) — messages target='%v'\n", c["where"], c["kind"], c["handle"])
+		}
+		return strings.TrimRight(b.String(), "\n") + footer(result)
+	}
 	msgs, _ := data["messages"].([]map[string]interface{})
 	if len(msgs) == 0 {
 		return formatGeneric(result)

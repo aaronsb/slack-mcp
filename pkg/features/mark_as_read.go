@@ -211,8 +211,9 @@ func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvi
 }
 
 func handleThreadMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, threadId string) (*FeatureResult, error) {
-	// Parse thread ID (format: channelId.threadTs)
-	parts := strings.Split(threadId, ".")
+	// Parse thread ID (format: channelId.threadTs). A Slack ts contains a
+	// dot itself, so split on the first dot only.
+	parts := strings.SplitN(threadId, ".", 2)
 	if len(parts) != 2 {
 		return &FeatureResult{
 			Success: false,
@@ -258,7 +259,7 @@ func handleThreadMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 		Guidance: "✅ Thread and its replies marked as read",
 		NextActions: []string{
 			"Check for more threads: inbox view='new'",
-			"Find related discussions: search",
+			"Find related discussions: messages query='<topic>'",
 		},
 	}, nil
 }
@@ -352,7 +353,7 @@ func handleDMMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, 
 		Guidance: "✅ Direct messages marked as read",
 		NextActions: []string{
 			"Check other DMs: inbox view='unreads' focus='dms'",
-			fmt.Sprintf("Catch up with %s: messages target='%s'", userName, imChannel.ID),
+			fmt.Sprintf("Catch up with %s: messages target='@%s'", userName, userName),
 		},
 	}, nil
 }
@@ -431,7 +432,7 @@ func handleAllDMsMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 
 	result.NextActions = []string{
 		"Check remaining unreads: inbox view='unreads'",
-		"Mark channels as read: mark-read channel='all-channels'",
+		"Mark channels as read: mark-read target='all-channels'",
 	}
 
 	return result, nil
@@ -617,14 +618,14 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 
 	if unreadDMs > 0 {
 		options = append(options, map[string]interface{}{
-			"command":     "mark-read channel='all-dms'",
+			"command":     "mark-read target='all-dms'",
 			"description": fmt.Sprintf("Mark all %d DMs as read", unreadDMs),
 			"mentions":    mentionDMs,
 		})
 
 		if mentionDMs > 0 {
 			options = append(options, map[string]interface{}{
-				"command":     "mark-read channel='all-dms' filter='no-mentions'",
+				"command":     "mark-read target='all-dms' filter='no-mentions'",
 				"description": fmt.Sprintf("Mark %d DMs as read (keep %d with mentions)", unreadDMs-mentionDMs, mentionDMs),
 			})
 		}
@@ -632,26 +633,26 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 
 	if unreadChannels > 0 {
 		options = append(options, map[string]interface{}{
-			"command":     "mark-read channel='all-channels'",
+			"command":     "mark-read target='all-channels'",
 			"description": fmt.Sprintf("Mark all %d channels as read", unreadChannels),
 			"mentions":    mentionChannels,
 		})
 
 		options = append(options, map[string]interface{}{
-			"command":     "mark-read channel='all-channels' filter='non-important'",
+			"command":     "mark-read target='all-channels' filter='non-important'",
 			"description": "Mark only non-important channels as read",
 		})
 	}
 
 	if unreadDMs > 0 && unreadChannels > 0 {
 		options = append(options, map[string]interface{}{
-			"command":     "mark-read channel='everything'",
+			"command":     "mark-read target='everything'",
 			"description": fmt.Sprintf("Mark everything as read (%d total)", unreadDMs+unreadChannels),
 		})
 
 		if mentionDMs > 0 || mentionChannels > 0 {
 			options = append(options, map[string]interface{}{
-				"command":     "mark-read channel='everything' filter='no-mentions'",
+				"command":     "mark-read target='everything' filter='no-mentions'",
 				"description": fmt.Sprintf("Mark all as read except %d with mentions", mentionDMs+mentionChannels),
 			})
 		}
@@ -684,8 +685,8 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 		Guidance: "💡 Choose an option above or specify what to mark as read",
 		NextActions: []string{
 			"See unread details: inbox view='unreads'",
-			"Mark all as read: mark-read channel='everything'",
-			"Keep mentions: mark-read channel='everything' filter='no-mentions'",
+			"Mark all as read: mark-read target='everything'",
+			"Keep mentions: mark-read target='everything' filter='no-mentions'",
 		},
 	}, nil
 }

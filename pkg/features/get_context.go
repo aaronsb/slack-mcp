@@ -210,7 +210,7 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		},
 		NextActions: []string{
 			fmt.Sprintf("Send a reply: say to='%s'", channel),
-			fmt.Sprintf("Search for related: messages query='<topic>' in:'%s'", channel),
+			fmt.Sprintf("Search for related: messages query='<topic> in:%s'", channel),
 		},
 	}
 

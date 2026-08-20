@@ -195,7 +195,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		result.NextActions = []string{
 			"Try a longer timeframe: messages target='" + channel + "' since='1w'",
 			"Check unreads across channels: inbox view='unreads'",
-			"Search for older discussions: messages query='<topic>' in:" + channel + " timeframe='1m'",
+			"Search for older discussions: messages query='<topic> in:" + channel + "' timeframe='1m'",
 		}
 	} else if totalMsgCount <= 3 {
 		// 1-3 messages: Full consumption = auto-mark read
@@ -211,7 +211,6 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 			"Check mentions across channels: inbox view='mentions'",
 			fmt.Sprintf("Send a reply: say to='%s'", channel),
 		}
-		// TODO: Actually mark as read
 	} else if totalMsgCount <= 50 {
 		// 16-50 messages: Triage only = preserve unread
 		result.Guidance = "📋 Triage view - important items highlighted (unread preserved)"
@@ -235,8 +234,8 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		}
 
 		result.NextActions = append(result.NextActions,
-			"Filter by importance: messages target='"+channel+"' focus='important'",
-			"Search for specific topics: messages query='<topic>' in:"+channel)
+			"Filter by importance: messages target='"+channel+"'",
+			"Search for specific topics: messages query='<topic> in:"+channel+"'")
 
 		// Add semantic prompt for high volume
 		if hasMore {
@@ -260,12 +259,12 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		// Add contextual search for any message count with important items
 		if hasThreads || len(importantItems) < 3 {
 			result.NextActions = append(result.NextActions,
-				"For specific topics: messages query='<topic>' in:"+channel)
+				"For specific topics: messages query='<topic> in:"+channel+"'")
 		}
 
 		if hasThreads {
 			result.NextActions = append(result.NextActions,
-				"Join active conversation: say to='"+channel+"' threadTs='<thread>'")
+				"Join active conversation: say to='"+channel+"' thread='<thread ts>'")
 		}
 	}
 
