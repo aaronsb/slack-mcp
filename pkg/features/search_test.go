@@ -260,6 +260,9 @@ func TestSearchMatchesActuallyRender(t *testing.T) {
 	if !strings.Contains(out, "messages target='") {
 		t.Fatalf("no handle continuation in the rendered output:\n%s", out)
 	}
+	if !strings.Contains(out, "Sarah Chen |") {
+		t.Fatalf("author line missing — who/when drift renders as empty strings:\n%s", out)
+	}
 	if !strings.Contains(out, "Coverage: searched") {
 		t.Fatalf("coverage window missing from the rendered output:\n%s", out)
 	}
@@ -275,7 +278,12 @@ func TestEmptySearchRendersItsCoverageClaim(t *testing.T) {
 	if !strings.Contains(out, "(0 results)") || !strings.Contains(out, "Nothing matching") {
 		t.Fatalf("empty search does not state its result:\n%s", out)
 	}
-	if !strings.Contains(out, "Coverage: searched") {
+	// The window reaches the empty render through Guidance ("Searched the
+	// last N days..."), stated once.
+	if !strings.Contains(out, "Searched the last") {
 		t.Fatalf("empty search does not state its window:\n%s", out)
+	}
+	if strings.Contains(out, "Coverage: searched") {
+		t.Fatalf("window stated twice on the empty path:\n%s", out)
 	}
 }

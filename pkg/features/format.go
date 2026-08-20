@@ -610,7 +610,9 @@ func formatSearch(result *FeatureResult) string {
 		b.WriteString("\n")
 	}
 
-	if cov, ok := data["coverage"].(map[string]interface{}); ok {
+	// The empty path's Message and Guidance already state the window; the
+	// line here covers the matched path.
+	if cov, ok := data["coverage"].(map[string]interface{}); ok && len(results) > 0 {
 		if window := str(cov, "window"); window != "" {
 			b.WriteString(fmt.Sprintf("Coverage: searched %s.\n", window))
 		}
