@@ -6,6 +6,8 @@
 
 MCP server that gives AI agents access to your Slack workspaces using session tokens. No OAuth apps, no bot permissions, no admin approval required.
 
+Beyond reading and writing messages, it accumulates a durable picture of the workspace — every channel and user's state over time, departures kept as dated tombstones — and synthesizes a relationship graph from it on demand: `estate view='about' person='X'` answers "tell me about X" with their footprint, circle, and a ranked reading plan. The graph is never stored; it is computed per query from two small local ledgers that hold no message content ([design note](docs/design-notes/runtime-graph-synthesis.md)).
+
 ## How it works
 
 Slack MCP uses your existing browser session tokens (`xoxc`/`xoxd`) to interact with Slack on your behalf. It reads stealthily by default — only the `mark-read` tool triggers read receipts. Everything else is invisible to other users.
@@ -24,7 +26,7 @@ You need an active Slack session in your browser. Log into your workspace at [ap
 claude mcp add slack-mcp -- npx -y @aaronsb/slack-mcp
 ```
 
-Then ask Claude to run the `auth-setup` tool. It will guide you through browser selection, profile selection, and automatic token extraction.
+Then ask Claude to run the `auth` tool. It will guide you through browser selection, profile selection, and automatic token extraction.
 
 ### Claude Desktop
 
@@ -39,7 +41,7 @@ Download the `.mcpb` file for your platform from the [latest release](https://gi
 | Windows (x64) | `slack-mcp-windows-x64.mcpb` |
 
 Open the file (double-click or drag into Claude Desktop). When prompted for tokens, you can either:
-- Leave them blank and use the `auth-setup` tool after connecting
+- Leave them blank and use the `auth` tool after connecting
 - Paste tokens if you already have them
 
 ### Standalone binary
@@ -70,7 +72,7 @@ There are three ways to get your Slack tokens, from easiest to most manual:
 
 ### Automatic (Chrome/Edge)
 
-The `auth-setup` MCP tool or `slack-mcp setup` CLI command will:
+The `auth` MCP tool or `slack-mcp setup` CLI command will:
 
 1. Detect your installed browsers
 2. Let you pick which browser and profile has Slack
@@ -85,7 +87,7 @@ The setup flow writes a temporary browser extension to a temp directory, then gu
 
 ### Manual
 
-Run `slack-mcp setup` or use the `auth-setup` tool — if no browser is detected or automatic extraction fails, it falls back to a localhost web page with step-by-step DevTools instructions.
+Run `slack-mcp setup` or use the `auth` tool — if no browser is detected or automatic extraction fails, it falls back to a localhost web page with step-by-step DevTools instructions.
 
 You can also set tokens directly via environment variables:
 
@@ -115,6 +117,8 @@ Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009). Eve
 - **Stealth by default** — reads never trigger read receipts; only `mark-read` does
 - **Channel names, not IDs** — the AI never sees internal Slack identifiers
 - **Tokens stay local** — stored in `~/.config/slack-mcp/config.json` with `0600` permissions
+- **Ledgers hold no message content** — the durable estate ledger stores entity facts (names, lifecycle, tombstones); the attention ledger stores `{user, conversation, day}` encounters with a 90-day window; both live under XDG with `0600`, and deleting them deletes the graph
+- **Hour-level activity is recorded only for you** — colleagues bucket by day, by design
 - **No network traffic except Slack** — the binary connects only to `slack.com/api/*`
 - **No browser downloads** — uses your installed browser, never fetches binaries from CDNs
 
@@ -124,7 +128,7 @@ Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009). Eve
 make build          # Build for current platform
 make test           # Run tests
 make build-all-platforms  # Cross-compile (6 platforms)
-make release TAG=v1.3.0   # Tag and push (CI handles the rest)
+make release TAG=v2.1.1   # Tag and push (CI handles the rest)
 ```
 
 ## License
