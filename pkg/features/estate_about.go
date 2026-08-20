@@ -223,7 +223,7 @@ func formatInitiativesView(v *initiativesViewData) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Estate — initiatives view — last %d days\n\n", v.Days)
 	if len(v.Rows) == 0 {
-		b.WriteString("No channel activity observed in the window. The view reads the attention ledger, so it only knows conversations this agent has read.\n\n")
+		fmt.Fprintf(&b, "Nothing observed moving in the last %d days. Movement appears here as channels are read — or compile one person's activity: estate view='person' person='@<handle>'.\n\n", v.Days)
 	}
 	rfrom, rto, rleft := pageWindow(len(v.Rows), v.Offset, 10)
 	for _, row := range v.Rows[rfrom:rto] {
