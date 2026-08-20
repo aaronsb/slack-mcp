@@ -2,10 +2,9 @@
 
 ## Status
 
-Proposed
+Accepted
 
-Extends ADR-009's surface by one tool. Design only; implementation is the
-next session's work.
+Extends ADR-009's surface by one tool.
 
 ## Context
 

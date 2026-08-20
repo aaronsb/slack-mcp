@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"sync/atomic"
+	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
@@ -19,6 +20,8 @@ type SemanticMCPServer struct {
 	server   *server.MCPServer
 	registry *features.Registry
 	provider atomic.Pointer[provider.ApiProvider]
+	// pacer watches read-call timing for ADR-010's frequency hint.
+	pacer features.ReadPacer
 }
 
 // NewSemanticMCPServer creates a new semantic MCP server
@@ -42,12 +45,13 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	registry := features.NewRegistry()
 
 	// The v2 surface (ADR-009): three read-only nouns carrying the depth,
-	// five verbs whose names state their blast radius. The v1 features
-	// stay exported for the nouns to delegate to; only these eight are
-	// advertised.
+	// five verbs whose names state their blast radius, and batch — ADR-010's
+	// executor over the nouns. The v1 features stay exported for the nouns
+	// to delegate to; only these nine are advertised.
 	registry.Register(features.Inbox)
 	registry.Register(features.Messages)
 	registry.Register(features.EstateViews)
+	registry.Register(features.Batch)
 	registry.Register(features.Say)
 	registry.Register(features.Dismiss)
 	registry.Register(features.MarkAsRead)
@@ -140,6 +144,9 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 
 		// Format as markdown for AI consumption
 		text := features.FormatResult(feature.Name, result)
+		if hint := s.pacer.Observe(feature.Name, time.Now()); hint != "" {
+			text += "\n\n" + hint
+		}
 		return mcp.NewToolResultText(text), nil
 	}
 
