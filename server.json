@@ -3,7 +3,7 @@
   "name": "io.github.aaronsb/slack-mcp",
   "title": "Slack",
   "description": "Read and write Slack with session tokens — no OAuth, no bot, no admin approval.",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "websiteUrl": "https://github.com/aaronsb/slack-mcp#readme",
   "repository": {
     "url": "https://github.com/aaronsb/slack-mcp",
@@ -14,7 +14,7 @@
     {
       "registryType": "npm",
       "identifier": "@aaronsb/slack-mcp",
-      "version": "2.2.1",
+      "version": "2.2.2",
       "transport": {
         "type": "stdio"
       },

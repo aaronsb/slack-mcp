@@ -1,6 +1,6 @@
 {
   "name": "@aaronsb/slack-mcp-linux-amd64",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Platform binary for @aaronsb/slack-mcp (linux-amd64). Installed automatically as an optional dependency; not useful on its own.",
   "os": [
     "linux"
