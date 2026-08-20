@@ -572,6 +572,10 @@ func formatContext(result *FeatureResult) string {
 
 // --- search ---
 
+// formatSearch renders the entries searchUsingOfficialAPI attaches under
+// "results" — where/who/when/text/handle/permalink — and the coverage
+// window, so the executor's claim about what was searched reaches the
+// client.
 func formatSearch(result *FeatureResult) string {
 	data := dataMap(result)
 	if data == nil {
@@ -580,50 +584,36 @@ func formatSearch(result *FeatureResult) string {
 
 	var b strings.Builder
 	query := str(data, "query")
+	results := asList(data["results"])
 
-	// Search results are in "discussions" (from find_discussion_official.go)
-	discussions := asList(data["discussions"])
-	// Also check "messages" for thread context results
-	if len(discussions) == 0 {
-		discussions = asList(data["messages"])
+	b.WriteString(fmt.Sprintf("## Search: \"%s\" (%d results)\n\n", query, len(results)))
+
+	if len(results) == 0 && result.Message != "" {
+		b.WriteString(result.Message + "\n")
 	}
 
-	b.WriteString(fmt.Sprintf("## Search: \"%s\" (%d results)\n\n", query, len(discussions)))
-
-	// Show search metadata if available
-	if meta, ok := data["searchMeta"].(map[string]interface{}); ok {
-		total := num(meta, "totalMatches")
-		returned := num(meta, "returned")
-		if total > returned {
-			b.WriteString(fmt.Sprintf("Showing %d of %d total matches.\n\n", returned, total))
+	for _, m := range results {
+		line := fmt.Sprintf("%s | %s | %s", str(m, "where"), str(m, "who"), str(m, "when"))
+		if v, ok := m["inThread"].(bool); ok && v {
+			line += " [thread]"
 		}
-	}
-
-	for _, msg := range discussions {
-		channel := str(msg, "channel")
-		user := str(msg, "user")
-		text := truncate(str(msg, "text"), 500)
-		ts := str(msg, "timestamp")
-		msgType := str(msg, "type")
-
-		threadTag := ""
-		if msgType == "thread" {
-			threadTag = " [thread]"
+		if v, ok := m["hasAttachments"].(bool); ok && v {
+			line += " 📎"
 		}
-
-		attachTag := ""
-		if v, ok := msg["hasAttachments"].(bool); ok && v {
-			attachTag = " 📎"
+		b.WriteString(line + "\n" + truncate(str(m, "text"), 500) + "\n")
+		if h := str(m, "handle"); h != "" {
+			b.WriteString(fmt.Sprintf("read: messages target='%s'\n", h))
 		}
-
-		b.WriteString(fmt.Sprintf("#%s | %s | %s%s%s\n%s\n", channel, user, ts, threadTag, attachTag, text))
-		if attachTag != "" {
-			b.WriteString(fmt.Sprintf("  (has attachments — messages target='%s' around='%s' for file IDs)\n", channel, ts))
-		}
-		if link := str(msg, "permalink"); link != "" {
-			b.WriteString(fmt.Sprintf("%s\n", link))
+		if link := str(m, "permalink"); link != "" {
+			b.WriteString(link + "\n")
 		}
 		b.WriteString("\n")
+	}
+
+	if cov, ok := data["coverage"].(map[string]interface{}); ok {
+		if window := str(cov, "window"); window != "" {
+			b.WriteString(fmt.Sprintf("Coverage: searched %s.\n", window))
+		}
 	}
 
 	b.WriteString(footer(result))
