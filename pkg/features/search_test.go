@@ -236,3 +236,54 @@ func TestResultsCarryHandlesNotComposedIDs(t *testing.T) {
 		}
 	}
 }
+
+// The handler attaches matches under "results"; the formatter must render
+// that key. When the two drifted apart every search rendered "(0 results)"
+// while the handler had found dozens — the live finding of 2026-08-20. The
+// rendered document is the client's entire world, so this asserts on it.
+func TestSearchMatchesActuallyRender(t *testing.T) {
+	res, _ := searchWith(t, map[string]any{
+		"query":     "teamwork graph",
+		"timeframe": "180d",
+	}, []any{aMatch("C1", "1782246118.543969", "the teamwork graph podcast prep doc")})
+
+	out := features.FormatResult("search", res)
+	if strings.Contains(out, "(0 results)") {
+		t.Fatalf("matches found by the handler rendered as zero:\n%s", out)
+	}
+	if !strings.Contains(out, "the teamwork graph podcast prep doc") {
+		t.Fatalf("match text missing from the rendered output:\n%s", out)
+	}
+	if !strings.Contains(out, "#engineering") {
+		t.Fatalf("match location missing from the rendered output:\n%s", out)
+	}
+	if !strings.Contains(out, "messages target='") {
+		t.Fatalf("no handle continuation in the rendered output:\n%s", out)
+	}
+	if !strings.Contains(out, "Sarah Chen |") {
+		t.Fatalf("author line missing — who/when drift renders as empty strings:\n%s", out)
+	}
+	if !strings.Contains(out, "Coverage: searched") {
+		t.Fatalf("coverage window missing from the rendered output:\n%s", out)
+	}
+}
+
+func TestEmptySearchRendersItsCoverageClaim(t *testing.T) {
+	res, _ := searchWith(t, map[string]any{
+		"query":     "nonesuch",
+		"timeframe": "7d",
+	}, []any{})
+
+	out := features.FormatResult("search", res)
+	if !strings.Contains(out, "(0 results)") || !strings.Contains(out, "Nothing matching") {
+		t.Fatalf("empty search does not state its result:\n%s", out)
+	}
+	// The window reaches the empty render through Guidance ("Searched the
+	// last N days..."), stated once.
+	if !strings.Contains(out, "Searched the last") {
+		t.Fatalf("empty search does not state its window:\n%s", out)
+	}
+	if strings.Contains(out, "Coverage: searched") {
+		t.Fatalf("window stated twice on the empty path:\n%s", out)
+	}
+}
