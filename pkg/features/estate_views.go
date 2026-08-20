@@ -30,7 +30,7 @@ var EstateViews = &Feature{
 			},
 			"person": map[string]interface{}{
 				"type":        "string",
-				"description": "Anchor on a person (@handle, name, or user ID): only families containing channels they created, including single-channel groups — binds families that name stems alone cannot.",
+				"description": "Anchor on a person (@handle, name, or user ID): only groups containing channels they created, including single-channel groups — surfaces cross-stem work that stem grouping alone separates.",
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
@@ -137,22 +137,25 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 		}
 	}
 
-	// Merge the two sources. The snapshot carries ownership today; the
-	// fold carries it from the next sweep on, and is the only source that
-	// still knows the channels that are gone.
+	// Merge the two sources, keyed by conversation ID so a reused name
+	// never grafts a dead channel's ownership onto a live one — the two
+	// render side by side in their stem group instead. The snapshot
+	// carries ownership today; the fold carries it from the next sweep
+	// on, and is the only source that still knows the channels that are
+	// gone.
 	channels := map[string]famChannel{}
 	for _, ch := range apiProvider.GetCachedChannels() {
 		if ch.IsIM || ch.IsMpIM || ch.Name == "" {
 			continue
 		}
-		channels[ch.Name] = famChannel{
+		channels[ch.ID] = famChannel{
 			Name:     ch.Name,
 			Creator:  ch.Creator,
 			Created:  int64(ch.Created),
 			Archived: ch.IsArchived,
 		}
 	}
-	for _, rec := range apiProvider.EstateChannels() {
+	for id, rec := range apiProvider.EstateChannels() {
 		p := rec.Props
 		if p.IsIM || p.IsMpim || p.Name == "" {
 			continue
@@ -160,11 +163,11 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 		if p.Creator != "" {
 			data.FoldOwned++
 		}
-		if existing, ok := channels[p.Name]; ok {
+		if existing, ok := channels[id]; ok {
 			if existing.Creator == "" && p.Creator != "" {
 				existing.Creator = p.Creator
 				existing.Created = p.Created
-				channels[p.Name] = existing
+				channels[id] = existing
 			}
 			continue
 		}
@@ -172,7 +175,7 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 			continue
 		}
 		data.GoneIncluded++
-		channels[p.Name] = famChannel{
+		channels[id] = famChannel{
 			Name:     p.Name,
 			Creator:  p.Creator,
 			Created:  p.Created,
@@ -230,7 +233,12 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 		if !relaxed && (len(chs) < 2 || f.Phased == 0) {
 			continue
 		}
-		sort.Slice(f.Channels, func(i, j int) bool { return f.Channels[i].Created < f.Channels[j].Created })
+		sort.Slice(f.Channels, func(i, j int) bool {
+			if f.Channels[i].Created != f.Channels[j].Created {
+				return f.Channels[i].Created < f.Channels[j].Created
+			}
+			return f.Channels[i].Name < f.Channels[j].Name
+		})
 		fams = append(fams, f)
 	}
 	sort.Slice(fams, func(i, j int) bool {
@@ -323,6 +331,8 @@ func formatEstate(result *FeatureResult) string {
 				b.WriteString(line + "\n")
 			}
 			b.WriteString("\n**Next:** re-query with a handle: estate view='families' person='@<handle>'")
+		} else {
+			b.WriteString("\n**Next:** search the directory: list-users query='<name>'")
 		}
 		return b.String()
 	}

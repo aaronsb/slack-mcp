@@ -43,8 +43,8 @@ func TestEstateFamiliesGroupsByStemWithLifecycleAndCreator(t *testing.T) {
 
 	out := estateView(t, ap, map[string]any{"view": "families"})
 
-	if !strings.Contains(out, "### acme — 2 channels") {
-		t.Fatalf("acme family not grouped:\n%s", out)
+	if !strings.Contains(out, "### acme — 2 channels, opened 2025-08 → 2026-08") {
+		t.Fatalf("acme family not grouped with its lifecycle span:\n%s", out)
 	}
 	if !strings.Contains(out, "#acme-sales") || !strings.Contains(out, "#acme-implementation") {
 		t.Fatalf("family channels missing:\n%s", out)
