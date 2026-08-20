@@ -148,6 +148,13 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 
 	observeTraffic(apiProvider, channelID, messages)
 
+	// The caps-always-page law (#23): the oldest timestamp shown is the
+	// cursor into earlier history.
+	oldestShown := ""
+	if len(messages) > 0 {
+		oldestShown = messages[len(messages)-1].Timestamp
+	}
+
 	// Format messages (reverse to oldest-first)
 	r := newMessageRenderer(apiProvider)
 	formatted := make([]map[string]interface{}, 0, len(messages))
@@ -208,6 +215,10 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 			fmt.Sprintf("Send a reply: say to='%s'", channel),
 			fmt.Sprintf("Search for related: messages query='<topic> in:%s'", channel),
 		},
+	}
+	if oldestShown != "" && !isThread {
+		result.NextActions = append(result.NextActions,
+			fmt.Sprintf("Earlier history: messages target='%s' around='%s'", channel, oldestShown))
 	}
 
 	if isThread {

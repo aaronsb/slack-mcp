@@ -210,7 +210,14 @@ func messagesResult(apiProvider *provider.ApiProvider, where, kind, channel stri
 		}
 	}
 	if more {
+		oldest := ""
+		if len(msgs) > 0 {
+			oldest = msgs[0].Timestamp
+		}
 		result.Guidance = "Older messages remain beyond this window."
+		if oldest != "" {
+			result.Guidance = fmt.Sprintf("Older messages remain — continue: messages target='%s' around='%s'", where, oldest)
+		}
 	}
 	return result, nil
 }

@@ -34,7 +34,7 @@ type PersonResolution struct {
 	Handle      string
 	UserID      string
 	DisplayName string
-	Via         string // "user-id" | "exact-handle" | "unique-name" | "unique-match"
+	Via         string // "self" | "user-id" | "exact-handle" | "unique-name" | "unique-match"
 	// Reason is set when not Resolved: "empty", "ambiguous", "tombstoned",
 	// "never_seen", or "unswept". Candidates carry the near-matches for
 	// ambiguous and tombstoned outcomes.
@@ -59,6 +59,18 @@ func (ap *ApiProvider) ResolvePerson(input string) PersonResolution {
 	users := ap.ProvideUsersMap()
 
 	lower := strings.ToLower(name)
+
+	// The operator's own identity resolves by name: 'me' answers the
+	// whoami question through the same ladder everything else uses.
+	if lower == "me" || lower == "self" || lower == "myself" {
+		if ap.selfUserID != "" {
+			if u, ok := users[ap.selfUserID]; ok {
+				return resolvedFrom(res, u, "self")
+			}
+		}
+		res.Reason = "unswept"
+		return res
+	}
 
 	if looksLikeUserID(name) {
 		if u, ok := users[name]; ok && !u.Deleted {

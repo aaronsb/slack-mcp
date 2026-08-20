@@ -94,7 +94,15 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 	renderer := newMessageRenderer(provider)
 	mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 
-	// Limit channels to scan based on activity
+	// The scan stops once the page is full, so completeness is stated in
+	// the result rather than implied (#24: a mention in an unscanned
+	// channel is otherwise invisibly missing).
+	candidates := 0
+	for _, ch := range channels {
+		if !ch.IsArchived {
+			candidates++
+		}
+	}
 	for _, channel := range channels {
 		if totalScanned >= 10 && len(mentions) >= limit {
 			break // Stop if we have enough mentions
@@ -208,7 +216,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 				"channelsScanned": totalScanned,
 			},
 		},
-		Message:     fmt.Sprintf("Found %d mentions across %d channels", len(mentions), totalScanned),
+		Message:     fmt.Sprintf("Found %d mentions; scanned %d of %d member channels", len(mentions), totalScanned, candidates),
 		ResultCount: len(mentions),
 	}
 
@@ -220,15 +228,19 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 	} else if len(mentions) == 0 {
 		result.Guidance = "✅ No pending mentions found"
 	}
+	if totalScanned < candidates {
+		note := fmt.Sprintf("Coverage: %d of %d member channels scanned (page filled, or channels unreadable) — a mention in an unscanned channel is not shown. Complete sweep: messages query='<@%s>' timeframe='%s'",
+			totalScanned, candidates, currentUserID, timeframe)
+		if result.Guidance != "" {
+			result.Guidance += "\n" + note
+		} else {
+			result.Guidance = note
+		}
+	}
 
 	result.NextActions = []string{
 		"Read a full thread: messages target='<channel>' around='<ts>'",
 		"Use messages target='#channel' since='1d' to see activity in specific channels",
-	}
-
-	if totalScanned < len(channels) {
-		result.NextActions = append(result.NextActions,
-			fmt.Sprintf("Note: Scanned %d of %d channels. Some mentions might be in unscanned channels.", totalScanned, len(channels)))
 	}
 
 	return result, nil
