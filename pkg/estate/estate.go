@@ -190,6 +190,23 @@ func (s *Store) LastFullSweep() time.Time {
 	return c
 }
 
+// LastUserSweep reports when users were last completely enumerated, zero if
+// never. Schedulers read the per-class watermarks to skip an enumeration
+// another observer performed recently.
+func (s *Store) LastUserSweep() time.Time {
+	s.foldMu.RLock()
+	defer s.foldMu.RUnlock()
+	return s.fold.userSweep
+}
+
+// LastChannelSweep reports when channels were last completely enumerated,
+// zero if never.
+func (s *Store) LastChannelSweep() time.Time {
+	s.foldMu.RLock()
+	defer s.foldMu.RUnlock()
+	return s.fold.channelSweep
+}
+
 // Stats reports the boot-time growth gauge: ADR-007 bounds the estate
 // structurally rather than by cap, and these numbers are how that bet is
 // watched.
