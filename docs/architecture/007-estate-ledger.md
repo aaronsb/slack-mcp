@@ -2,7 +2,10 @@
 
 ## Status
 
-Proposed
+Accepted — implemented in #51–#57 and running against a live workspace:
+first sweep enumerated 700 users (425 pre-existing deactivations
+tombstoned) and 3,046 channels; restart-skip, walk resume, and the
+zero-append idempotent pass all observed working on 2026-08-19.
 
 Amends ADR-006 (retention, snapshot role, observer). Reverses one ADR-005 rejection, scoped
 to estate observation.

@@ -54,15 +54,16 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 | ADR | Title | Status | In the code |
 |---|---|---|---|
 | [003](003-resolvable-tool-surface.md) | A Resolvable Tool Surface | Accepted | **Partial** — see arrears |
-| [004](004-self-contained-payloads.md) | Self-Contained Payloads | Proposed | Not started |
-| [005](005-identity-resolution.md) | Identity Resolution | Proposed | Not started |
+| [004](004-self-contained-payloads.md) | Self-Contained Payloads | Proposed | **Partial** — tag resolution on the render path shipped (#59); the renderMessage seam and unresolved field are #63 |
+| [005](005-identity-resolution.md) | Identity Resolution | Proposed | **Partial** — the resolution ladder runs behind search from: (#56); rings, encounters, and the remaining person parameters are open |
 
 ### State — what persists and for how long
 
 | ADR | Title | Status | In the code |
 |---|---|---|---|
-| [006](006-observation-ledger.md) | Observation Ledger and Folded Caches | Proposed, amended by 007 | Not started |
-| [007](007-estate-ledger.md) | The Estate Ledger | Proposed | Not started |
+| [006](006-observation-ledger.md) | Observation Ledger and Folded Caches | Proposed, amended by 007 | **Partial** — its mechanisms shipped inside ADR-007's estate; the attention ledger is not started |
+| [007](007-estate-ledger.md) | The Estate Ledger | Accepted | **Implemented** — #51–#57; running against a live workspace |
+| [008](008-relationship-views.md) | Relationship Views | Proposed | Not started — live-probe evidence in review (#62) |
 
 ### Auth — how tokens are obtained
 
