@@ -75,7 +75,7 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Could not find channel or user '%s'", channel),
-			Guidance: "Use 'estate view='channels'' to see available channels, or provide a username for DMs",
+			Guidance: "See available channels: estate view='channels' — or provide a username for DMs",
 		}, nil
 	}
 

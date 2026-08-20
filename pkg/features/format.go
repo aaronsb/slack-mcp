@@ -51,6 +51,8 @@ func formatResultBody(toolName string, result *FeatureResult) string {
 		return formatDownloadFile(result)
 	case "read":
 		return formatRead(result)
+	case "poll":
+		return formatPoll(result)
 	case "estate":
 		return formatEstate(result)
 	default:
@@ -742,6 +744,35 @@ func formatDownloadFile(result *FeatureResult) string {
 }
 
 // --- Generic fallback ---
+
+// --- poll (inbox view='new') ---
+
+func formatPoll(result *FeatureResult) string {
+	data, _ := result.Data.(map[string]interface{})
+	events, _ := data["events"].([]map[string]interface{})
+	if len(events) == 0 {
+		return formatGeneric(result)
+	}
+	var b strings.Builder
+	b.WriteString(result.Message + "\n\n")
+	for _, e := range events {
+		kind, _ := e["kind"].(string)
+		where, _ := e["where"].(string)
+		switch kind {
+		case "unreadable":
+			fmt.Fprintf(&b, "- ⚠️ %s could not be read: %v\n", where, e["error"])
+		case "backlog":
+			fmt.Fprintf(&b, "- 📚 %s — %v\n  handle: %v\n", where, e["preview"], e["handle"])
+		default:
+			fmt.Fprintf(&b, "- **%s** %v (%v)", where, e["who"], e["when"])
+			if kind == "thread" {
+				fmt.Fprintf(&b, " [thread, %v replies]", e["replyCount"])
+			}
+			fmt.Fprintf(&b, "\n  %v\n  handle: %v\n", e["preview"], e["handle"])
+		}
+	}
+	return strings.TrimRight(b.String(), "\n") + footer(result)
+}
 
 // --- read ---
 

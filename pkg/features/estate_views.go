@@ -65,6 +65,11 @@ var EstateViews = &Feature{
 				"type":        "string",
 				"description": "channels: 'member' (default), 'all', 'public', 'private', 'dm', 'group-dm'",
 			},
+			"forceRefresh": map[string]interface{}{
+				"type":        "boolean",
+				"description": "channels: force refresh the channel cache from Slack (rate-limited)",
+				"default":     false,
+			},
 			"offset": map[string]interface{}{
 				"type":        "number",
 				"description": "Skip the first N items of the view's ranked lists — a cap never prevents paging; capped responses name the exact next call",

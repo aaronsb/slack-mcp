@@ -67,7 +67,7 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Could not find channel or user '%s'", channel),
-			Guidance: "💡 Use 'estate view='channels'' to see available channels or provide a username for DMs",
+			Guidance: "💡 See available channels: estate view='channels' — or provide a username for DMs",
 		}, nil
 	}
 
@@ -110,15 +110,15 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 		// New message - provide context-aware follow-ups
 		result.NextActions = []string{
 			fmt.Sprintf("Read conversation context: messages target='%s' since='1h'", channel),
-			fmt.Sprintf("Monitor for responses: search threadId='%s:%s'", channelID, timestamp),
-			fmt.Sprintf("Reply to your message: say to='%s' threadTs='%s'", channel, timestamp),
+			fmt.Sprintf("Monitor for responses: messages target='%s' since='30m'", channel),
+			fmt.Sprintf("Reply to your message: say to='%s' thread='%s'", channel, timestamp),
 		}
-		result.Guidance = "💡 Your message was sent. Use catch-up to see recent context or monitor for responses."
+		result.Guidance = "💡 Your message was sent."
 	} else {
 		// Thread reply - focus on thread context
 		result.NextActions = []string{
-			fmt.Sprintf("Read full thread: search threadId='%s:%s'", channelID, threadTs),
-			fmt.Sprintf("Continue thread: say to='%s' threadTs='%s'", channel, threadTs),
+			fmt.Sprintf("Read full thread: messages target='%s' around='%s'", channel, threadTs),
+			fmt.Sprintf("Continue thread: say to='%s' thread='%s'", channel, threadTs),
 			fmt.Sprintf("See channel context: messages target='%s' since='4h'", channel),
 		}
 		result.Guidance = "💬 Reply sent to thread. Check the full discussion for context."

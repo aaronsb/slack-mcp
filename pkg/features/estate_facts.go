@@ -160,7 +160,7 @@ func unresolvedPeopleResult(ap *provider.ApiProvider, misses []provider.PersonRe
 }
 
 // tombstonedChannelMatches renders the fold's gone channels matching a
-// search, for estate view='channels” includeDeleted flag.
+// search, for the channels view's includeDeleted flag.
 func tombstonedChannelMatches(ap *provider.ApiProvider, searchLower string) []map[string]interface{} {
 	var out []map[string]interface{}
 	for _, rec := range ap.EstateChannels() {

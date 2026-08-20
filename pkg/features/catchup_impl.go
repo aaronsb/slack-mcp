@@ -194,23 +194,20 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		result.Guidance = "✅ No activity in this time period"
 		result.NextActions = []string{
 			"Try a longer timeframe: messages target='" + channel + "' since='1w'",
-			"Check other channels: estate view='channels' filter='with-unreads'",
+			"Check unreads across channels: inbox view='unreads'",
 			"Search for older discussions: messages query='<topic>' in:" + channel + " timeframe='1m'",
 		}
 	} else if totalMsgCount <= 3 {
 		// 1-3 messages: Full consumption = auto-mark read
-		result.Guidance = "💬 Full content displayed - marking as read"
+		result.Guidance = "💬 Full content displayed. Nothing was marked read — reads are stealth; mark-read is the explicit exception."
 		result.NextActions = []string{
-			"Messages auto-marked as read (full consumption)",
 			"Check mentions across channels: inbox view='mentions'",
 			fmt.Sprintf("Send a reply: say to='%s'", channel),
 		}
-		// TODO: Actually mark as read
 	} else if totalMsgCount <= 15 {
 		// 4-15 messages: Thorough review = auto-mark read
-		result.Guidance = "🔍 Thorough review complete - marking as read"
+		result.Guidance = "🔍 Thorough review complete. Nothing was marked read — reads are stealth; mark-read is the explicit exception."
 		result.NextActions = []string{
-			"Messages auto-marked as read (thorough review)",
 			"Check mentions across channels: inbox view='mentions'",
 			fmt.Sprintf("Send a reply: say to='%s'", channel),
 		}

@@ -65,7 +65,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 			// If many unreads, suggest bulk clearing
 			if stats, ok := data["stats"].(map[string]interface{}); ok {
 				if total, _ := stats["totalChannels"].(int); total > 10 {
-					suggest("mark-messages target='all-channels' filter='no-mentions'")
+					suggest("mark-read channel='all-channels' filter='no-mentions'")
 				}
 			}
 		}
@@ -152,7 +152,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 		}
 
 		// After reviewing mentions
-		suggest("mark-messages target='all-channels' filter='no-mentions'")
+		suggest("mark-read channel='all-channels' filter='no-mentions'")
 
 	case "mark-read":
 		// After marking, check what's left
@@ -217,7 +217,7 @@ func (wm *WorkflowManager) GetWorkflowSteps(workflow string) []string {
 			"inbox view='unreads'",
 			"inbox view='mentions'",
 			"messages target='general'",
-			"mark-messages target='everything' filter='no-mentions'",
+			"mark-read channel='everything' filter='no-mentions'",
 		}
 
 	case "research-topic":
@@ -231,7 +231,7 @@ func (wm *WorkflowManager) GetWorkflowSteps(workflow string) []string {
 		return []string{
 			"inbox view='unreads'",
 			"inbox view='mentions'",
-			"mark-messages target='everything' filter='no-mentions'",
+			"mark-read channel='everything' filter='no-mentions'",
 			"inbox view='unreads'", // Verify
 		}
 

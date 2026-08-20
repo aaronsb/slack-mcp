@@ -142,7 +142,7 @@ func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvi
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Channel '%s' not found. Use estate view='channels' to see available channels.", channel),
-			Guidance: "💡 Use 'estate view='channels'' to see available channels",
+			Guidance: "💡 See available channels: estate view='channels'",
 		}, nil
 	}
 
@@ -257,7 +257,7 @@ func handleThreadMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 		Message:  "Thread marked as read",
 		Guidance: "✅ Thread and its replies marked as read",
 		NextActions: []string{
-			"Check for more threads: inbox view='unreads' focus='threads'",
+			"Check for more threads: inbox view='new'",
 			"Find related discussions: search",
 		},
 	}, nil
@@ -431,7 +431,7 @@ func handleAllDMsMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 
 	result.NextActions = []string{
 		"Check remaining unreads: inbox view='unreads'",
-		"Mark channels as read: mark-messages target='all-channels'",
+		"Mark channels as read: mark-read channel='all-channels'",
 	}
 
 	return result, nil
@@ -617,14 +617,14 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 
 	if unreadDMs > 0 {
 		options = append(options, map[string]interface{}{
-			"command":     "mark-messages target='all-dms'",
+			"command":     "mark-read channel='all-dms'",
 			"description": fmt.Sprintf("Mark all %d DMs as read", unreadDMs),
 			"mentions":    mentionDMs,
 		})
 
 		if mentionDMs > 0 {
 			options = append(options, map[string]interface{}{
-				"command":     "mark-messages target='all-dms' filter='no-mentions'",
+				"command":     "mark-read channel='all-dms' filter='no-mentions'",
 				"description": fmt.Sprintf("Mark %d DMs as read (keep %d with mentions)", unreadDMs-mentionDMs, mentionDMs),
 			})
 		}
@@ -632,26 +632,26 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 
 	if unreadChannels > 0 {
 		options = append(options, map[string]interface{}{
-			"command":     "mark-messages target='all-channels'",
+			"command":     "mark-read channel='all-channels'",
 			"description": fmt.Sprintf("Mark all %d channels as read", unreadChannels),
 			"mentions":    mentionChannels,
 		})
 
 		options = append(options, map[string]interface{}{
-			"command":     "mark-messages target='all-channels' filter='non-important'",
+			"command":     "mark-read channel='all-channels' filter='non-important'",
 			"description": "Mark only non-important channels as read",
 		})
 	}
 
 	if unreadDMs > 0 && unreadChannels > 0 {
 		options = append(options, map[string]interface{}{
-			"command":     "mark-messages target='everything'",
+			"command":     "mark-read channel='everything'",
 			"description": fmt.Sprintf("Mark everything as read (%d total)", unreadDMs+unreadChannels),
 		})
 
 		if mentionDMs > 0 || mentionChannels > 0 {
 			options = append(options, map[string]interface{}{
-				"command":     "mark-messages target='everything' filter='no-mentions'",
+				"command":     "mark-read channel='everything' filter='no-mentions'",
 				"description": fmt.Sprintf("Mark all as read except %d with mentions", mentionDMs+mentionChannels),
 			})
 		}
@@ -665,7 +665,7 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 	})
 
 	options = append(options, map[string]interface{}{
-		"command":     "mark-messages target='dm:john.doe'",
+		"command":     "mark-read channel='dm:john.doe'",
 		"description": "Mark a specific DM as read",
 		"example":     true,
 	})
@@ -684,8 +684,8 @@ func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvide
 		Guidance: "💡 Choose an option above or specify what to mark as read",
 		NextActions: []string{
 			"See unread details: inbox view='unreads'",
-			"Mark all as read: mark-messages target='everything'",
-			"Keep mentions: mark-messages target='everything' filter='no-mentions'",
+			"Mark all as read: mark-read channel='everything'",
+			"Keep mentions: mark-read channel='everything' filter='no-mentions'",
 		},
 	}, nil
 }

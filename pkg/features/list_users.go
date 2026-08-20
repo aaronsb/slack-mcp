@@ -182,7 +182,7 @@ func listUsersHandler(ctx context.Context, params map[string]interface{}) (*Feat
 			"coverage": coverage,
 		},
 		NextActions: []string{
-			"Send a DM: say to='<displayName>' message='...'",
+			"Send a DM: say to='<displayName>' text='...'",
 			"See DM history: messages target='<displayName>'",
 		},
 	}, nil
