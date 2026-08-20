@@ -135,12 +135,17 @@ A new `estate` tool with a `view` parameter:
 |---|---|---|
 | `families` | "what happened with this engagement" — phase sequence, drivers, span; works day one, estate only | stem ⋈ lifecycle ⋈ creator |
 | `initiatives` | "what moved this week" and its inverse, the stalled channel whose creator went quiet | creator ⋈ ACTIVE_IN ⋈ strip overlap |
-| `person` | one footprint — including the departed: a tombstoned user's dominant channels within their last observed window is the knowledge-risk query only remember-then-tombstone affords | created ⋈ ACTIVE_IN ⋈ DM_WITH ⋈ estate record |
+| `person` | one footprint — strips, created channels, and ranked counterparts ("top talkers", from DM-encounter density plus channel co-occurrence); for the departed, the knowledge-risk query only remember-then-tombstone affords | created ⋈ ACTIVE_IN ⋈ DM_WITH ⋈ COUNTERPART ⋈ estate record |
+| `convergence` | given a set of people, the conversation-window clusters where their strips co-occur, ranked by density above each person's baseline (so a shared #all-hands is noise and a suddenly-dense deal channel is signal) | ACTIVE_IN ⋈ ACTIVE_IN across users |
 
 Every view returns handles for drill-down and declares its coverage: the
 activity dimension carries the attention ledger's ninety-day horizon, and a
 view must say "within the last ninety days" rather than let retention
-masquerade as history (ADR-006's named risk). Views degrade honestly — no
+masquerade as history (ADR-006's named risk). Activity-derived rankings
+carry a second caveat: strips record what the agent observed, so "top
+talkers" means "as seen by this agent's reading habit", said outright. And
+a view reports observations, never judgments — "densest co-occurrence
+windows", not "significant"; "created N, active in M", not "leads". Views degrade honestly — no
 attention ledger yet means `families` works and `initiatives` says what it
 is missing, not an empty result.
 
