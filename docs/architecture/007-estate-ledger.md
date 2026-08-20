@@ -197,6 +197,14 @@ bounced hourly does not sweep hourly. 24 hours matches ADR-005's drift-TTL judgm
 first sweep ever seeds a `first-seen` per directory entry — roughly a megabyte per five
 thousand users, once.
 
+The enumeration itself survives restarts. Pages are observed into the ledger as they land,
+asserting no absences, so an interrupted walk's knowledge is durable; the walk checkpoints
+its cursor and seen set per page, and the next boot resumes from the checkpoint, running
+the absence pass against the union. A checkpoint older than an hour, or a cursor Slack no
+longer accepts, restarts the enumeration clean — only the API cost is lost, never the
+knowledge. A single-process walk is already temporally smeared over its own duration, so a
+resumed walk claims nothing weaker, and the mass-tombstone guard backstops the stitch.
+
 This reverses, scoped, ADR-005's "Periodic full-directory refresh… Rejected as the primary
 freshness mechanism." That rejection was argued for render-path freshness and stands there:
 lazy per-entry revalidation remains the freshness answer. The sweep exists because absence
