@@ -58,14 +58,14 @@ func (ap *ApiProvider) ResolvePerson(input string) PersonResolution {
 
 	users := ap.ProvideUsersMap()
 
+	lower := strings.ToLower(name)
+
 	if looksLikeUserID(name) {
 		if u, ok := users[name]; ok && !u.Deleted {
 			return resolvedFrom(res, u, "user-id")
 		}
-		return ap.missOutcome(res, name)
+		return ap.missOutcome(res, lower)
 	}
-
-	lower := strings.ToLower(name)
 
 	// Step 1: exact handle. Slack guarantees uniqueness, so this never
 	// produces candidates.
@@ -212,16 +212,24 @@ func rankCandidates(users []slack.User, lower string) []PersonCandidate {
 	return out
 }
 
-// looksLikeUserID reports whether s has the shape of a Slack user ID.
+// looksLikeUserID reports whether s has the shape of a Slack user ID: real
+// IDs are at least nine characters and always carry digits. Without the
+// bounds, an all-caps name like URSULA would be misrouted as an ID and skip
+// every ladder rung.
 func looksLikeUserID(s string) bool {
-	if len(s) < 2 || (s[0] != 'U' && s[0] != 'W') {
+	if len(s) < 9 || (s[0] != 'U' && s[0] != 'W') {
 		return false
 	}
+	digits := false
 	for i := 1; i < len(s); i++ {
 		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) {
+		if c >= '0' && c <= '9' {
+			digits = true
+			continue
+		}
+		if !(c >= 'A' && c <= 'Z') {
 			return false
 		}
 	}
-	return true
+	return digits
 }

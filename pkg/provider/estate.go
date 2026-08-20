@@ -37,6 +37,15 @@ const (
 // nil store — the same posture as a nil cache.Store — and every call site
 // nil-checks, so the server keeps serving without history rather than
 // refusing to start.
+// est returns the estate store. Guarded: the background boot goroutine
+// assigns it while MCP handler goroutines read it, and an unsynchronized
+// pointer write/read across goroutines is a memory-model violation.
+func (ap *ApiProvider) est() *estate.Store {
+	ap.estateMu.RLock()
+	defer ap.estateMu.RUnlock()
+	return ap.estate
+}
+
 func (ap *ApiProvider) openEstate() {
 	if ap.selfTeamID == "" {
 		log.Printf("Estate ledger disabled: no team identity captured")
@@ -47,7 +56,9 @@ func (ap *ApiProvider) openEstate() {
 		log.Printf("Estate ledger unavailable: %v", err)
 		return
 	}
+	ap.estateMu.Lock()
 	ap.estate = st
+	ap.estateMu.Unlock()
 	if st.ReadOnly() {
 		log.Printf("Estate ledger: read-only — another instance holds the writer lock")
 	}
@@ -58,10 +69,11 @@ func (ap *ApiProvider) openEstate() {
 }
 
 func (ap *ApiProvider) observeUsersEstate(users []slack.User, complete bool, src estate.Source) estate.ObserveResult {
-	if ap.estate == nil || ap.estate.ReadOnly() {
+	st := ap.est()
+	if st == nil || st.ReadOnly() {
 		return estate.ObserveResult{}
 	}
-	res, err := ap.estate.ObserveUsers(users, complete, src, time.Now())
+	res, err := st.ObserveUsers(users, complete, src, time.Now())
 	if err != nil {
 		log.Printf("Estate: observe users: %v", err)
 	}
@@ -72,10 +84,11 @@ func (ap *ApiProvider) observeUsersEstate(users []slack.User, complete bool, src
 }
 
 func (ap *ApiProvider) observeChannelsEstate(channels []slack.Channel, complete bool, src estate.Source) estate.ObserveResult {
-	if ap.estate == nil || ap.estate.ReadOnly() {
+	st := ap.est()
+	if st == nil || st.ReadOnly() {
 		return estate.ObserveResult{}
 	}
-	res, err := ap.estate.ObserveChannels(channels, complete, src, time.Now())
+	res, err := st.ObserveChannels(channels, complete, src, time.Now())
 	if err != nil {
 		log.Printf("Estate: observe channels: %v", err)
 	}
@@ -85,11 +98,61 @@ func (ap *ApiProvider) observeChannelsEstate(channels []slack.Channel, complete 
 	return res
 }
 
-func (ap *ApiProvider) recordEstateSweep(rep estate.SweepReport) {
-	if ap.estate == nil || ap.estate.ReadOnly() {
+// reconcileEstateTombstones mirrors the fold's tombstones into the live
+// maps, so an entity a sweep just tombstoned stops resolving immediately
+// instead of at the next boot's fold-merged load.
+func (ap *ApiProvider) reconcileEstateTombstones() {
+	st := ap.est()
+	if st == nil {
 		return
 	}
-	if err := ap.estate.RecordSweep(rep, time.Now()); err != nil {
+
+	users := st.Users()
+	ap.usersMutex.Lock()
+	for id, rec := range users {
+		if rec.Gone == nil {
+			continue
+		}
+		if u, ok := ap.users[id]; ok && !u.Deleted {
+			u.Deleted = true
+			ap.users[id] = u
+		}
+	}
+	ap.usersMutex.Unlock()
+
+	channels := st.Channels()
+	ap.channelsMutex.Lock()
+	for id, rec := range channels {
+		if rec.Gone != nil {
+			delete(ap.channels, id)
+		}
+	}
+	ap.channelsMutex.Unlock()
+}
+
+// closeChannelEnumerationEstate runs the absence pass over a completed
+// enumeration's seen set.
+func (ap *ApiProvider) closeChannelEnumerationEstate(seen map[string]bool, src estate.Source, startedAt time.Time) estate.ObserveResult {
+	st := ap.est()
+	if st == nil || st.ReadOnly() {
+		return estate.ObserveResult{}
+	}
+	res, err := st.CloseChannelEnumeration(seen, src, startedAt, time.Now())
+	if err != nil {
+		log.Printf("Estate: close channel enumeration: %v", err)
+	}
+	if res.AbsenceAborted {
+		log.Printf("Estate: channel absence pass aborted — %d proposed absent, treating the listing as degraded", res.ProposedAbsent)
+	}
+	return res
+}
+
+func (ap *ApiProvider) recordEstateSweep(rep estate.SweepReport) {
+	st := ap.est()
+	if st == nil || st.ReadOnly() {
+		return
+	}
+	if err := st.RecordSweep(rep, time.Now()); err != nil {
 		log.Printf("Estate: record sweep: %v", err)
 	}
 }
@@ -99,7 +162,8 @@ func (ap *ApiProvider) recordEstateSweep(rep estate.SweepReport) {
 // The stop channel exists for a future lifecycle pass; like the cache
 // flusher's, nothing calls it today.
 func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
-	if ap.estate == nil || ap.estate.ReadOnly() {
+	st := ap.est()
+	if st == nil || st.ReadOnly() {
 		return
 	}
 	interval := ap.estateSweepInterval
@@ -122,7 +186,7 @@ func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 		// that dies never silences the sweep forever.
 		ap.waitForBackfill(stop, estateSweepBackfillWait)
 		for {
-			if time.Since(ap.estate.LastFullSweep()) >= interval {
+			if time.Since(st.LastFullSweep()) >= interval {
 				if err := ap.RunEstateSweep(ctx); err != nil {
 					log.Printf("Estate sweep: %v", err)
 				}
@@ -175,14 +239,15 @@ func (ap *ApiProvider) backfillIfStale(ctx context.Context) {
 // channelEnumerationFresh reports whether the estate holds a complete
 // channel enumeration younger than the sweep interval, and its age.
 func (ap *ApiProvider) channelEnumerationFresh() (bool, time.Duration) {
-	if ap.estate == nil {
+	st := ap.est()
+	if st == nil {
 		return false, 0
 	}
 	interval := ap.estateSweepInterval
 	if interval <= 0 {
 		interval = defaultEstateSweepInterval
 	}
-	last := ap.estate.LastChannelSweep()
+	last := st.LastChannelSweep()
 	if last.IsZero() {
 		return false, 0
 	}
@@ -196,10 +261,11 @@ func (ap *ApiProvider) channelEnumerationFresh() (bool, time.Duration) {
 // fails is reported incomplete and asserts no absences. Exported so tests
 // and a future explicit-refresh path can sweep without the scheduler.
 func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
-	if ap.estate == nil {
+	st := ap.est()
+	if st == nil {
 		return fmt.Errorf("estate ledger unavailable")
 	}
-	if ap.estate.ReadOnly() {
+	if st.ReadOnly() {
 		return estate.ErrReadOnly
 	}
 	if ap.client == nil {
@@ -235,7 +301,7 @@ func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
 	if interval <= 0 {
 		interval = defaultEstateSweepInterval
 	}
-	if last := ap.estate.LastChannelSweep(); !last.IsZero() && time.Since(last) < interval {
+	if last := st.LastChannelSweep(); !last.IsZero() && time.Since(last) < interval {
 		rep.Membership = estate.ClassReport{Skipped: true}
 		rep.Channels = estate.ClassReport{Skipped: true, ArchivedIncluded: true}
 		ap.markDirty()
@@ -255,40 +321,29 @@ func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
 	memberIDs, membersComplete := ap.fetchMemberChannelIDs(ctx)
 	rep.Membership = estate.ClassReport{Complete: membersComplete, Count: len(memberIDs)}
 
-	// Channels: the full walk, archived included.
-	channels, channelsComplete := ap.fetchAllChannels(ctx, nil)
-	if len(channels) > 0 {
-		var dms []slack.Channel
-		ap.channelsMutex.Lock()
-		for i := range channels {
-			if membersComplete {
-				channels[i].IsMember = memberIDs[channels[i].ID]
-			} else if existing, ok := ap.channels[channels[i].ID]; ok {
-				// Membership walk failed: keep the map's answer rather than
-				// clobbering member-loaded truth with a possibly-stale flag.
-				channels[i].IsMember = existing.IsMember
-			}
-			ap.channels[channels[i].ID] = channels[i]
-			ap.indexChannel(channels[i])
-			if channels[i].IsIM {
-				dms = append(dms, channels[i])
-			}
-		}
-		ap.channelsMutex.Unlock()
-		for _, ch := range dms {
-			ap.indexChannelDM(ch)
-		}
-
-		res := ap.observeChannelsEstate(channels, channelsComplete, estate.SourceSweep)
-		rep.Channels = estate.ClassReport{
-			Complete: channelsComplete, Count: len(channels),
-			ArchivedIncluded: true, AbsenceAborted: res.AbsenceAborted,
-		}
+	// Channels: the full walk, archived included, observed page-wise so an
+	// interrupted sweep's knowledge is durable and a resumed one appends
+	// nothing for what it re-sees. When the membership walk failed,
+	// mergeChannels keeps the map's IsMember rather than clobbering
+	// member-loaded truth with a possibly-stale flag.
+	var sweepMembers map[string]bool
+	if membersComplete {
+		sweepMembers = memberIDs
+	}
+	walk := ap.fetchAllChannels(ctx, func(page []slack.Channel) {
+		merged := ap.mergeChannels(page, sweepMembers)
+		res := ap.observeChannelsEstate(merged, false, estate.SourceSweep)
 		rep.Appended += res.Appended
-	} else {
-		rep.Channels = estate.ClassReport{Complete: channelsComplete, ArchivedIncluded: true}
+	})
+
+	rep.Channels = estate.ClassReport{Complete: walk.complete, Count: len(walk.seen), ArchivedIncluded: true}
+	if walk.complete {
+		res := ap.closeChannelEnumerationEstate(walk.seen, estate.SourceSweep, walk.startedAt)
+		rep.Channels.AbsenceAborted = res.AbsenceAborted
+		rep.Appended += res.Appended
 	}
 
+	ap.reconcileEstateTombstones()
 	ap.markDirty()
 	rep.Duration = time.Since(start)
 	ap.recordEstateSweep(rep)
@@ -326,18 +381,19 @@ type EstateCoverageInfo struct {
 // EstateCoverage assembles the coverage picture. Zero-valued (Available
 // false) when the ledger is unavailable.
 func (ap *ApiProvider) EstateCoverage() EstateCoverageInfo {
-	if ap.estate == nil {
+	st := ap.est()
+	if st == nil {
 		return EstateCoverageInfo{}
 	}
-	stats := ap.estate.Stats()
+	stats := st.Stats()
 	ap.walkMu.Lock()
 	walk := ap.channelWalk
 	ap.walkMu.Unlock()
 	return EstateCoverageInfo{
 		Available:     true,
-		LastFullSweep: ap.estate.LastFullSweep(),
-		UserSweep:     ap.estate.LastUserSweep(),
-		ChannelSweep:  ap.estate.LastChannelSweep(),
+		LastFullSweep: st.LastFullSweep(),
+		UserSweep:     st.LastUserSweep(),
+		ChannelSweep:  st.LastChannelSweep(),
 		Users:         stats.Users,
 		Channels:      stats.Channels,
 		ChannelWalk:   walk,
@@ -348,19 +404,21 @@ func (ap *ApiProvider) EstateCoverage() EstateCoverageInfo {
 // is the point: dated absence a listing can serve instead of a silent gap.
 // Nil when the ledger is unavailable.
 func (ap *ApiProvider) EstateUsers() map[string]estate.UserRecord {
-	if ap.estate == nil {
+	st := ap.est()
+	if st == nil {
 		return nil
 	}
-	return ap.estate.Users()
+	return st.Users()
 }
 
 // EstateChannels returns the fold's channel records, tombstoned included.
 // Nil when the ledger is unavailable.
 func (ap *ApiProvider) EstateChannels() map[string]estate.ChannelRecord {
-	if ap.estate == nil {
+	st := ap.est()
+	if st == nil {
 		return nil
 	}
-	return ap.estate.Channels()
+	return st.Channels()
 }
 
 // EstateLastFullSweep reports when the estate last had a complete picture.
@@ -368,10 +426,11 @@ func (ap *ApiProvider) EstateChannels() map[string]estate.ChannelRecord {
 // completed or the ledger is unavailable — and coverage reporting must say
 // which state it is in rather than implying an empty estate.
 func (ap *ApiProvider) EstateLastFullSweep() time.Time {
-	if ap.estate == nil {
+	st := ap.est()
+	if st == nil {
 		return time.Time{}
 	}
-	return ap.estate.LastFullSweep()
+	return st.LastFullSweep()
 }
 
 // fetchMemberChannelIDs walks users.conversations and returns the set of

@@ -44,6 +44,16 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	for _, person := range people {
 		r := p.ResolvePerson(person)
 		if !r.Resolved {
+			// A departed person's history is still searchable: a unique
+			// tombstoned match resolves for this read path. The refusal
+			// stands for writes and for genuine ambiguity.
+			if r.Reason == "tombstoned" && len(r.Candidates) == 1 {
+				resolvedFrom = append(resolvedFrom, r.Candidates[0].Handle)
+				fromResolutions = append(fromResolutions, map[string]interface{}{
+					"input": r.Input, "handle": r.Candidates[0].Handle, "via": "tombstoned",
+				})
+				continue
+			}
 			unresolved = append(unresolved, r)
 			continue
 		}
