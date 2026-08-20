@@ -374,6 +374,13 @@ func reverse(msgs []slack.Message) {
 	}
 }
 
+func plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
 func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 	result := &FeatureResult{
 		Success:     true,
@@ -401,12 +408,12 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 	}
 
 	if len(t.events) == 0 {
-		result.Message = fmt.Sprintf("Nothing new across %d conversations.", t.scanned)
+		result.Message = fmt.Sprintf("Nothing new across %s.", plural(t.scanned, "conversation"))
 		result.Guidance = "Nothing moved past your position. Check inbox view='new' again later."
 		return result
 	}
 
-	result.Message = fmt.Sprintf("%d new messages across %d conversations.", len(t.events), t.read)
+	result.Message = fmt.Sprintf("%s across %s.", plural(len(t.events), "new message"), plural(t.read, "conversation"))
 	result.NextActions = []string{
 		"Read one in full: messages target='<handle from an event>'",
 		"Record that you have seen these: dismiss handle='<handle>'",
@@ -430,7 +437,7 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 	}
 	if len(notes) > 0 {
 		result.Guidance = capitalize(notes[0]) + strings.Join(prefixEach("; ", notes[1:]), "") +
-			". Ack what you have seen, then check inbox view='new' again."
+			". Dismiss what you have seen, then check inbox view='new' again."
 	}
 	if t.firstLook {
 		result.Guidance = strings.TrimSpace(result.Guidance +
