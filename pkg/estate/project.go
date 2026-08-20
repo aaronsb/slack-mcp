@@ -25,6 +25,11 @@ type UserProps struct {
 	Title       string `json:"title"`
 	IsBot       bool   `json:"isBot"`
 	Deleted     bool   `json:"deleted"`
+	// IsStranger and TeamID identify external (Slack Connect) users, who
+	// appear in traffic but never in this workspace's users.list — the
+	// absence pass must not tombstone them for that.
+	IsStranger bool   `json:"isStranger,omitempty"`
+	TeamID     string `json:"teamId,omitempty"`
 }
 
 // ChannelProps is estate.channel/v1.
@@ -48,6 +53,8 @@ func ProjectUser(u slack.User) UserProps {
 		Title:       u.Profile.Title,
 		IsBot:       u.IsBot,
 		Deleted:     u.Deleted,
+		IsStranger:  u.IsStranger,
+		TeamID:      u.TeamID,
 	}
 }
 
@@ -87,6 +94,12 @@ func diffUser(a, b UserProps) []string {
 	}
 	if a.Deleted != b.Deleted {
 		out = append(out, "deleted")
+	}
+	if a.IsStranger != b.IsStranger {
+		out = append(out, "isStranger")
+	}
+	if a.TeamID != b.TeamID {
+		out = append(out, "teamId")
 	}
 	return out
 }

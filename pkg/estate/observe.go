@@ -123,6 +123,12 @@ func (s *Store) ObserveUsers(users []slack.User, complete bool, src Source, now 
 			if rec.Gone != nil {
 				continue
 			}
+			// External (Slack Connect) users appear in traffic but never in
+			// this workspace's users.list; their absence from it proves
+			// nothing.
+			if rec.Props.IsStranger || (rec.Props.TeamID != "" && rec.Props.TeamID != s.teamID) {
+				continue
+			}
 			live++
 			if !seen[id] {
 				proposed = append(proposed, rec)
@@ -258,7 +264,7 @@ func (s *Store) ObserveChannels(channels []slack.Channel, complete bool, src Sou
 // runs the absence pass against it. This is what makes an enumeration
 // resumable across restarts — the pages already in the ledger carry the
 // records, and this call carries the completeness claim.
-func (s *Store) CloseChannelEnumeration(seen map[string]bool, src Source, now time.Time) (ObserveResult, error) {
+func (s *Store) CloseChannelEnumeration(seen map[string]bool, src Source, startedAt, now time.Time) (ObserveResult, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -273,6 +279,12 @@ func (s *Store) CloseChannelEnumeration(seen map[string]bool, src Source, now ti
 	live := 0
 	for id, rec := range s.fold.channels {
 		if rec.Gone != nil {
+			continue
+		}
+		// A conversation first seen after the enumeration started — created
+		// mid-walk and observed by traffic — is absent from the walk's seen
+		// set for timing reasons, not existence ones.
+		if !startedAt.IsZero() && rec.FirstSeen.After(startedAt) {
 			continue
 		}
 		live++
@@ -321,11 +333,19 @@ func (s *Store) RecordSweep(rep SweepReport, now time.Time) error {
 
 	appended := rep.Appended
 	durationMs := rep.Duration.Milliseconds()
+	toReport := func(c ClassReport) *classReport {
+		return &classReport{
+			Complete: c.Complete, Count: c.Count,
+			ArchivedIncluded: c.ArchivedIncluded,
+			AbsenceAborted:   c.AbsenceAborted,
+			Skipped:          c.Skipped,
+		}
+	}
 	e := event{
 		V: schemaVersion, At: now, Src: SourceSweep, Kind: kindSweep,
-		Users:      &classReport{Complete: rep.Users.Complete, Count: rep.Users.Count, AbsenceAborted: rep.Users.AbsenceAborted, Skipped: rep.Users.Skipped},
-		Channels:   &classReport{Complete: rep.Channels.Complete, Count: rep.Channels.Count, ArchivedIncluded: rep.Channels.ArchivedIncluded, AbsenceAborted: rep.Channels.AbsenceAborted, Skipped: rep.Channels.Skipped},
-		Membership: &classReport{Complete: rep.Membership.Complete, Count: rep.Membership.Count},
+		Users:      toReport(rep.Users),
+		Channels:   toReport(rep.Channels),
+		Membership: toReport(rep.Membership),
 		Appended:   &appended,
 		DurationMs: &durationMs,
 	}

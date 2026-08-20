@@ -28,17 +28,23 @@ const (
 type walkState struct {
 	Cursor    string    `json:"cursor"`
 	StartedAt time.Time `json:"startedAt"`
-	Seen      []string  `json:"seen"`
+	// SavedAt is when this checkpoint was written. Age-out keys on it —
+	// keying on StartedAt would measure cumulative time since the walk's
+	// first attempt, so any walk not finished within the cap would restart
+	// from page one forever: the exact failure resumability exists to fix.
+	SavedAt time.Time `json:"savedAt"`
+	Seen    []string  `json:"seen"`
 }
 
 // walkStatePath returns where this workspace's walk checkpoint lives, or ""
 // when there is no writable estate — readers and ledger-less servers walk
 // without checkpointing, as before.
 func (ap *ApiProvider) walkStatePath() string {
-	if ap.estate == nil || ap.estate.ReadOnly() {
+	st := ap.est()
+	if st == nil || st.ReadOnly() {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(ap.estate.Path()), walkStateFile)
+	return filepath.Join(filepath.Dir(st.Path()), walkStateFile)
 }
 
 // loadWalkState returns a resumable checkpoint, or ok=false when none
@@ -56,7 +62,11 @@ func (ap *ApiProvider) loadWalkState() (cursor string, startedAt time.Time, seen
 	if err := json.Unmarshal(data, &st); err != nil || st.Cursor == "" {
 		return "", time.Time{}, nil, false
 	}
-	if time.Since(st.StartedAt) > walkResumeAgeMax {
+	savedAt := st.SavedAt
+	if savedAt.IsZero() {
+		savedAt = st.StartedAt
+	}
+	if time.Since(savedAt) > walkResumeAgeMax {
 		ap.clearWalkState()
 		return "", time.Time{}, nil, false
 	}
@@ -74,7 +84,7 @@ func (ap *ApiProvider) saveWalkState(cursor string, startedAt time.Time, seen ma
 	if path == "" || cursor == "" {
 		return
 	}
-	st := walkState{Cursor: cursor, StartedAt: startedAt, Seen: make([]string, 0, len(seen))}
+	st := walkState{Cursor: cursor, StartedAt: startedAt, SavedAt: time.Now(), Seen: make([]string, 0, len(seen))}
 	for id := range seen {
 		st.Seen = append(st.Seen, id)
 	}

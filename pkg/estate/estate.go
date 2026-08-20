@@ -68,6 +68,7 @@ const (
 // nothing to reclaim, and the lock file's existence carries no meaning.
 type Store struct {
 	path     string
+	teamID   string
 	file     *os.File
 	lock     *flock.Flock
 	readOnly bool
@@ -101,7 +102,7 @@ func Open(teamID string) (*Store, error) {
 	}
 
 	path := filepath.Join(dir, "estate.jsonl")
-	s := &Store{path: path, fold: newFold()}
+	s := &Store{path: path, teamID: teamID, fold: newFold()}
 
 	// Writer election: non-blocking exclusive flock, first opener wins.
 	// The kernel releases it when the process dies, so a crash leaves no

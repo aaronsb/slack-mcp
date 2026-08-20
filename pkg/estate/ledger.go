@@ -72,7 +72,7 @@ func mustRaw(v any) json.RawMessage {
 // appendAndApply writes the events as one buffer, syncs once, then folds
 // them in. One write bounds a crash to a single torn point; one fsync per
 // batch bounds the loss window to one observation. Events are folded only
-// after they are durable, so the fold never runs ahead of the ledger.
+// after they are written, so the fold never runs ahead of the ledger.
 func (s *Store) appendAndApply(events []event) error {
 	if len(events) == 0 {
 		return nil
@@ -92,13 +92,26 @@ func (s *Store) appendAndApply(events []event) error {
 	}
 
 	n, err := s.file.Write(buf.Bytes())
-	if err != nil {
+	if err != nil || n < buf.Len() {
+		// A partial append (ENOSPC, I/O error) leaves a torn fragment that
+		// the next successful append would bury in the interior — and an
+		// interior tear makes every future Open refuse the whole ledger.
+		// Truncate back to the last good length; if even that fails, poison
+		// the store read-only rather than corrupt the file.
+		if terr := os.Truncate(s.path, s.bytes); terr != nil {
+			s.readOnly = true
+			return fmt.Errorf("estate: append failed (%v) and truncate failed (%v); store is now read-only", err, terr)
+		}
+		if err == nil {
+			err = fmt.Errorf("short write: %d of %d bytes", n, buf.Len())
+		}
 		return fmt.Errorf("estate: append: %w", err)
 	}
-	if err := s.file.Sync(); err != nil {
-		return fmt.Errorf("estate: sync: %w", err)
-	}
+	syncErr := s.file.Sync()
 
+	// The lines are in the file, so the fold must apply them even when the
+	// sync failed — otherwise the fold runs behind its own ledger until the
+	// next boot.
 	s.foldMu.Lock()
 	for i := range events {
 		s.fold.apply(&events[i])
@@ -106,6 +119,10 @@ func (s *Store) appendAndApply(events []event) error {
 	s.lines += int64(len(events))
 	s.bytes += int64(n)
 	s.foldMu.Unlock()
+
+	if syncErr != nil {
+		return fmt.Errorf("estate: sync: %w", syncErr)
+	}
 	return nil
 }
 
@@ -164,7 +181,10 @@ func replayFile(path string, cutoff time.Time, f *fold) (replayReport, error) {
 			return rep, fmt.Errorf("estate: damaged ledger line at byte %d: %w", offset, err)
 		}
 
-		if cutoff.IsZero() || !e.At.After(cutoff) {
+		// A line from a newer schema is skipped, never half-understood: the
+		// estate file is never rewritten, so a v2 event folding under v1
+		// semantics would silently misread history.
+		if e.V <= schemaVersion && (cutoff.IsZero() || !e.At.After(cutoff)) {
 			f.apply(&e)
 		}
 		rep.lines++

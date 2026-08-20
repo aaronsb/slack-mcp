@@ -19,10 +19,10 @@ func ladderProvider() *ApiProvider {
 		return u
 	}
 	return &ApiProvider{users: map[string]slack.User{
-		"U1": mk("U1", "chanceyc", "Clayton Chancey", "Clayton", "Head of AI Strategy", false),
-		"U2": mk("U2", "cpeters", "Clay Peterson", "Clay", "Design", false),
-		"U3": mk("U3", "dana", "Dana Okafor", "Dana O.", "", false),
-		"U4": mk("U4", "ghost", "Gone Person", "", "", true),
+		"U01AAAAA1": mk("U01AAAAA1", "chanceyc", "Clayton Chancey", "Clayton", "Head of AI Strategy", false),
+		"U01AAAAA2": mk("U01AAAAA2", "cpeters", "Clay Peterson", "Clay", "Design", false),
+		"U01AAAAA3": mk("U01AAAAA3", "dana", "Dana Okafor", "Dana O.", "", false),
+		"U01AAAAA4": mk("U01AAAAA4", "ghost", "Gone Person", "", "", true),
 	}}
 }
 
@@ -48,7 +48,7 @@ func TestAUniqueFragmentResolvesAndSaysHow(t *testing.T) {
 }
 
 func TestAUserIDResolvesDirectly(t *testing.T) {
-	r := ladderProvider().ResolvePerson("U3")
+	r := ladderProvider().ResolvePerson("U01AAAAA3")
 	if !r.Resolved || r.Handle != "dana" || r.Via != "user-id" {
 		t.Fatalf("got %+v", r)
 	}
@@ -95,7 +95,7 @@ func TestAMissDistinguishesTombstonedFromUnswept(t *testing.T) {
 	ap.estate = st
 
 	at := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	departed := slack.User{ID: "U9", Name: "leaver", RealName: "Lee Ver"}
+	departed := slack.User{ID: "U01AAAAA9", Name: "leaver", RealName: "Lee Ver"}
 	if _, err := st.ObserveUsers([]slack.User{departed}, true, estate.SourceSweep, at); err != nil {
 		t.Fatalf("observe: %v", err)
 	}
@@ -128,5 +128,18 @@ func TestAMissDistinguishesTombstonedFromUnswept(t *testing.T) {
 	}
 	if r := ap.ResolvePerson("zorptangle"); r.Reason != "never_seen" {
 		t.Fatalf("reason = %q, want never_seen", r.Reason)
+	}
+}
+
+// An all-caps name must not be misrouted as a user ID and skip the ladder.
+func TestAnAllCapsNameIsNotMistakenForAnID(t *testing.T) {
+	ap := ladderProvider()
+	mk := ap.users["U01AAAAA3"]
+	mk.RealName = "Ursula Vance"
+	ap.users["U01AAAAA3"] = mk
+
+	r := ap.ResolvePerson("URSULA")
+	if !r.Resolved || r.Handle != "dana" {
+		t.Fatalf("all-caps name skipped the ladder: %+v", r)
 	}
 }

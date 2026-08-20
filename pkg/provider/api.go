@@ -54,8 +54,11 @@ type ApiProvider struct {
 	store *cache.Store
 
 	// Estate ledger (ADR-007): nil when the ledger could not open, and
-	// every call site degrades on nil.
+	// every call site degrades on nil. estateMu guards the pointer itself:
+	// the background boot goroutine assigns it while handler goroutines
+	// read it through est().
 	estate              *estate.Store
+	estateMu            sync.RWMutex
 	estateSweepInterval time.Duration
 	estateSweepStop     chan struct{}
 
@@ -227,10 +230,13 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 	ap.openEstate()
 
 	// Load users from cache
-	ap.loadUsersFromCache()
+	snapshotUsers := ap.loadUsersFromCache()
 
-	if len(ap.users) == 0 {
-		// No cached users, fetch from API
+	if snapshotUsers == 0 {
+		// No users on disk. Estate hydration may have filled the map with
+		// skeletons, but a wiped snapshot is a request for fresh data — the
+		// gate keys on the snapshot, not the map, or wiping the cache would
+		// no longer force a refresh.
 		if err := ap.fetchAndCacheUsers(ctx); err != nil {
 			log.Printf("Failed to fetch users: %v", err)
 			return err
@@ -264,7 +270,7 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 // with Deleted forced so the render and filter paths see the fact, and a
 // fold-live user the snapshot lost hydrates as a skeleton — a deleted or
 // corrupt snapshot self-heals instead of needing a hand-deleted file.
-func (ap *ApiProvider) loadUsersFromCache() {
+func (ap *ApiProvider) loadUsersFromCache() int {
 	var cachedUsers []slack.User
 	if ap.store != nil {
 		if err := ap.store.Load(usersCacheFile, &cachedUsers); err != nil {
@@ -273,8 +279,8 @@ func (ap *ApiProvider) loadUsersFromCache() {
 	}
 
 	var estateUsers map[string]estate.UserRecord
-	if ap.estate != nil {
-		estateUsers = ap.estate.Users()
+	if st := ap.est(); st != nil {
+		estateUsers = st.Users()
 	}
 
 	hydrated := 0
@@ -298,9 +304,10 @@ func (ap *ApiProvider) loadUsersFromCache() {
 
 	if hydrated > 0 {
 		log.Printf("Loaded %d users from cache, hydrated %d from the estate", len(cachedUsers), hydrated)
-		return
+	} else {
+		log.Printf("Loaded %d users from cache", len(cachedUsers))
 	}
-	log.Printf("Loaded %d users from cache", len(cachedUsers))
+	return len(cachedUsers)
 }
 
 // fetchAndCacheUsers fetches all users and saves to cache
@@ -349,8 +356,8 @@ func (ap *ApiProvider) loadChannelsFromCache() {
 	}
 
 	var estateChannels map[string]estate.ChannelRecord
-	if ap.estate != nil {
-		estateChannels = ap.estate.Channels()
+	if st := ap.est(); st != nil {
+		estateChannels = st.Channels()
 	}
 
 	loaded := make([]slack.Channel, 0, len(cachedChannels))
@@ -507,20 +514,19 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 
 	log.Println("Starting background channel backfill...")
 	appended := 0
-	_, seen, complete := ap.fetchAllChannels(ctx, func(page []slack.Channel) {
-		ap.mergeNewChannels(page)
-		// Observe each page as it lands (asserting no absences), so an
-		// interrupted walk's knowledge is already durable and the resumed
-		// walk appends nothing for what it re-sees. Observe the map's
-		// reconciled view, not the raw fetch: member-loaded entries carry
-		// the authoritative IsMember, and both observers must feed the
-		// estate the same values or the ledger records a flip-flop that
-		// never happened.
-		res := ap.observeChannelsEstate(ap.reconciledView(page), false, estate.SourceBoot)
+	walk := ap.fetchAllChannels(ctx, func(page []slack.Channel) {
+		// Upsert, preserving the map's IsMember (member-load is the boot
+		// authority on membership), so channel renames and archives are
+		// re-observed instead of frozen behind an add-only merge. Observe
+		// each page as it lands (asserting no absences), so an interrupted
+		// walk's knowledge is already durable and the resumed walk appends
+		// nothing for what it re-sees.
+		merged := ap.mergeChannels(page, nil)
+		res := ap.observeChannelsEstate(merged, false, estate.SourceBoot)
 		appended += res.Appended
 	})
 
-	if !complete {
+	if !walk.complete {
 		// Walk failed partway: merged pages stay, the checkpoint stays for
 		// the next attempt, backfillDone stays false so RefreshChannelCache
 		// can retry, and no absences were asserted.
@@ -531,32 +537,53 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 	ap.backfillDone = true
 	ap.backfillMutex.Unlock()
 
-	res := ap.closeChannelEnumerationEstate(seen, estate.SourceBoot)
+	res := ap.closeChannelEnumerationEstate(walk.seen, estate.SourceBoot, walk.startedAt)
 	ap.recordEstateSweep(estate.SweepReport{
 		Channels: estate.ClassReport{
-			Complete: true, Count: len(seen),
+			Complete: true, Count: len(walk.seen),
 			ArchivedIncluded: true, AbsenceAborted: res.AbsenceAborted,
 		},
 		Appended: appended + res.Appended,
 	})
 
-	log.Printf("Background backfill complete: %d channels", len(seen))
+	ap.reconcileEstateTombstones()
+	log.Printf("Background backfill complete: %d channels", len(walk.seen))
 	ap.markDirty()
 	ap.flushCaches()
 }
 
-// reconciledView returns the map's current structs for a fetched page, so
-// estate observation sees post-merge values.
-func (ap *ApiProvider) reconciledView(page []slack.Channel) []slack.Channel {
-	out := make([]slack.Channel, 0, len(page))
-	ap.channelsMutex.RLock()
+// mergeChannels upserts a fetched page into the map and returns the merged
+// values (what estate observation must see, so both observers feed the
+// ledger identical structs). Membership: when memberIDs is non-nil it is
+// authoritative for unarchived channels; archived channels keep their
+// fetched flag because the membership walk excludes them; when memberIDs is
+// nil the map's existing IsMember survives the upsert.
+func (ap *ApiProvider) mergeChannels(page []slack.Channel, memberIDs map[string]bool) []slack.Channel {
+	merged := make([]slack.Channel, 0, len(page))
+	var newDMs []slack.Channel
+	ap.channelsMutex.Lock()
 	for _, ch := range page {
-		if current, ok := ap.channels[ch.ID]; ok {
-			out = append(out, current)
+		existing, exists := ap.channels[ch.ID]
+		if memberIDs != nil {
+			if !ch.IsArchived {
+				ch.IsMember = memberIDs[ch.ID]
+			}
+		} else if exists {
+			ch.IsMember = existing.IsMember
 		}
+		ap.channels[ch.ID] = ch
+		ap.indexChannel(ch)
+		if !exists && ch.IsIM {
+			newDMs = append(newDMs, ch)
+		}
+		merged = append(merged, ch)
 	}
-	ap.channelsMutex.RUnlock()
-	return out
+	ap.channelsMutex.Unlock()
+
+	for _, ch := range newDMs {
+		ap.indexChannelDM(ch)
+	}
+	return merged
 }
 
 // fetchAllChannels walks conversations.list to cursor exhaustion — archived
@@ -566,7 +593,25 @@ func (ap *ApiProvider) reconciledView(page []slack.Channel) []slack.Channel {
 // seen set per page so a killed process resumes instead of restarting from
 // page one. Returns the channels fetched this process, the seen set across
 // resumes, and whether the enumeration completed.
-func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack.Channel)) ([]slack.Channel, map[string]bool, bool) {
+// channelWalkResult is what one enumeration attempt produced: the seen set
+// across resumes, when the enumeration first started, and whether it
+// completed.
+type channelWalkResult struct {
+	seen      map[string]bool
+	startedAt time.Time
+	complete  bool
+}
+
+func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack.Channel)) channelWalkResult {
+	// Single walker: two concurrent enumerations would share one checkpoint
+	// file and together run twice the rate tier — the paired 30s backoffs
+	// observed live before the scheduler learned to wait.
+	ap.walkMu.Lock()
+	if ap.channelWalk.Active {
+		ap.walkMu.Unlock()
+		log.Printf("Channel walk already in progress; skipping this attempt")
+		return channelWalkResult{seen: map[string]bool{}}
+	}
 	cursor, startedAt, seen, resumed := ap.loadWalkState()
 	if !resumed {
 		startedAt = time.Now()
@@ -574,9 +619,6 @@ func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack
 	} else {
 		log.Printf("Channel walk resuming: %d conversations already seen", len(seen))
 	}
-	var all []slack.Channel
-
-	ap.walkMu.Lock()
 	ap.channelWalk = WalkProgress{Active: true, Started: startedAt, Seen: len(seen)}
 	ap.walkMu.Unlock()
 	defer func() {
@@ -609,10 +651,9 @@ func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack
 				continue
 			}
 			log.Printf("Channel walk failed: %v", err)
-			return all, seen, false
+			return channelWalkResult{seen: seen, startedAt: startedAt}
 		}
 
-		all = append(all, channels...)
 		for i := range channels {
 			seen[channels[i].ID] = true
 		}
@@ -625,7 +666,7 @@ func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack
 
 		if nextCursor == "" {
 			ap.clearWalkState()
-			return all, seen, true
+			return channelWalkResult{seen: seen, startedAt: startedAt, complete: true}
 		}
 		cursor = nextCursor
 		ap.saveWalkState(cursor, startedAt, seen)
@@ -635,27 +676,6 @@ func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack
 		// 3,000-conversation walk took ~13 minutes; a flat 3s stays under
 		// the limit and finishes the same walk in ~2.
 		time.Sleep(3 * time.Second)
-	}
-}
-
-// mergeNewChannels adds channels the map does not hold yet, leaving
-// existing entries — member-loaded ones especially — untouched.
-func (ap *ApiProvider) mergeNewChannels(channels []slack.Channel) {
-	var newDMs []slack.Channel
-	ap.channelsMutex.Lock()
-	for _, ch := range channels {
-		if _, exists := ap.channels[ch.ID]; !exists {
-			ap.channels[ch.ID] = ch
-			ap.indexChannel(ch)
-			if ch.IsIM {
-				newDMs = append(newDMs, ch)
-			}
-		}
-	}
-	ap.channelsMutex.Unlock()
-
-	for _, ch := range newDMs {
-		ap.indexChannelDM(ch)
 	}
 }
 

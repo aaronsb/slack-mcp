@@ -422,12 +422,14 @@ func TestADeletedSnapshotSelfHealsFromTheEstate(t *testing.T) {
 
 	users := p.ProvideUsersMap()
 	if len(users) != 2 {
-		t.Fatalf("hydrated %d users, want 2", len(users))
+		t.Fatalf("boot served %d users, want 2", len(users))
 	}
-	// Hydration fills the boot gate, so the lost snapshot triggers no
-	// synchronous directory fetch — the sweep owns freshness now.
-	if got := srv.Calls("users.list"); got != 0 {
-		t.Fatalf("users.list called %d times at boot, want 0", got)
+	// A wiped snapshot is a request for fresh data: the boot gate keys on
+	// the snapshot, not the hydrated map, so the directory is refetched —
+	// while hydration still guarantees the estate's knowledge was never
+	// lost in the gap.
+	if got := srv.Calls("users.list"); got != 1 {
+		t.Fatalf("users.list called %d times at boot, want 1", got)
 	}
 }
 

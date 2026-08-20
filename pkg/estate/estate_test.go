@@ -627,3 +627,78 @@ func TestConcurrentObserveAndReadIsSafe(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// External (Slack Connect) users appear in traffic but never in this
+// workspace's users.list; their absence from it proves nothing.
+func TestAnExternalUserSurvivesTheAbsencePass(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	s := open(t)
+	outsider := user("U0EXTERN1", "visitor")
+	outsider.TeamID = "T0ELSEWHERE"
+	if _, err := s.ObserveUsers([]slack.User{outsider}, false, estate.SourceTraffic, base); err != nil {
+		t.Fatalf("observe outsider: %v", err)
+	}
+	if _, err := s.ObserveUsers([]slack.User{user("U1", "dana")}, true, estate.SourceSweep, base.Add(time.Hour)); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if rec, _ := s.User("U0EXTERN1"); rec.Gone != nil {
+		t.Fatalf("external user tombstoned by a users.list they can never appear in: %+v", rec.Gone)
+	}
+}
+
+// A conversation created mid-walk is absent from the walk's seen set for
+// timing reasons, not existence ones.
+func TestAMidWalkCreationSurvivesTheEnumerationClose(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	s := open(t)
+	walkStart := base
+	if _, err := s.ObserveChannels([]slack.Channel{channel("C1", "eng")}, false, estate.SourceSweep, walkStart.Add(time.Minute)); err != nil {
+		t.Fatalf("observe page: %v", err)
+	}
+	// Traffic observes a brand-new DM while the walk is still paging.
+	if _, err := s.ObserveChannels([]slack.Channel{channel("D9", "")}, false, estate.SourceTraffic, walkStart.Add(2*time.Minute)); err != nil {
+		t.Fatalf("observe new dm: %v", err)
+	}
+
+	res, err := s.CloseChannelEnumeration(map[string]bool{"C1": true}, estate.SourceSweep, walkStart, walkStart.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if res.ProposedAbsent != 0 {
+		t.Fatalf("mid-walk creation proposed absent: %+v", res)
+	}
+	if rec, _ := s.Channel("D9"); rec.Gone != nil {
+		t.Fatalf("mid-walk creation tombstoned: %+v", rec.Gone)
+	}
+}
+
+// A ledger line from a newer schema version is skipped, never folded under
+// this version's semantics.
+func TestAFutureVersionLineIsSkippedOnReplay(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	s := open(t)
+	path := s.Path()
+	if _, err := s.ObserveUsers([]slack.User{user("U1", "dana")}, true, estate.SourceSweep, base); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// A v2 tombstone must not fold: v2 may have changed what tombstone means.
+	f.WriteString(`{"v":2,"at":"2026-08-18T12:00:00Z","src":"sweep","kind":"tombstone","entity":"user","id":"U1","reason":"absent"}` + "\n")
+	f.Close()
+
+	s2 := open(t)
+	if rec, _ := s2.User("U1"); rec.Gone != nil {
+		t.Fatalf("future-version tombstone was folded under v1 semantics")
+	}
+}
