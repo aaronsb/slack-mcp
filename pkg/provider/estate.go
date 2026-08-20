@@ -48,6 +48,9 @@ func (ap *ApiProvider) openEstate() {
 		return
 	}
 	ap.estate = st
+	if st.ReadOnly() {
+		log.Printf("Estate ledger: read-only — another instance holds the writer lock")
+	}
 
 	s := st.Stats()
 	log.Printf("Estate ledger: %d lines, %d bytes, %d users (%d tombstoned), %d channels (%d tombstoned)",
@@ -55,7 +58,7 @@ func (ap *ApiProvider) openEstate() {
 }
 
 func (ap *ApiProvider) observeUsersEstate(users []slack.User, complete bool, src estate.Source) estate.ObserveResult {
-	if ap.estate == nil {
+	if ap.estate == nil || ap.estate.ReadOnly() {
 		return estate.ObserveResult{}
 	}
 	res, err := ap.estate.ObserveUsers(users, complete, src, time.Now())
@@ -69,7 +72,7 @@ func (ap *ApiProvider) observeUsersEstate(users []slack.User, complete bool, src
 }
 
 func (ap *ApiProvider) observeChannelsEstate(channels []slack.Channel, complete bool, src estate.Source) estate.ObserveResult {
-	if ap.estate == nil {
+	if ap.estate == nil || ap.estate.ReadOnly() {
 		return estate.ObserveResult{}
 	}
 	res, err := ap.estate.ObserveChannels(channels, complete, src, time.Now())
@@ -83,7 +86,7 @@ func (ap *ApiProvider) observeChannelsEstate(channels []slack.Channel, complete 
 }
 
 func (ap *ApiProvider) recordEstateSweep(rep estate.SweepReport) {
-	if ap.estate == nil {
+	if ap.estate == nil || ap.estate.ReadOnly() {
 		return
 	}
 	if err := ap.estate.RecordSweep(rep, time.Now()); err != nil {
@@ -96,7 +99,7 @@ func (ap *ApiProvider) recordEstateSweep(rep estate.SweepReport) {
 // The stop channel exists for a future lifecycle pass; like the cache
 // flusher's, nothing calls it today.
 func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
-	if ap.estate == nil {
+	if ap.estate == nil || ap.estate.ReadOnly() {
 		return
 	}
 	interval := ap.estateSweepInterval
@@ -195,6 +198,9 @@ func (ap *ApiProvider) channelEnumerationFresh() (bool, time.Duration) {
 func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
 	if ap.estate == nil {
 		return fmt.Errorf("estate ledger unavailable")
+	}
+	if ap.estate.ReadOnly() {
+		return estate.ErrReadOnly
 	}
 	if ap.client == nil {
 		return fmt.Errorf("estate sweep before boot")
