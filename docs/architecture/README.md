@@ -63,7 +63,7 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 |---|---|---|---|
 | [006](006-observation-ledger.md) | Observation Ledger and Folded Caches | Proposed, amended by 007 | **Partial** — its mechanisms shipped inside ADR-007's estate; the attention ledger is not started |
 | [007](007-estate-ledger.md) | The Estate Ledger | Accepted | **Implemented** — #51–#57; running against a live workspace |
-| [008](008-relationship-views.md) | Relationship Views | Proposed | Not started — live-probe evidence in review (#62) |
+| [008](008-relationship-views.md) | Relationship Views | Accepted | Implemented — families/person/initiatives/convergence/about views, encounter observer, compiled executor (#62, #65, #66, stage 3 PR) |
 
 ### Auth — how tokens are obtained
 

@@ -12,29 +12,43 @@ import (
 
 // EstateViews is ADR-008's read surface: named views that answer whole
 // relationship questions from the fold, so the agent never does set math
-// over listings. Stage 1 ships the families view; initiatives, person,
-// convergence, and the about entry point follow the attention ledger.
+// over listings. about is the entry point; families reads the founder
+// plane; person, initiatives, and convergence read the activity plane the
+// encounter observer accumulates.
 var EstateViews = &Feature{
 	Name:        "estate",
-	Description: "Relationship views over the accumulated estate. view='families' groups engagement channels by name stem — lifecycle span, phases, creators — answered from local state at zero Slack calls. Narrow with search='stem' or anchor on a person with person='@handle'.",
+	Description: "Relationship views over the accumulated estate. view='about' answers \"tell me about X\" whole: founder plane, activity plane, circle, and a ranked reading plan. Other views: 'families' (engagement channels by stem), 'person' (footprint + counterparts), 'initiatives' (what moved, by creator), 'convergence' (where a group co-occurs). Fold-first at zero Slack calls; bounded compiled searches only when coverage requires.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"view": map[string]interface{}{
 				"type":        "string",
-				"description": "Which view to execute. Currently: 'families'",
-			},
-			"search": map[string]interface{}{
-				"type":        "string",
-				"description": "Filter families by stem or member channel name (partial match). Relaxes the default signal criteria to any matching group.",
+				"description": "Which view: 'about', 'families', 'person', 'initiatives', 'convergence'",
 			},
 			"person": map[string]interface{}{
 				"type":        "string",
-				"description": "Anchor on a person (@handle, name, or user ID): only groups containing channels they created, including single-channel groups — surfaces cross-stem work that stem grouping alone separates.",
+				"description": "The seed person for about/person, or the creator anchor for families (@handle, name, or user ID)",
+			},
+			"people": map[string]interface{}{
+				"type":        "string",
+				"description": "Comma-separated people for the convergence view (at least two)",
+			},
+			"search": map[string]interface{}{
+				"type":        "string",
+				"description": "families only: filter by stem or channel name (partial match); relaxes the default criteria",
+			},
+			"days": map[string]interface{}{
+				"type":        "number",
+				"description": "Activity window in days (defaults: about/person 30, convergence 14, initiatives 7; capped at 90 — the attention ledger's horizon)",
+			},
+			"deeper": map[string]interface{}{
+				"type":        "boolean",
+				"description": "about only: second hop — compile the circle's activity with bounded searches and show where it converges",
+				"default":     false,
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
-				"description": "Maximum families to return (default 10, max 50)",
+				"description": "families only: maximum families to return (default 10, max 50)",
 				"default":     10,
 			},
 		},
@@ -84,6 +98,17 @@ type estateFamiliesData struct {
 	Shown         int
 }
 
+func viewDays(params map[string]interface{}, def int) int {
+	days := def
+	if d, ok := params["days"].(float64); ok && int(d) > 0 {
+		days = int(d)
+	}
+	if days > 90 {
+		days = 90
+	}
+	return days
+}
+
 func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
 	apiProvider, ok := params["_provider"].(*provider.ApiProvider)
 	if !ok {
@@ -91,32 +116,72 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 	}
 
 	view, _ := params["view"].(string)
-	if view != "families" {
+	person, _ := params["person"].(string)
+	person = strings.TrimSpace(person)
+	deeper, _ := params["deeper"].(bool)
+
+	result := func(v interface{}, msg string) (*FeatureResult, error) {
 		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("Unknown view %q. Available views: families", view),
-			Guidance: "The families view groups engagement channels by name stem. More views (initiatives, person, convergence, about) arrive with the attention ledger.",
+			Success: true,
+			Data:    map[string]interface{}{"view": v},
+			Message: msg,
 		}, nil
 	}
 
-	search := ""
-	if s, ok := params["search"].(string); ok {
-		search = strings.ToLower(strings.TrimSpace(s))
-	}
-	person, _ := params["person"].(string)
-	person = strings.TrimSpace(person)
-
-	limit := 10
-	if l, ok := params["limit"].(float64); ok {
-		limit = int(l)
-		if limit > 50 {
-			limit = 50
+	switch view {
+	case "families":
+		search := ""
+		if s, ok := params["search"].(string); ok {
+			search = strings.ToLower(strings.TrimSpace(s))
 		}
-		if limit < 1 {
-			limit = 1
+		limit := 10
+		if l, ok := params["limit"].(float64); ok {
+			limit = int(l)
+			if limit > 50 {
+				limit = 50
+			}
+			if limit < 1 {
+				limit = 1
+			}
 		}
-	}
+		data := familiesData(apiProvider, search, person, limit)
+		return result(data, fmt.Sprintf("families view: %d of %d families", data.Shown, data.TotalFamilies))
 
+	case "person":
+		if person == "" {
+			return &FeatureResult{Success: false, Message: "The person view needs person='<@handle, name, or user ID>'"}, nil
+		}
+		return result(personView(ctx, apiProvider, person, viewDays(params, 30), false), "person view")
+
+	case "initiatives":
+		return result(initiativesView(apiProvider, viewDays(params, 7)), "initiatives view")
+
+	case "convergence":
+		raw, _ := params["people"].(string)
+		people := strings.Split(raw, ",")
+		if len(people) < 2 {
+			return &FeatureResult{Success: false, Message: "The convergence view needs people='a,b[,c...]' — at least two"}, nil
+		}
+		return result(convergenceView(ctx, apiProvider, people, viewDays(params, 14)), "convergence view")
+
+	case "about":
+		if person == "" {
+			return &FeatureResult{Success: false, Message: "The about view needs person='<@handle, name, or user ID>'"}, nil
+		}
+		return result(aboutView(ctx, apiProvider, person, viewDays(params, 30), deeper), "about view")
+
+	default:
+		return &FeatureResult{
+			Success:  false,
+			Message:  fmt.Sprintf("Unknown view %q. Available views: about, families, person, initiatives, convergence", view),
+			Guidance: "Start with view='about' person='<who>' — it composes the others and returns a reading plan.",
+		}, nil
+	}
+}
+
+// familiesData executes the families view: stem grouping ⋈ lifecycle ⋈
+// creator, from local state only.
+func familiesData(apiProvider *provider.ApiProvider, search, person string, limit int) *estateFamiliesData {
 	data := &estateFamiliesData{Search: search, CreatorNames: map[string]string{}}
 	data.Coverage = apiProvider.EstateCoverage()
 	data.Attention = apiProvider.AttentionInfo()
@@ -126,11 +191,7 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 		res := apiProvider.ResolvePerson(person)
 		if !res.Resolved {
 			data.PersonMiss = &res
-			return &FeatureResult{
-				Success: true,
-				Data:    map[string]interface{}{"view": data},
-				Message: fmt.Sprintf("Could not resolve %q (%s)", person, res.Reason),
-			}, nil
+			return data
 		}
 		personID = res.UserID
 		data.PersonLabel = res.DisplayName
@@ -141,10 +202,9 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 
 	// Merge the two sources, keyed by conversation ID so a reused name
 	// never grafts a dead channel's ownership onto a live one — the two
-	// render side by side in their stem group instead. The snapshot
-	// carries ownership today; the fold carries it from the next sweep
-	// on, and is the only source that still knows the channels that are
-	// gone.
+	// render side by side in their stem group. The snapshot carries
+	// ownership today; the fold carries it from the next sweep on, and is
+	// the only source that still knows the channels that are gone.
 	channels := map[string]famChannel{}
 	for _, ch := range apiProvider.GetCachedChannels() {
 		if ch.IsIM || ch.IsMpIM || ch.Name == "" {
@@ -293,49 +353,39 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 			data.CreatorNames[c.Creator] = c.Creator
 		}
 	}
-
-	return &FeatureResult{
-		Success:     true,
-		Data:        map[string]interface{}{"view": data},
-		ResultCount: data.Shown,
-		Message:     fmt.Sprintf("families view: %d of %d families", data.Shown, data.TotalFamilies),
-	}, nil
+	return data
 }
 
 // formatEstate renders the estate views. The rendered markdown is the
 // agent's entire world — result.Data never reaches the client.
 func formatEstate(result *FeatureResult) string {
+	dataMap, _ := result.Data.(map[string]interface{})
+	switch v := dataMap["view"].(type) {
+	case *estateFamiliesData:
+		return formatFamiliesView(v)
+	case *personViewData:
+		return formatPersonView(v)
+	case *initiativesViewData:
+		return formatInitiativesView(v)
+	case *convergenceViewData:
+		return formatConvergenceView(v)
+	case *aboutViewData:
+		return formatAboutView(v)
+	default:
+		out := result.Message
+		if result.Guidance != "" {
+			out += "\n\n" + result.Guidance
+		}
+		return out
+	}
+}
+
+func formatFamiliesView(view *estateFamiliesData) string {
 	var b strings.Builder
 
-	dataMap, _ := result.Data.(map[string]interface{})
-	view, _ := dataMap["view"].(*estateFamiliesData)
-	if view == nil {
-		b.WriteString(result.Message)
-		if result.Guidance != "" {
-			b.WriteString("\n\n" + result.Guidance)
-		}
-		return b.String()
-	}
-
 	if view.PersonMiss != nil {
-		res := view.PersonMiss
-		fmt.Fprintf(&b, "## Estate — families view\n\n%s.\n", result.Message)
-		if len(res.Candidates) > 0 {
-			b.WriteString("\nClosest matches:\n")
-			for _, c := range res.Candidates {
-				line := fmt.Sprintf("- @%s — %s", c.Handle, c.DisplayName)
-				if c.Title != "" {
-					line += " (" + c.Title + ")"
-				}
-				if c.GoneReason != "" {
-					line += fmt.Sprintf(" [gone: %s %s]", c.GoneReason, strings.Join(c.GoneBetween, "…"))
-				}
-				b.WriteString(line + "\n")
-			}
-			b.WriteString("\n**Next:** re-query with a handle: estate view='families' person='@<handle>'")
-		} else {
-			b.WriteString("\n**Next:** search the directory: list-users query='<name>'")
-		}
+		b.WriteString("## Estate — families view\n\n")
+		renderMiss(&b, view.PersonMiss)
 		return b.String()
 	}
 
@@ -410,10 +460,10 @@ func formatEstate(result *FeatureResult) string {
 	} else if att.Stats.Events == 0 {
 		b.WriteString("Activity plane: observing — no encounters recorded yet.\n")
 	} else {
-		fmt.Fprintf(&b, "Activity plane: %d encounters, %d people, %d conversations (%s \u2192 %s), as observed by this agent's reading.\n",
+		fmt.Fprintf(&b, "Activity plane: %d encounters, %d people, %d conversations (%s → %s), as observed by this agent's reading.\n",
 			att.Stats.Events, att.Stats.Users, att.Stats.Convs, att.Stats.FirstDay, att.Stats.LastDay)
 	}
-	b.WriteString("**Next:** read a family's channel: catch-up channel='#<name>' | narrow: estate view='families' search='<stem>' | person-anchored: estate view='families' person='@<handle>'")
+	b.WriteString("**Next:** whole picture: estate view='about' person='@<handle>' | read a channel: catch-up channel='#<name>' | narrow: estate view='families' search='<stem>'")
 
 	return b.String()
 }

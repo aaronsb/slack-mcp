@@ -381,6 +381,46 @@ func (s *AttentionStore) Encounters(user string) map[string][]Encounter {
 	return out
 }
 
+// ByConversation returns an atomic snapshot of the whole activity plane
+// inverted: conversation -> day -> distinct users seen that day. This is
+// the join surface the initiatives and convergence views read.
+func (s *AttentionStore) ByConversation() map[string]map[string][]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := map[string]map[string]map[string]struct{}{}
+	for user, byConv := range s.byUser {
+		for conv, encs := range byConv {
+			days, ok := seen[conv]
+			if !ok {
+				days = map[string]map[string]struct{}{}
+				seen[conv] = days
+			}
+			for _, e := range encs {
+				users, ok := days[e.Day]
+				if !ok {
+					users = map[string]struct{}{}
+					days[e.Day] = users
+				}
+				users[user] = struct{}{}
+			}
+		}
+	}
+	out := make(map[string]map[string][]string, len(seen))
+	for conv, days := range seen {
+		od := make(map[string][]string, len(days))
+		for day, users := range days {
+			list := make([]string, 0, len(users))
+			for u := range users {
+				list = append(list, u)
+			}
+			sort.Strings(list)
+			od[day] = list
+		}
+		out[conv] = od
+	}
+	return out
+}
+
 // AttentionStats is the coverage gauge for the activity plane: how much has
 // been observed, over what span.
 type AttentionStats struct {
