@@ -502,11 +502,11 @@ func formatFamiliesView(view *estateFamiliesData) string {
 	b.WriteString(cov + ".\n")
 	att := view.Attention
 	if !att.Available {
-		b.WriteString("Activity plane: no attention ledger — creation facts only, activity views pending.\n")
+		b.WriteString("Activity plane: unavailable (no attention ledger) — creation facts only.\n")
 	} else if att.Stats.Events == 0 {
 		b.WriteString("Activity plane: observing — no encounters recorded yet.\n")
 	} else {
-		fmt.Fprintf(&b, "Activity plane: %d encounters, %d people, %d conversations (%s → %s), as observed by this agent's reading.\n",
+		fmt.Fprintf(&b, "Activity plane: %d encounters, %d people, %d conversations (%s → %s), as observed from reads through this server.\n",
 			att.Stats.Events, att.Stats.Users, att.Stats.Convs, att.Stats.FirstDay, att.Stats.LastDay)
 	}
 	if view.Offset+view.Shown < view.TotalFamilies {

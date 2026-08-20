@@ -198,14 +198,14 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		}
 	} else if totalMsgCount <= 3 {
 		// 1-3 messages: Full consumption = auto-mark read
-		result.Guidance = "💬 Full content displayed. Nothing was marked read — reads are stealth; mark-read is the explicit exception."
+		result.Guidance = "💬 Full content displayed; nothing was marked read (only mark-read does that)."
 		result.NextActions = []string{
 			"Check mentions across channels: inbox view='mentions'",
 			fmt.Sprintf("Send a reply: say to='%s'", channel),
 		}
 	} else if totalMsgCount <= 15 {
 		// 4-15 messages: Thorough review = auto-mark read
-		result.Guidance = "🔍 Thorough review complete. Nothing was marked read — reads are stealth; mark-read is the explicit exception."
+		result.Guidance = "🔍 Thorough review complete; nothing was marked read (only mark-read does that)."
 		result.NextActions = []string{
 			"Check mentions across channels: inbox view='mentions'",
 			fmt.Sprintf("Send a reply: say to='%s'", channel),

@@ -54,7 +54,7 @@ func readHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 		return &FeatureResult{
 			Success:  false,
 			Message:  "Nothing to read.",
-			Guidance: "Pass a handle from a poll event, or describe what you want in plain words.",
+			Guidance: "Pass a handle from an inbox event, or describe what you want in plain words.",
 		}, nil
 	}
 
@@ -206,7 +206,7 @@ func messagesResult(apiProvider *provider.ApiProvider, where, kind, channel stri
 	}
 	if lastHandle != "" {
 		result.NextActions = []string{
-			fmt.Sprintf("Record that you have read this: dismiss handle='%s'", lastHandle),
+			fmt.Sprintf("Dismiss when handled: dismiss handle='%s'", lastHandle),
 		}
 	}
 	if more {

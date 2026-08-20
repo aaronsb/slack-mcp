@@ -101,7 +101,7 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 		if err != nil {
 			rejected = append(rejected, map[string]interface{}{
 				"handle": h,
-				"reason": "not a handle from a poll event",
+				"reason": "not a handle from an inbox event",
 			})
 			continue
 		}
@@ -120,7 +120,7 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 			if through == "" {
 				rejected = append(rejected, map[string]interface{}{
 					"handle": h,
-					"reason": "this thread handle does not say how far you read; use the handle from a poll event",
+					"reason": "a thread handle without a position; use the handle from an inbox event",
 				})
 				continue
 			}
@@ -134,7 +134,7 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 			// is the silent loss this whole design exists to prevent.
 			rejected = append(rejected, map[string]interface{}{
 				"handle": h,
-				"reason": "this is a whole conversation whose messages were not shown; read it before acknowledging",
+				"reason": "a whole conversation; read it before dismissing",
 			})
 		}
 	}
@@ -144,7 +144,7 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 			Success:  false,
 			Message:  "Nothing was acknowledged.",
 			Data:     map[string]interface{}{"rejected": rejected},
-			Guidance: "Acknowledge the handles on individual events, not on a whole conversation.",
+			Guidance: "Dismiss individual event handles, not a whole conversation.",
 		}, nil
 	}
 
@@ -171,7 +171,7 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 	}
 
 	if len(rejected) > 0 {
-		result.Guidance = fmt.Sprintf("%d handle(s) were not acknowledged; see rejected.", len(rejected))
+		result.Guidance = fmt.Sprintf("%d handle(s) rejected, listed below.", len(rejected))
 	}
 
 	return result, nil

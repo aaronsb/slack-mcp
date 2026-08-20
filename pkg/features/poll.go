@@ -410,14 +410,14 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 
 	if len(t.events) == 0 {
 		result.Message = fmt.Sprintf("Nothing new across %s.", plural(t.scanned, "conversation"))
-		result.Guidance = "Nothing moved past your position. Check inbox view='new' again later."
+		result.Guidance = "Nothing new since your last dismiss."
 		return result
 	}
 
 	result.Message = fmt.Sprintf("%s across %s.", plural(len(t.events), "new message"), plural(t.read, "conversation"))
 	result.NextActions = []string{
 		"Read one in full: messages target='<handle from an event>'",
-		"Record that you have seen these: dismiss handle='<handle>'",
+		"Dismiss what you've handled: dismiss handle='<handle>'",
 	}
 
 	var notes []string
@@ -434,15 +434,15 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 		notes = append(notes, fmt.Sprintf("%d conversations are shown by ID because the channel cache is still warming", t.conversationsUnnamed))
 	}
 	if t.limitReached {
-		notes = append(notes, "the event limit was reached")
+		notes = append(notes, "the page filled at the event limit")
 	}
 	if len(notes) > 0 {
 		result.Guidance = capitalize(notes[0]) + strings.Join(prefixEach("; ", notes[1:]), "") +
-			". Dismiss what you have seen, then check inbox view='new' again."
+			". Dismiss what you've handled, then inbox view='new' for the rest."
 	}
 	if t.firstLook {
 		result.Guidance = strings.TrimSpace(result.Guidance +
-			" This is a first look at conversations with no recorded position, bounded to the last 24 hours.")
+			" First look (no recorded position): bounded to the last 24 hours.")
 	}
 	if t.threadsUnchecked > 0 {
 		result.Guidance = strings.TrimSpace(result.Guidance +
@@ -450,7 +450,7 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 	}
 	if t.threadFeedFailed {
 		result.Guidance = strings.TrimSpace(result.Guidance +
-			" The thread feed could not be read, so new threads may be missing.")
+			" Thread feed unreadable this tick — new threads may be missing.")
 	}
 
 	return result
