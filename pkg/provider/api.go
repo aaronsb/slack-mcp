@@ -247,12 +247,12 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 	ap.loadChannelsFromCache()
 
 	// Fetch member channels (fast — only channels user belongs to)
-	go ap.loadMemberChannels(ctx)
+	go Guard("member-channel-load", func() { ap.loadMemberChannels(ctx) })
 
 	// Start background backfill on relaxed schedule, unless the estate
 	// proves a recent complete enumeration — the watermark survives
 	// restarts, so a bounced server stops re-walking the workspace.
-	go ap.backfillIfStale(ctx)
+	go Guard("channel-backfill-check", func() { ap.backfillIfStale(ctx) })
 
 	// Start periodic cache flush
 	if ap.store != nil {
@@ -1047,7 +1047,7 @@ func (ap *ApiProvider) RefreshChannelCache(ctx context.Context) (*RefreshResult,
 	ap.backfillDone = false
 	ap.backfillMutex.Unlock()
 
-	go ap.backgroundBackfill(ctx)
+	go Guard("channel-backfill", func() { ap.backgroundBackfill(ctx) })
 
 	return &RefreshResult{
 		Allowed:      true,
