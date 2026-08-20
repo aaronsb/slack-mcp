@@ -1,6 +1,6 @@
 # Architecture Decisions
 
-Six ADRs, and one argument running through the last four.
+Seven ADRs, and one argument running through the last five.
 
 ## What this corpus argues
 
@@ -61,7 +61,8 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 
 | ADR | Title | Status | In the code |
 |---|---|---|---|
-| [006](006-observation-ledger.md) | Observation Ledger and Folded Caches | Proposed | Not started |
+| [006](006-observation-ledger.md) | Observation Ledger and Folded Caches | Proposed, amended by 007 | Not started |
+| [007](007-estate-ledger.md) | The Estate Ledger | Proposed | Not started |
 
 ### Auth — how tokens are obtained
 
@@ -107,10 +108,8 @@ Named so they are not rediscovered:
 - **Endpoint degradation.** The product rests on undocumented internal endpoints. ADR-003 lists
   their drift as a risk and decides no policy — today a shape change produces an empty result
   rather than a loud one.
-- **Cache lifecycle beyond users.** ADR-006 sets the contract; `backgroundBackfill`'s one-shot
-  `backfillDone` is not yet reconciled to it.
-- **Token storage at rest.** ADR-002 covers extraction. Storage is undecided, and ADR-006's
-  ledger makes it more pointed — issue #15.
+- **Token storage at rest.** ADR-002 covers extraction. Storage is undecided, and ADR-007's
+  indefinitely-retained estate ledger sharpens it further than ADR-006 already had — issue #15.
 - **Multi-workspace.** Issue #14. The watermark is already keyed by workspace and ADR-005's
   rings are workspace-scoped; the key shape is a live dependency in two ADRs and decided in
   neither.

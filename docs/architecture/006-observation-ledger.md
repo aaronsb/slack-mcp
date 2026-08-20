@@ -4,6 +4,10 @@
 
 Proposed
 
+Amended by ADR-007: the retention rule, the "attention, not history" boundary, and the
+reference-snapshot role now apply to the attention class only; estate observations get
+their own file, an indefinite retention, and a sweep observer.
+
 ## Context
 
 The server holds three persisted stores under three different models, and no contract governs
