@@ -65,6 +65,7 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 | [007](007-estate-ledger.md) | The Estate Ledger | Accepted | **Implemented** — #51–#57; running against a live workspace |
 | [008](008-relationship-views.md) | Relationship Views | Accepted | Implemented — families/person/initiatives/convergence/about views, encounter observer, compiled executor (#62, #65, #66, stage 3 PR) |
 | [009](009-tool-surface-recomposition.md) | Tool Surface Recomposition | Proposed | Not started — 17 tools → 8 by the verb/noun/parameter assignment rule; ships at v2.0.0, supersedes #49 |
+| [010](010-batch-executor.md) | The Batch Executor | Proposed | Design only — one-shot read batches + saved playbooks; next session implements |
 
 ### Auth — how tokens are obtained
 
