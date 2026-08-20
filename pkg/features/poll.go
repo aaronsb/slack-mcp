@@ -121,6 +121,9 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 	limit := 50
 	if l, ok := params["limit"].(float64); ok && int(l) > 0 {
 		limit = int(l)
+		if limit > 200 {
+			limit = 200
+		}
 	}
 
 	apiProvider, ok := params["_provider"].(*provider.ApiProvider)

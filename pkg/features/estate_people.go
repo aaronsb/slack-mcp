@@ -76,7 +76,11 @@ func labelFor(labels map[string]convInfo, conv string) string {
 
 func userLabel(ap *provider.ApiProvider, id string) string {
 	if u, ok := ap.ProvideUsersMap()[id]; ok {
-		return displayName(u)
+		name := displayName(u)
+		if u.Deleted {
+			name += " (departed)"
+		}
+		return name
 	}
 	if rec, ok := ap.EstateUser(id); ok {
 		name := rec.Props.RealName
