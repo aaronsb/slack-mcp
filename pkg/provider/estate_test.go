@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/aaronsb/slack-mcp/pkg/estate"
 	"github.com/aaronsb/slack-mcp/pkg/paths"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/slacktest"
@@ -265,6 +267,164 @@ func TestAProviderWithoutALedgerStillServes(t *testing.T) {
 	}
 	if err := p.RunEstateSweep(context.Background()); err == nil {
 		t.Fatalf("sweep without a ledger should error")
+	}
+}
+
+// seedLedger writes estate history for team T1 before the provider boots,
+// standing in for what earlier sessions observed.
+func seedLedger(t *testing.T, observe func(*estate.Store)) {
+	t.Helper()
+	st, err := estate.Open("T1")
+	if err != nil {
+		t.Fatalf("seed ledger: %v", err)
+	}
+	observe(st)
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seeded ledger: %v", err)
+	}
+}
+
+var estateBase = time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+
+func TestATombstonedUserLoadsDeletedFromTheSnapshot(t *testing.T) {
+	srv := slacktest.New(t)
+
+	seedLedger(t, func(st *estate.Store) {
+		both := []slack.User{
+			{ID: "U1", Name: "bockeliea", RealName: "Aaron Bockelie"},
+			{ID: "U2", Name: "schen", RealName: "Sarah Chen"},
+		}
+		if _, err := st.ObserveUsers(both, true, estate.SourceSweep, estateBase); err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+		if _, err := st.ObserveUsers(both[:1], true, estate.SourceSweep, estateBase.Add(24*time.Hour)); err != nil {
+			t.Fatalf("tombstone: %v", err)
+		}
+	})
+
+	p := srv.Provider(t)
+	if _, err := p.Provide(); err != nil {
+		t.Fatalf("Provide: %v", err)
+	}
+	srv.Quiesce(t)
+
+	// The snapshot still contains U2 alive; the fold's tombstone wins.
+	u2, ok := p.ProvideUsersMap()["U2"]
+	if !ok {
+		t.Fatalf("tombstoned user missing from the map entirely — historical resolution needs it")
+	}
+	if !u2.Deleted {
+		t.Fatalf("tombstoned user loaded alive: %+v", u2)
+	}
+}
+
+func TestAFoldLiveUserMissingFromTheSnapshotHydrates(t *testing.T) {
+	srv := slacktest.New(t)
+
+	seedLedger(t, func(st *estate.Store) {
+		ghost := slack.User{ID: "U9", Name: "ghost", RealName: "Gil Host"}
+		if _, err := st.ObserveUsers([]slack.User{ghost}, false, estate.SourceTraffic, estateBase); err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+	})
+
+	p := srv.Provider(t)
+	if _, err := p.Provide(); err != nil {
+		t.Fatalf("Provide: %v", err)
+	}
+	srv.Quiesce(t)
+
+	u9, ok := p.ProvideUsersMap()["U9"]
+	if !ok {
+		t.Fatalf("fold-live user not hydrated from the estate")
+	}
+	if u9.Name != "ghost" || u9.RealName != "Gil Host" {
+		t.Fatalf("skeleton lost its projection: %+v", u9)
+	}
+}
+
+func TestAGoneChannelStaysOutOfTheLiveMap(t *testing.T) {
+	srv := slacktest.New(t)
+
+	seedLedger(t, func(st *estate.Store) {
+		var c1, c2 slack.Channel
+		c1.ID, c1.Name = "C1", "eng"
+		c2.ID, c2.Name = "C2", "platform"
+		if _, err := st.ObserveChannels([]slack.Channel{c1, c2}, true, estate.SourceSweep, estateBase); err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+		if _, err := st.ObserveChannels([]slack.Channel{c1}, true, estate.SourceSweep, estateBase.Add(24*time.Hour)); err != nil {
+			t.Fatalf("tombstone: %v", err)
+		}
+	})
+
+	// The live fixtures no longer list C2; the stale snapshot still does.
+	var c1 slack.Channel
+	c1.ID, c1.Name = "C1", "eng"
+	c1.IsMember = true
+	srv.SeedChannels(c1)
+	p := srv.Provider(t)
+
+	var c2 slack.Channel
+	c2.ID, c2.Name = "C2", "platform"
+	staleSnapshot, err := json.Marshal([]slack.Channel{c1, c2})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.DataDir(), "channels.json"), staleSnapshot, 0o600); err != nil {
+		t.Fatalf("write stale snapshot: %v", err)
+	}
+
+	if _, err := p.Provide(); err != nil {
+		t.Fatalf("Provide: %v", err)
+	}
+	srv.Quiesce(t)
+
+	for _, ch := range p.GetCachedChannels() {
+		if ch.ID == "C2" {
+			t.Fatalf("gone channel loaded into the live map")
+		}
+	}
+	rec, ok := p.EstateChannels()["C2"]
+	if !ok || rec.Gone == nil {
+		t.Fatalf("gone channel lost its dated absence: %+v", rec)
+	}
+	if !rec.Gone.At.Equal(estateBase.Add(24 * time.Hour)) {
+		t.Fatalf("tombstone date %v, want %v", rec.Gone.At, estateBase.Add(24*time.Hour))
+	}
+}
+
+func TestADeletedSnapshotSelfHealsFromTheEstate(t *testing.T) {
+	srv := slacktest.New(t)
+
+	seedLedger(t, func(st *estate.Store) {
+		users := []slack.User{
+			{ID: "U1", Name: "bockeliea", RealName: "Aaron Bockelie"},
+			{ID: "U2", Name: "schen", RealName: "Sarah Chen"},
+		}
+		if _, err := st.ObserveUsers(users, true, estate.SourceSweep, estateBase); err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+	})
+
+	p := srv.Provider(t)
+	if err := os.Remove(filepath.Join(paths.DataDir(), "users.json")); err != nil {
+		t.Fatalf("remove snapshot: %v", err)
+	}
+
+	if _, err := p.Provide(); err != nil {
+		t.Fatalf("Provide: %v", err)
+	}
+	srv.Quiesce(t)
+
+	users := p.ProvideUsersMap()
+	if len(users) != 2 {
+		t.Fatalf("hydrated %d users, want 2", len(users))
+	}
+	// Hydration fills the boot gate, so the lost snapshot triggers no
+	// synchronous directory fetch — the sweep owns freshness now.
+	if got := srv.Calls("users.list"); got != 0 {
+		t.Fatalf("users.list called %d times at boot, want 0", got)
 	}
 }
 
