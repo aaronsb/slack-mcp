@@ -143,6 +143,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					log.Printf("Failed to get DM history for %s: %v", im.ID, err)
 					continue
 				}
+				observeTraffic(apiProvider, im.ID, resp.Messages)
 
 				if len(resp.Messages) > 0 {
 					authorName := getUserName(info.User, usersMap)
@@ -226,6 +227,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					log.Printf("Failed to get MPIM history for %s: %v", mpim.ID, err)
 					continue
 				}
+				observeTraffic(apiProvider, mpim.ID, resp.Messages)
 
 				mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 				for _, msg := range resp.Messages {
@@ -283,6 +285,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					log.Printf("Failed to get channel history for %s: %v", ch.ID, err)
 					continue
 				}
+				observeTraffic(apiProvider, ch.ID, resp.Messages)
 
 				mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 				foundMentions := 0
@@ -359,6 +362,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				}
 				resp, err := api.GetConversationHistoryContext(ctx, histParams)
 				if err == nil && len(resp.Messages) > 0 {
+					observeTraffic(apiProvider, ch.ID, resp.Messages)
 					lastMsg := resp.Messages[0]
 					authorName := getUserName(lastMsg.User, usersMap)
 					channelData["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(render(lastMsg.Text), 100))

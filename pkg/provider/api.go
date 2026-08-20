@@ -57,7 +57,10 @@ type ApiProvider struct {
 	// every call site degrades on nil. estateMu guards the pointer itself:
 	// the background boot goroutine assigns it while handler goroutines
 	// read it through est().
-	estate              *estate.Store
+	estate *estate.Store
+	// attention is the operator-scoped encounter ledger (ADR-008 stage 2),
+	// under the same pointer guard.
+	attention           *estate.AttentionStore
 	estateMu            sync.RWMutex
 	estateSweepInterval time.Duration
 	estateSweepStop     chan struct{}
@@ -228,6 +231,7 @@ func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
 	// Open the estate ledger before any fetch path runs, so every complete
 	// enumeration below is observed. captureIdentity has already run.
 	ap.openEstate()
+	ap.openAttention()
 
 	// Load users from cache
 	snapshotUsers := ap.loadUsersFromCache()

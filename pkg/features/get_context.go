@@ -144,6 +144,8 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		}
 	}
 
+	observeTraffic(apiProvider, channelID, messages)
+
 	// Format messages (reverse to oldest-first)
 	formatted := make([]map[string]interface{}, 0, len(messages))
 	for i := len(messages) - 1; i >= 0; i-- {

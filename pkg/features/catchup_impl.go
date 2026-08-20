@@ -113,6 +113,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 				Message: fmt.Sprintf("Failed to fetch channel history: %v", err),
 			}, nil
 		}
+		observeTraffic(provider, channelID, resp.Messages)
 
 		// Process messages
 		for _, msg := range resp.Messages {

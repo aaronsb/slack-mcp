@@ -137,6 +137,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 		if err != nil {
 			continue
 		}
+		observeTraffic(provider, channel.ID, resp.Messages)
 
 		// Process DMs
 		if isDM && (focus == "all" || focus == "dms") {

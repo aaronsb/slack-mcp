@@ -76,6 +76,7 @@ type estateFamiliesData struct {
 	GoneIncluded  int
 	FoldOwned     int
 	Coverage      provider.EstateCoverageInfo
+	Attention     provider.AttentionInfo
 	CreatorNames  map[string]string
 	Search        string
 	PersonLabel   string
@@ -118,6 +119,7 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 
 	data := &estateFamiliesData{Search: search, CreatorNames: map[string]string{}}
 	data.Coverage = apiProvider.EstateCoverage()
+	data.Attention = apiProvider.AttentionInfo()
 
 	var personID string
 	if person != "" {
@@ -402,6 +404,15 @@ func formatEstate(result *FeatureResult) string {
 		cov += ". Ownership read from the live snapshot; the estate records it from the next sweep on"
 	}
 	b.WriteString(cov + ".\n")
+	att := view.Attention
+	if !att.Available {
+		b.WriteString("Activity plane: no attention ledger — creation facts only, activity views pending.\n")
+	} else if att.Stats.Events == 0 {
+		b.WriteString("Activity plane: observing — no encounters recorded yet.\n")
+	} else {
+		fmt.Fprintf(&b, "Activity plane: %d encounters, %d people, %d conversations (%s \u2192 %s), as observed by this agent's reading.\n",
+			att.Stats.Events, att.Stats.Users, att.Stats.Convs, att.Stats.FirstDay, att.Stats.LastDay)
+	}
 	b.WriteString("**Next:** read a family's channel: catch-up channel='#<name>' | narrow: estate view='families' search='<stem>' | person-anchored: estate view='families' person='@<handle>'")
 
 	return b.String()
