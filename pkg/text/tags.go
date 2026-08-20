@@ -82,13 +82,32 @@ func ResolveTagsReport(s string, resolve func(kind TagKind, id, label string) (s
 	return s, unresolved
 }
 
-// flattenLink renders Slack's <url|label> form. A label with a space is
-// prose and keeps the url beside it; a label without one is the url
-// itself, usually elided, and the full url outranks it.
+// flattenLink renders Slack's <url|label> form. A label that is just the
+// url again — verbatim or elided — loses to the full url; any other label
+// is the author's words and keeps the url beside it.
 func flattenLink(url, label string) string {
 	bare := strings.TrimPrefix(strings.TrimPrefix(url, "mailto:"), "tel:")
-	if strings.Contains(strings.TrimSpace(label), " ") {
-		return label + " (" + bare + ")"
+	if label == "" || labelElidesURL(label, bare) {
+		return bare
 	}
-	return bare
+	return label + " (" + bare + ")"
+}
+
+// labelElidesURL reports whether the label is the url in elided form:
+// every fragment between ellipsis markers appears in the url, in order.
+func labelElidesURL(label, url string) bool {
+	l := strings.NewReplacer("[…]", "…", "...", "…").Replace(strings.TrimSpace(label))
+	rest := url
+	for _, frag := range strings.Split(l, "…") {
+		frag = strings.TrimSpace(frag)
+		if frag == "" {
+			continue
+		}
+		i := strings.Index(rest, frag)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(frag):]
+	}
+	return true
 }

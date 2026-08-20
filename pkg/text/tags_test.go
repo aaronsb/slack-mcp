@@ -60,6 +60,8 @@ func TestLinkTagsFlatten(t *testing.T) {
 		{"see <https://example.com/doc|example.com/doc>", "see https://example.com/doc"},
 		{"see <https://example.com/a/b/c|example.com/…/c>", "see https://example.com/a/b/c"},
 		{"read <https://example.com/x|[Announcement] The new thing>", "read [Announcement] The new thing (https://example.com/x)"},
+		{"see <https://sho.rt/x|roadmap>", "see roadmap (https://sho.rt/x)"},
+		{"see <https://www.example.com/page|example.com/page>", "see https://www.example.com/page"},
 		{"mail <mailto:a@b.com|a@b.com>", "mail a@b.com"},
 		{"mail <mailto:a@b.com>", "mail a@b.com"},
 		{"call <tel:+15551234567>", "call +15551234567"},
