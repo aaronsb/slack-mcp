@@ -87,10 +87,13 @@ func readHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.Client, ref handle.Ref, limit int) (*FeatureResult, error) {
 	usersMap := apiProvider.ProvideUsersMap()
 	where, named := conversationLabel(apiProvider, ref.Channel)
+	// One renderer for whichever branch runs: a new branch that forgot to
+	// construct one would compile fine and leak raw tags.
+	render := newBodyRenderer(apiProvider)
 
 	switch ref.Kind {
 	case handle.KindThread:
-		return readThread(ctx, api, ref.Channel, ref.TS, where, named, usersMap, newBodyRenderer(apiProvider), limit)
+		return readThread(ctx, api, ref.Channel, ref.TS, where, named, usersMap, render, limit)
 
 	case handle.KindMessage:
 		// A message that turns out to have replies is more usefully read as its
@@ -101,10 +104,10 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 			Limit:     limit,
 		})
 		if err == nil && len(replies) > 1 {
-			return readThread(ctx, api, ref.Channel, ref.TS, where, named, usersMap, newBodyRenderer(apiProvider), limit)
+			return readThread(ctx, api, ref.Channel, ref.TS, where, named, usersMap, render, limit)
 		}
 		if err == nil && len(replies) == 1 {
-			return messagesResult(where, "message", ref.Channel, replies, usersMap, newBodyRenderer(apiProvider), named, false)
+			return messagesResult(where, "message", ref.Channel, replies, usersMap, render, named, false)
 		}
 		if err == nil {
 			// Slack answered and had nothing. Saying "error: <nil>" here
@@ -133,7 +136,7 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 		}
 		msgs := resp.Messages
 		reverse(msgs)
-		return messagesResult(where, "conversation", ref.Channel, msgs, usersMap, newBodyRenderer(apiProvider), named, resp.HasMore)
+		return messagesResult(where, "conversation", ref.Channel, msgs, usersMap, render, named, resp.HasMore)
 	}
 
 	return &FeatureResult{Success: false, Message: "Unrecognised handle."}, nil

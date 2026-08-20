@@ -32,6 +32,16 @@ func TestAnUnresolvableTagKeepsItsRawForm(t *testing.T) {
 	}
 }
 
+func TestLabelledBroadcastTagsRewrite(t *testing.T) {
+	// Real payloads carry the labelled form.
+	in := "<!here|@here> deploy starting, <!channel|@channel> heads up"
+	got := text.ResolveTags(in, resolver)
+	want := "@here deploy starting, @channel heads up"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestPlainTextPassesUntouched(t *testing.T) {
 	in := "no tags here, just words"
 	if got := text.ResolveTags(in, resolver); got != in {

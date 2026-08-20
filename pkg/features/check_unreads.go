@@ -273,10 +273,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 
 func getUserName(userID string, usersMap map[string]slack.User) string {
 	if user, ok := usersMap[userID]; ok {
-		if user.RealName != "" {
-			return user.RealName
-		}
-		return user.Name
+		return displayNameFor(user)
 	}
 	return "Unknown User"
 }

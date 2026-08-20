@@ -14,7 +14,7 @@ import (
 var (
 	userTag    = regexp.MustCompile(`<@([UW][A-Z0-9]+)(?:\|([^>]*))?>`)
 	channelTag = regexp.MustCompile(`<#([CDG][A-Z0-9]+)(?:\|([^>]*))?>`)
-	bangTag    = regexp.MustCompile(`<!(here|channel|everyone)>`)
+	bangTag    = regexp.MustCompile(`<!(here|channel|everyone)(?:\|@?[^>]*)?>`)
 	groupTag   = regexp.MustCompile(`<!subteam\^([A-Z0-9]+)(?:\|@?([^>]*))?>`)
 )
 

@@ -507,10 +507,7 @@ func groupName(raw string, byName map[string]string) string {
 }
 
 func displayName(u slack.User) string {
-	if u.RealName != "" {
-		return u.RealName
-	}
-	return u.Name
+	return displayNameFor(u)
 }
 
 // flattenCounts merges the three conversation kinds client.counts reports
