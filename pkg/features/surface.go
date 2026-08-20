@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aaronsb/slack-mcp/pkg/handle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 )
 
@@ -152,7 +153,7 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 		echo := echoLine("messages", "query='"+query+"'", params, "cursor", "timeframe")
 		return delegate(ctx, FindDiscussion, params, echo)
 	case target != "" && around != "":
-		params["channel"] = target
+		params["channel"] = conversationOf(target)
 		params["messageTs"] = around
 		if l, ok := params["limit"].(float64); ok {
 			params["count"] = l
@@ -160,7 +161,7 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 		echo := echoLine("messages", "target='"+target+"' around="+around, params, "limit")
 		return delegate(ctx, GetContext, params, echo)
 	case target != "" && since != "":
-		channel := target
+		channel := conversationOf(target)
 		if strings.HasPrefix(target, "@") {
 			// catch-up's resolver speaks channels; people resolve here,
 			// through the ladder, to their DM conversation.
@@ -199,6 +200,16 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 			Message: "messages needs an address: target='<handle|#channel|@person>' (optionally with around=<ts> or since=<window>), or query='<slack search>'",
 		}, nil
 	}
+}
+
+// conversationOf accepts an inbox event handle where a channel is
+// expected: any target that decodes yields its conversation, everything
+// else passes through untouched.
+func conversationOf(target string) string {
+	if ref, err := handle.Decode(target); err == nil && ref.Channel != "" {
+		return ref.Channel
+	}
+	return target
 }
 
 // dmChannelFor finds the cached IM conversation with a user.
