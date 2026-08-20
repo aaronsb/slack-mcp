@@ -173,7 +173,7 @@ func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 	stop := make(chan struct{})
 	ap.estateSweepStop = stop
 
-	go func() {
+	go Guard("estate-sweep-scheduler", func() {
 		select {
 		case <-time.After(estateSweepBootDelay):
 		case <-stop:
@@ -197,7 +197,7 @@ func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // waitForBackfill blocks until the boot channel backfill has completed, the

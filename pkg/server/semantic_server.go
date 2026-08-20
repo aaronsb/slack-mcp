@@ -58,6 +58,7 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	registry.Register(features.ListUsers)
 	registry.Register(features.AuthSetup)
 	registry.Register(features.DownloadFile)
+	registry.Register(features.EstateViews)
 
 	semanticServer := &SemanticMCPServer{
 		server:   s,
@@ -114,14 +115,14 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 		params["_setProvider"] = func(p *provider.ApiProvider) {
 			s.provider.Store(p)
 			log.Println("Provider hot-loaded after successful auth setup")
-			go func() {
+			go provider.Guard("post-auth-boot", func() {
 				log.Println("Booting provider in background after auth...")
 				if _, err := p.Provide(); err != nil {
 					log.Printf("Warning: post-auth provider boot failed: %v", err)
 				} else {
 					log.Println("Provider booted successfully after auth")
 				}
-			}()
+			})
 		}
 
 		// Add provider to params for features that need it

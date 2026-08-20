@@ -42,6 +42,12 @@ type ChannelProps struct {
 	IsMpim     bool   `json:"isMpim"`
 	User       string `json:"user,omitempty"`
 	Purpose    string `json:"purpose"`
+	// Creator and Created are ADR-008's ownership fields, additive to
+	// estate.channel/v1. On records folded from events that predate them
+	// they read as zero values — unobserved then — and the next
+	// enumeration observes them as an honest first sight.
+	Creator string `json:"creator,omitempty"`
+	Created int64  `json:"created,omitempty"`
 }
 
 // ProjectUser extracts the estate-relevant fields from a slack-go user.
@@ -70,6 +76,8 @@ func ProjectChannel(c slack.Channel) ChannelProps {
 		IsMpim:     c.IsMpIM,
 		User:       c.User,
 		Purpose:    c.Purpose.Value,
+		Creator:    c.Creator,
+		Created:    int64(c.Created),
 	}
 }
 
@@ -129,6 +137,12 @@ func diffChannel(a, b ChannelProps) []string {
 	}
 	if a.Purpose != b.Purpose {
 		out = append(out, "purpose")
+	}
+	if a.Creator != b.Creator {
+		out = append(out, "creator")
+	}
+	if a.Created != b.Created {
+		out = append(out, "created")
 	}
 	return out
 }

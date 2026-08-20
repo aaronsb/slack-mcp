@@ -36,7 +36,7 @@ var ListUsers = &Feature{
 }
 
 func listUsersHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
-	query := params["query"].(string)
+	query, _ := params["query"].(string)
 	query = strings.TrimSpace(query)
 	if len(query) < 2 {
 		return &FeatureResult{

@@ -40,6 +40,8 @@ func FormatResult(toolName string, result *FeatureResult) string {
 		return formatAuthSetup(result)
 	case "download-file":
 		return formatDownloadFile(result)
+	case "estate":
+		return formatEstate(result)
 	default:
 		return formatGeneric(result)
 	}
