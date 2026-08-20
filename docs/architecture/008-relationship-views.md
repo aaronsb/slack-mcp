@@ -174,6 +174,7 @@ A new `estate` tool with a `view` parameter:
 
 | View | Question it answers whole | Joins |
 |---|---|---|
+| `about` | "tell me about X" for any seed — person, channel, family, or topic; the entry-point view that composes the others | seed resolution ⋈ one-hop ego network ⋈ frontier communities |
 | `families` | "what happened with this engagement" — phase sequence, drivers, span; works day one, estate only | stem ⋈ lifecycle ⋈ creator |
 | `initiatives` | "what moved this week" and its inverse, the stalled channel whose creator went quiet | creator ⋈ ACTIVE_IN ⋈ strip overlap |
 | `person` | one footprint — strips, created channels, and ranked counterparts ("top talkers", from DM-encounter density plus channel co-occurrence); for the departed, the knowledge-risk query only remember-then-tombstone affords | created ⋈ ACTIVE_IN ⋈ DM_WITH ⋈ COUNTERPART ⋈ estate record |
@@ -195,6 +196,44 @@ the read surface is where the corpus is generous ("reads: unbounded and
 complete") and relationship questions fit no existing listing. The surface
 ADR-003 decided grows by exactly one read.
 
+### `about`: breadth on the server, depth in the agent, judgment with the human
+
+The flagship view is ego-network extraction with community detection over
+the frontier. Given a seed, `about` resolves it through the ladder
+(candidates with evidence on a miss, as everywhere), expands **one hop**
+from the folds — channels created, families touched, strips, counterparts,
+member overlaps, each edge weighted by co-active days, volume, and recency,
+each carrying provenance — and clusters the frontier into communities:
+groups of neighbors dense with *each other*, not just with the seed (the
+convergence motif's n-way generalization).
+
+The payload is a **ranked reading plan**, not raw edges: drill-down handles
+in rank order, each with the evidence that ranked it and the question it
+should answer. Depth stays with the agent, because synthesis needs message
+content in the agent's context window and the read tools already exist —
+the server owns breadth (the join math agents fumble), the agent owns depth
+(thread-grouped, time-ordered reads of the top-ranked handles), and the
+human owns judgment.
+
+The default hop is fold-first under the two-executors rule: the seed's
+own compiled queries run when the question exceeds the fold's coverage —
+which, until the attention ledger exists, is always true of the activity
+dimension, so the day-one shape is one search call for the seed (the
+second evidence run's shape). A **second hop** (expanding through
+top-ranked frontier nodes, bounded compiled calls) runs only on an explicit
+`deeper` parameter; it is where API cost and noise both live, so the agent
+opts in rather than pays by default. The one-hop response ends with the
+exact deeper invocation to copy — the `Next:` guidance pattern the tool
+surface already speaks — so discovering the second hop costs the agent
+nothing.
+
+Causation gets a seat belt beyond the observations-not-judgments rule:
+views report **temporal precedence** as data — onset dates, creation dates,
+which strip densified first — because precedence is the one causal
+ingredient the folds can assert. Whether the antecedent caused the
+consequent is the human's call, argued over the timestamps the plan
+surfaces.
+
 ### Deferred, named
 
 - Membership rosters (`conversations.members`) — the "who shares this
@@ -208,6 +247,58 @@ ADR-003 decided grows by exactly one read.
   view on request and rendering it into an embedded page — the interaction
   graph renders locally or not at all. Deferred until the views prove they
   query useful things.
+
+## Evidence
+
+A throwaway probe (`cmd/estate-experiment`, prototype-before-accept) ran
+the load-bearing claims against the live workspace on 2026-08-20:
+
+- **Ownership is one projection change away — confirmed.** Of the
+  snapshot's 3,048 conversation entries, 2,859 are named channels (IMs and
+  group DMs excluded), and every one of the 2,859 carries both `creator`
+  and `created`; no extra API cost. (The probe reports the creator count;
+  the `created` count is a direct scan of the same snapshot.)
+- **The families motif works from local data alone — confirmed.** Stem
+  grouping over the 2,859 named channels yielded 344 engagement families
+  at zero API calls. The largest reads as a coherent account history: one
+  customer account's 60 channels spanning 2018–2026, phase-tagged, with
+  the delivery handoff pattern visible in creator succession.
+- **The compiled executor is cheap and sufficient — confirmed.** Seven
+  `search from:` calls (10.6s, pacing included) reconstructed three
+  people's 14-day activity; the convergence motif surfaced their real
+  cluster (one channel co-active five of fourteen days, plus a second
+  shared channel and their group DMs), with truncation reported honestly
+  (one person's volume exceeded the page cap by 47).
+- **Person-view rankings and hour-cadence parallelism fall out of the
+  same data at zero extra calls.** Top counterpart 104 messages in
+  fourteen days; parallelism distribution 1 conversation for 25 active
+  hours, 2 for 18, 3 for 7, and 5 for one hour — the peak.
+- **Finding for implementation:** search results name IM conversations by
+  raw counterpart user ID — the view layer must resolve them through the
+  `COUNTERPART` join before results leave the server, confirming that the
+  fold join is mandatory, not decorative.
+
+A second run on 2026-08-20 took a cold seed the operator picked — a
+person plus a topic — and exercised the `about` shape end to end. The
+committed probe covers only part of this run: the compiled footprint
+ranking is the probe's part C; the creator join and the depth reads were
+composed by hand from direct snapshot scans and the server's existing read
+tools, which is the composition the view will automate.
+
+- **The creator join found a family stems cannot bind.** The seed
+  person's two topic channels live under different stems, so stem grouping
+  alone misses the family; creator ⋈ name-topic found it at zero API
+  calls. This is why `about` is person-anchored, not stem-anchored.
+- **One compiled search call (1.6s) ranked the seed's thirty-day
+  footprint**, and the top two surfaces told the story: a six-person group
+  DM and a days-old channel whose joiners are the DM's member set (read
+  from the channel's join messages — the rosters API stays deferred) — the
+  incubator-then-formalization sequence, visible as precedence (the DM
+  dense first, the channel created days later), reported as ordering and
+  left to the human as causation.
+- **The depth phase landed on an open request addressed to the operator**,
+  confirming the reading-plan design: breadth ranked the right handle
+  first, one read answered the question.
 
 ## Consequences
 
