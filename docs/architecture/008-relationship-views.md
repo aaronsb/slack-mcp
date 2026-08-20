@@ -201,7 +201,13 @@ ADR-003 decided grows by exactly one read.
   channel" edge; a per-channel API cost with no observer yet.
 - Mention edges (person tags inside bodies as directed edges) — the render
   path sees them; whether they are worth an event class is open.
-- Any graph export or visualization surface.
+- A visualization surface. The precedent exists in this binary:
+  `pkg/setup` embeds a web UI (`go:embed`), serves it on localhost only,
+  and launches the browser cross-platform. Because views are deterministic
+  functions of the folds, a graph report is that same surface executing a
+  view on request and rendering it into an embedded page — the interaction
+  graph renders locally or not at all. Deferred until the views prove they
+  query useful things.
 
 ## Consequences
 
