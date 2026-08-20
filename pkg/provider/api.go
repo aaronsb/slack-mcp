@@ -1161,3 +1161,15 @@ func withTeamEndpointOption(url string) slack.Option {
 		slack.OptionAPIURL(url + "api/")(c)
 	}
 }
+
+// ResolveChannelNameCached returns a channel's name from the cache alone.
+// Render paths resolve every tag from held state — a network call per
+// mention is not affordable there.
+func (ap *ApiProvider) ResolveChannelNameCached(id string) string {
+	ap.channelsMutex.RLock()
+	defer ap.channelsMutex.RUnlock()
+	if ch, ok := ap.channels[id]; ok {
+		return ch.Name
+	}
+	return ""
+}

@@ -90,7 +90,7 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 
 	switch ref.Kind {
 	case handle.KindThread:
-		return readThread(ctx, api, ref.Channel, ref.TS, where, named, usersMap, limit)
+		return readThread(ctx, api, ref.Channel, ref.TS, where, named, usersMap, newBodyRenderer(apiProvider), limit)
 
 	case handle.KindMessage:
 		// A message that turns out to have replies is more usefully read as its
@@ -101,10 +101,10 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 			Limit:     limit,
 		})
 		if err == nil && len(replies) > 1 {
-			return readThread(ctx, api, ref.Channel, ref.TS, where, named, usersMap, limit)
+			return readThread(ctx, api, ref.Channel, ref.TS, where, named, usersMap, newBodyRenderer(apiProvider), limit)
 		}
 		if err == nil && len(replies) == 1 {
-			return messagesResult(where, "message", ref.Channel, replies, usersMap, named, false)
+			return messagesResult(where, "message", ref.Channel, replies, usersMap, newBodyRenderer(apiProvider), named, false)
 		}
 		if err == nil {
 			// Slack answered and had nothing. Saying "error: <nil>" here
@@ -133,13 +133,13 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 		}
 		msgs := resp.Messages
 		reverse(msgs)
-		return messagesResult(where, "conversation", ref.Channel, msgs, usersMap, named, resp.HasMore)
+		return messagesResult(where, "conversation", ref.Channel, msgs, usersMap, newBodyRenderer(apiProvider), named, resp.HasMore)
 	}
 
 	return &FeatureResult{Success: false, Message: "Unrecognised handle."}, nil
 }
 
-func readThread(ctx context.Context, api *slack.Client, channel, threadTS, where string, named bool, usersMap map[string]slack.User, limit int) (*FeatureResult, error) {
+func readThread(ctx context.Context, api *slack.Client, channel, threadTS, where string, named bool, usersMap map[string]slack.User, render func(string) string, limit int) (*FeatureResult, error) {
 	msgs, _, _, err := api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channel,
 		Timestamp: threadTS,
@@ -151,17 +151,17 @@ func readThread(ctx context.Context, api *slack.Client, channel, threadTS, where
 			Message: fmt.Sprintf("Could not read that thread in %s: %v", where, err),
 		}, nil
 	}
-	return messagesResult(where, "thread", channel, msgs, usersMap, named, false)
+	return messagesResult(where, "thread", channel, msgs, usersMap, render, named, false)
 }
 
-func messagesResult(where, kind, channel string, msgs []slack.Message, usersMap map[string]slack.User, named, more bool) (*FeatureResult, error) {
+func messagesResult(where, kind, channel string, msgs []slack.Message, usersMap map[string]slack.User, render func(string) string, named, more bool) (*FeatureResult, error) {
 	out := make([]map[string]interface{}, 0, len(msgs))
 	for _, m := range msgs {
 		entry := map[string]interface{}{
 			"handle": handle.Message(channel, m.Timestamp),
 			"who":    getUserName(m.User, usersMap),
 			"when":   formatTimestamp(parseSlackTimestamp(m.Timestamp)),
-			"text":   m.Text,
+			"text":   render(m.Text),
 		}
 		if len(m.Files) > 0 {
 			files := make([]map[string]interface{}, 0, len(m.Files))

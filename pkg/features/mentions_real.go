@@ -91,6 +91,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 	totalScanned := 0
 
 	usersMap := provider.ProvideUsersMap()
+	render := newBodyRenderer(provider)
 	mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 
 	// Limit channels to scan based on activity
@@ -175,7 +176,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 				"type":      msgType,
 				"channel":   channelName,
 				"author":    authorName,
-				"message":   msg.Text,
+				"message":   render(msg.Text),
 				"timestamp": formatTimestamp(msgTime),
 				"threadId":  fmt.Sprintf("%s:%s", channel.ID, msg.Timestamp),
 				"responded": responded,

@@ -80,6 +80,7 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 	}
 
 	usersMap := apiProvider.ProvideUsersMap()
+	render := newBodyRenderer(apiProvider)
 	var messages []slack.Message
 	isThread := false
 
@@ -159,7 +160,7 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		entry := map[string]interface{}{
 			"ts":   msg.Timestamp,
 			"user": userName,
-			"text": msg.Text,
+			"text": render(msg.Text),
 			"time": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 		}
 

@@ -93,6 +93,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	}
 
 	usersMap := p.ProvideUsersMap()
+	render := newBodyRenderer(p)
 	results := make([]map[string]interface{}, 0, len(messages.Matches))
 
 	for _, match := range messages.Matches {
@@ -108,7 +109,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 			"where":     searchLabel(p, match.Channel.ID),
 			"who":       who,
 			"when":      formatTimestamp(parseSlackTimestamp(match.Timestamp)),
-			"text":      match.Text,
+			"text":      render(match.Text),
 			"permalink": match.Permalink,
 		}
 

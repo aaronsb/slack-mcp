@@ -86,6 +86,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	}
 
 	usersMap := provider.ProvideUsersMap()
+	render := newBodyRenderer(provider)
 	currentCursor := cursor
 	hasMore := true
 	pageCount := 0
@@ -118,7 +119,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 			allMessages = append(allMessages, msg)
 
 			// Analyze each message
-			item := analyzeMessage(msg, usersMap)
+			item := analyzeMessage(msg, usersMap, render)
 			if item != nil {
 				importantItems = append(importantItems, item)
 			}
@@ -301,7 +302,7 @@ func isRecentTimeframe(timeframe string) bool {
 	return false
 }
 
-func analyzeMessage(msg slack.Message, usersMap map[string]slack.User) map[string]interface{} {
+func analyzeMessage(msg slack.Message, usersMap map[string]slack.User, render func(string) string) map[string]interface{} {
 	// Skip if not important
 	if !isImportantMessage(msg) {
 		return nil
@@ -319,7 +320,7 @@ func analyzeMessage(msg slack.Message, usersMap map[string]slack.User) map[strin
 	// Build item
 	item := map[string]interface{}{
 		"author":    userName,
-		"message":   msg.Text,
+		"message":   render(msg.Text),
 		"timestamp": msg.Timestamp,
 		"type":      "message",
 	}
