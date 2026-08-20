@@ -30,13 +30,14 @@ make npm-publish NPM_TOKEN=... # Publish to npm
 | `inbox` | noun | What needs you: `view='new'` (since your last dismiss), `'unreads'`, `'mentions'` |
 | `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` full Slack search syntax |
 | `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'` |
+| `batch` | executor | Run a held plan of reads in one call: `commands=[{tool, params}...]`; playbooks via `save=`/`run=`/`list=`/`delete=` |
 | `say` | verb | Contribute content (Slack-visible): a message, or an emoji reaction |
 | `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
 | `mark-read` | verb | Fire read receipts — the one visibly-public read signal |
 | `auth` | verb | Interactive token setup (localhost only) |
 | `download` | verb | Download a shared file |
 
-Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009). Every noun echoes its effective parameters and pages every capped list.
+Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the batch executor encodes composition, never effect, and admits only the read nouns (ADR-010). Every noun echoes its effective parameters and pages every capped list.
 
 ## Environment
 
