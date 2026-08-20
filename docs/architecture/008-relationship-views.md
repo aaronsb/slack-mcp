@@ -2,7 +2,10 @@
 
 ## Status
 
-Proposed
+Accepted — implemented across PRs #65 (families view, ownership
+projection), #66 (encounter observer), and the stage 3 views PR. The
+evidence probe (`cmd/estate-experiment`) is deleted; its numbers live in
+the Evidence section below.
 
 Depends on ADR-007's estate; implements ADR-005's encounter class; resolves
 ADR-007's deferred "any estate query tool".
@@ -167,6 +170,12 @@ runs when the question exceeds the fold's coverage (a window past ninety
 days, or an ask where as-observed is not good enough), and the coverage
 block names which executor answered, so a ranking says whether the agent's
 reading habit or Slack's index is speaking.
+
+Implementation refinement: the compiled executor does not answer directly —
+it records each search match as an encounter in the attention ledger (author,
+conversation, timestamp; no text), and the joins then run in the fold
+exactly as for render-path observations. One join path, and compiled
+observations persist for later questions instead of being spent on one.
 
 ### One read-only tool, named views
 
