@@ -44,12 +44,12 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 	}
 
 	switch toolName {
-	case "check-unreads":
+	case "inbox view='unreads'":
 		// Analyze unread data
 		if data, ok := result.Data.(map[string]interface{}); ok {
 			if mentions, ok := data["stats"].(map[string]interface{}); ok {
 				if totalMentions, _ := mentions["totalMentions"].(int); totalMentions > 0 {
-					suggest("check-mentions")
+					suggest("inbox view='mentions'")
 				}
 			}
 
@@ -57,7 +57,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 			if unreads, ok := data["unreads"].(map[string]interface{}); ok {
 				if dms, ok := unreads["dms"].([]map[string]interface{}); ok && len(dms) > 0 {
 					if dm := dms[0]; dm["channel"] != nil {
-						suggest(fmt.Sprintf("catch-up channel='%s'", dm["channel"]))
+						suggest(fmt.Sprintf("messages target='%s'", dm["channel"]))
 					}
 				}
 			}
@@ -65,7 +65,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 			// If many unreads, suggest bulk clearing
 			if stats, ok := data["stats"].(map[string]interface{}); ok {
 				if total, _ := stats["totalChannels"].(int); total > 10 {
-					suggest("mark-read target='all-channels' filter='no-mentions'")
+					suggest("mark-messages target='all-channels' filter='no-mentions'")
 				}
 			}
 		}
@@ -77,7 +77,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 			if items, ok := data["importantItems"].([]map[string]interface{}); ok {
 				for _, item := range items {
 					if item["type"] == "thread" || item["type"] == "decision" {
-						suggest("search query='[topic from thread]'")
+						suggest("messages query='[topic from thread]'")
 						break
 					}
 				}
@@ -88,7 +88,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 				if hasMore, _ := pagination["hasMore"].(bool); hasMore {
 					if cursor, ok := pagination["nextCursor"].(string); ok && cursor != "" {
 						channel := data["channel"].(string)
-						suggest(fmt.Sprintf("catch-up channel='%s' cursor='%s'", channel, cursor))
+						suggest(fmt.Sprintf("messages target='%s' cursor='%s'", channel, cursor))
 					}
 				}
 			}
@@ -100,7 +100,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 		}
 
 		// General suggestions
-		suggest("check-mentions")
+		suggest("inbox view='mentions'")
 
 	case "search":
 		if data, ok := result.Data.(map[string]interface{}); ok {
@@ -122,7 +122,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 				for _, disc := range discussions {
 					if channel, ok := disc["channel"].(string); ok && !seen[channel] {
 						seen[channel] = true
-						suggest(fmt.Sprintf("catch-up channel='%s'", channel))
+						suggest(fmt.Sprintf("messages target='%s'", channel))
 						if len(seen) >= 2 { // Limit channel suggestions
 							break
 						}
@@ -130,18 +130,18 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 				}
 			} else {
 				// No results - suggest alternatives
-				suggest("list-channels search='[related-term]'")
-				suggest("check-unreads")
+				suggest("estate view='channels' search='[related-term]'")
+				suggest("inbox view='unreads'")
 			}
 		}
 
-	case "check-mentions":
+	case "inbox view='mentions'":
 		// Based on urgency and context
 		if data, ok := result.Data.(map[string]interface{}); ok {
 			if mentions, ok := data["mentions"].([]map[string]interface{}); ok && len(mentions) > 0 {
 				// Most urgent first
 				if mention := mentions[0]; mention["channel"] != nil {
-					suggest(fmt.Sprintf("catch-up channel='%s'", mention["channel"]))
+					suggest(fmt.Sprintf("messages target='%s'", mention["channel"]))
 				}
 
 				// If it's a thread
@@ -152,23 +152,23 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 		}
 
 		// After reviewing mentions
-		suggest("mark-read target='all-channels' filter='no-mentions'")
+		suggest("mark-messages target='all-channels' filter='no-mentions'")
 
 	case "mark-read":
 		// After marking, check what's left
-		suggest("check-unreads")
+		suggest("inbox view='unreads'")
 
 		// If selectively marked, check mentions
 		if _, ok := result.Data.(map[string]interface{}); ok {
 			if filter, ok := context["filter"].(string); ok && filter == "no-mentions" {
-				suggest("check-mentions")
+				suggest("inbox view='mentions'")
 			}
 		}
 
 		// Continue with important channels
-		suggest("catch-up channel='general'")
+		suggest("messages target='general'")
 
-	case "list-channels":
+	case "estate view='channels'":
 		// Based on search results
 		if data, ok := result.Data.(map[string]interface{}); ok {
 			if channels, ok := data["channels"].([]map[string]interface{}); ok && len(channels) > 0 {
@@ -178,7 +178,7 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 						break
 					}
 					if name, ok := ch["name"].(string); ok {
-						suggest(fmt.Sprintf("catch-up channel='%s'", name))
+						suggest(fmt.Sprintf("messages target='%s'", name))
 					}
 				}
 			}
@@ -187,16 +187,16 @@ func (wm *WorkflowManager) GetNextActions(toolName string, result *FeatureResult
 			if summary, ok := data["summary"].(map[string]interface{}); ok {
 				if _, ok := summary["cacheAge"].(string); ok {
 					// Parse age and suggest refresh if > 1 hour
-					suggest("list-channels forceRefresh=true")
+					suggest("estate view='channels' forceRefresh=true")
 				}
 			}
 		}
 
-		suggest("check-unreads")
+		suggest("inbox view='unreads'")
 		// Search as a secondary option
 		if data, ok := result.Data.(map[string]interface{}); ok {
 			if channels, ok := data["channels"].([]map[string]interface{}); ok && len(channels) > 10 {
-				suggest("Can't find a channel? search query='[topic]' to search across all")
+				suggest("Can't find a channel? messages query='[topic]' to search across all")
 			}
 		}
 	}
@@ -214,25 +214,25 @@ func (wm *WorkflowManager) GetWorkflowSteps(workflow string) []string {
 	switch workflow {
 	case "morning-review":
 		return []string{
-			"check-unreads",
-			"check-mentions",
-			"catch-up channel='general'",
-			"mark-read target='everything' filter='no-mentions'",
+			"inbox view='unreads'",
+			"inbox view='mentions'",
+			"messages target='general'",
+			"mark-messages target='everything' filter='no-mentions'",
 		}
 
 	case "research-topic":
 		return []string{
-			"search query='[topic]'",
-			"list-channels search='[related-channel]'",
-			"catch-up channel='[found-channel]'",
+			"messages query='[topic]'",
+			"estate view='channels' search='[related-channel]'",
+			"messages target='[found-channel]'",
 		}
 
 	case "inbox-zero":
 		return []string{
-			"check-unreads",
-			"check-mentions",
-			"mark-read target='everything' filter='no-mentions'",
-			"check-unreads", // Verify
+			"inbox view='unreads'",
+			"inbox view='mentions'",
+			"mark-messages target='everything' filter='no-mentions'",
+			"inbox view='unreads'", // Verify
 		}
 
 	default:

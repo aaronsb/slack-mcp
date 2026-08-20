@@ -50,7 +50,7 @@ var Poll = &Feature{
 	Name: "poll",
 	Description: "What changed since you last looked, across every channel and DM. " +
 		"Takes no arguments. Reads only — never advances your Slack read marker, and " +
-		"never advances this agent's position either; call 'ack' for that.",
+		"never advances this agent's position either; call 'dismiss' for that.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -402,14 +402,14 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 
 	if len(t.events) == 0 {
 		result.Message = fmt.Sprintf("Nothing new across %d conversations.", t.scanned)
-		result.Guidance = "Nothing moved past your position. Poll again later."
+		result.Guidance = "Nothing moved past your position. Check inbox view='new' again later."
 		return result
 	}
 
 	result.Message = fmt.Sprintf("%d new messages across %d conversations.", len(t.events), t.read)
 	result.NextActions = []string{
-		"Read one in full: read handle='<handle from an event>'",
-		"Record that you have seen these: ack handle='<handle>'",
+		"Read one in full: messages target='<handle from an event>'",
+		"Record that you have seen these: dismiss handle='<handle>'",
 	}
 
 	var notes []string
@@ -430,7 +430,7 @@ func buildPollResult(t *tick, threadActivity map[string]int) *FeatureResult {
 	}
 	if len(notes) > 0 {
 		result.Guidance = capitalize(notes[0]) + strings.Join(prefixEach("; ", notes[1:]), "") +
-			". Ack what you have seen, then poll again."
+			". Ack what you have seen, then check inbox view='new' again."
 	}
 	if t.firstLook {
 		result.Guidance = strings.TrimSpace(result.Guidance +

@@ -3,7 +3,7 @@ package features
 // Estate facts in payloads (ADR-007): a tombstone surfaces as a dated
 // fact, absence is asserted only under a completed sweep, and otherwise
 // the response says it cannot know. These helpers build the coverage
-// block and the dated-fact entries list-users and list-channels carry.
+// block and the dated-fact entries list-users and estate view='channels' carry.
 
 import (
 	"fmt"
@@ -155,12 +155,12 @@ func unresolvedPeopleResult(ap *provider.ApiProvider, misses []provider.PersonRe
 			"coverage":   estateCoverage(ap),
 		},
 		Guidance:    strings.Join(lines, "\n"),
-		NextActions: []string{"Retry with a listed handle: search query='...' from=['<handle>']"},
+		NextActions: []string{"Retry with a listed handle: messages query='...' from=['<handle>']"},
 	}
 }
 
 // tombstonedChannelMatches renders the fold's gone channels matching a
-// search, for list-channels' includeDeleted flag.
+// search, for estate view='channels” includeDeleted flag.
 func tombstonedChannelMatches(ap *provider.ApiProvider, searchLower string) []map[string]interface{} {
 	var out []map[string]interface{}
 	for _, rec := range ap.EstateChannels() {

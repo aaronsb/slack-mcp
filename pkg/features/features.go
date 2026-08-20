@@ -21,6 +21,12 @@ type FeatureResult struct {
 	Guidance    string      `json:"guidance,omitempty"`
 	ResultCount int         `json:"resultCount,omitempty"`
 	Pagination  *Pagination `json:"pagination,omitempty"`
+	// RenderAs routes formatting to another tool's renderer when a v2
+	// noun delegates to a v1 handler (ADR-009). Never serialized.
+	RenderAs string `json:"-"`
+	// Echo is the effective-invocation line prepended to the rendered
+	// output, so the agent sees what actually ran. Never serialized.
+	Echo string `json:"-"`
 }
 
 // Pagination provides cursor-based pagination info

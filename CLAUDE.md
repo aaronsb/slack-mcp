@@ -25,18 +25,18 @@ make npm-publish NPM_TOKEN=... # Publish to npm
 
 ## Tools
 
-| Tool | What it does |
-|------|-------------|
-| `check-unreads` | Unread messages across DMs/channels/mentions |
-| `catch-up` | Recent channel activity (time-filtered) |
-| `list-channels` | Browse channels + membership |
-| `check-mentions` | Your @-mentions by urgency |
-| `search` | Find messages (full Slack query syntax) |
-| `get-context` | Thread/conversation history |
-| `check-timing` | Conversation pacing analysis |
-| `send-message` | Post to channel/DM/thread |
-| `mark-read` | Mark conversations as read |
-| `react` | Add/remove emoji reactions |
+| Tool | Kind | What it does |
+|------|------|-------------|
+| `inbox` | noun | What needs you: `view='new'` (since your last dismiss), `'unreads'`, `'mentions'` |
+| `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` full Slack search syntax |
+| `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'` |
+| `say` | verb | Contribute content (Slack-visible): a message, or an emoji reaction |
+| `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
+| `mark-read` | verb | Fire read receipts — the one visibly-public read signal |
+| `auth` | verb | Interactive token setup (localhost only) |
+| `download` | verb | Download a shared file |
+
+Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009). Every noun echoes its effective parameters and pages every capped list.
 
 ## Environment
 

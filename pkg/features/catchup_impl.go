@@ -68,7 +68,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	if channelID == cleanName && !strings.HasPrefix(channelID, "C") && !strings.HasPrefix(channelID, "D") && !strings.HasPrefix(channelID, "G") {
 		return &FeatureResult{
 			Success: false,
-			Message: fmt.Sprintf("Channel '%s' not found. Use list-channels to see available channels.", channel),
+			Message: fmt.Sprintf("Channel '%s' not found. Use estate view='channels' to see available channels.", channel),
 		}, nil
 	}
 
@@ -193,17 +193,17 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	if totalMsgCount == 0 {
 		result.Guidance = "✅ No activity in this time period"
 		result.NextActions = []string{
-			"Try a longer timeframe: catch-up channel='" + channel + "' since='1w'",
-			"Check other channels: list-channels filter='with-unreads'",
-			"Search for older discussions: search query='<topic>' in:" + channel + " timeframe='1m'",
+			"Try a longer timeframe: messages target='" + channel + "' since='1w'",
+			"Check other channels: estate view='channels' filter='with-unreads'",
+			"Search for older discussions: messages query='<topic>' in:" + channel + " timeframe='1m'",
 		}
 	} else if totalMsgCount <= 3 {
 		// 1-3 messages: Full consumption = auto-mark read
 		result.Guidance = "💬 Full content displayed - marking as read"
 		result.NextActions = []string{
 			"Messages auto-marked as read (full consumption)",
-			"Check mentions across channels: check-mentions",
-			fmt.Sprintf("Send a reply: send-message channel='%s'", channel),
+			"Check mentions across channels: inbox view='mentions'",
+			fmt.Sprintf("Send a reply: say to='%s'", channel),
 		}
 		// TODO: Actually mark as read
 	} else if totalMsgCount <= 15 {
@@ -211,8 +211,8 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		result.Guidance = "🔍 Thorough review complete - marking as read"
 		result.NextActions = []string{
 			"Messages auto-marked as read (thorough review)",
-			"Check mentions across channels: check-mentions",
-			fmt.Sprintf("Send a reply: send-message channel='%s'", channel),
+			"Check mentions across channels: inbox view='mentions'",
+			fmt.Sprintf("Send a reply: say to='%s'", channel),
 		}
 		// TODO: Actually mark as read
 	} else if totalMsgCount <= 50 {
@@ -223,7 +223,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		}
 		if currentCursor != "" {
 			result.NextActions = append(result.NextActions,
-				fmt.Sprintf("Continue with more messages: catch-up channel='%s' cursor='%s'", channel, currentCursor))
+				fmt.Sprintf("Continue with more messages: messages target='%s' cursor='%s'", channel, currentCursor))
 		}
 		result.NextActions = append(result.NextActions,
 			"Mark specific items as read: mark-read channel='"+channel+"'")
@@ -234,12 +234,12 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 
 		if currentCursor != "" {
 			result.NextActions = append(result.NextActions,
-				fmt.Sprintf("🔄 Continue reading next batch: catch-up channel='%s' cursor='%s'", channel, currentCursor))
+				fmt.Sprintf("🔄 Continue reading next batch: messages target='%s' cursor='%s'", channel, currentCursor))
 		}
 
 		result.NextActions = append(result.NextActions,
-			"Filter by importance: catch-up channel='"+channel+"' focus='important'",
-			"Search for specific topics: search query='<topic>' in:"+channel)
+			"Filter by importance: messages target='"+channel+"' focus='important'",
+			"Search for specific topics: messages query='<topic>' in:"+channel)
 
 		// Add semantic prompt for high volume
 		if hasMore {
@@ -263,12 +263,12 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		// Add contextual search for any message count with important items
 		if hasThreads || len(importantItems) < 3 {
 			result.NextActions = append(result.NextActions,
-				"For specific topics: search query='<topic>' in:"+channel)
+				"For specific topics: messages query='<topic>' in:"+channel)
 		}
 
 		if hasThreads {
 			result.NextActions = append(result.NextActions,
-				"Join active conversation: send-message channel='"+channel+"' threadTs='<thread>'")
+				"Join active conversation: say to='"+channel+"' threadTs='<thread>'")
 		}
 	}
 

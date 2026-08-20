@@ -206,7 +206,7 @@ func checkUnreadsSimple(ctx context.Context, params map[string]interface{}) (*Fe
 		firstMention := unreads["mentions"].([]map[string]interface{})[0]
 		channelName := firstMention["channel"].(string)
 		result.NextActions = append(result.NextActions,
-			fmt.Sprintf("Use 'catch-up' with channel='%s' to see the messages", channelName))
+			fmt.Sprintf("Use messages target='%s' since='1d' to see the messages", channelName))
 	}
 	if len(unreads["dms"].([]map[string]interface{})) > 0 {
 		firstDM := unreads["dms"].([]map[string]interface{})[0]

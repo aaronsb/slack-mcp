@@ -153,15 +153,15 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 			"Searched %s. Slack search only covers channels you are in — a message in a channel you have not joined will not appear.",
 			coverage["window"])
 		result.NextActions = []string{
-			"Try different terms: search query='<other terms>'",
-			"Narrow to one place: read handle='<channel or person>'",
+			"Try different terms: messages query='<other terms>'",
+			"Narrow to one place: messages target='<channel or person>'",
 		}
 		return result, nil
 	}
 
 	result.Message = fmt.Sprintf("%d results for %q.", len(results), query)
 	result.NextActions = []string{
-		"Read one in full: read handle='<handle from a result>'",
+		"Read one in full: messages target='<handle from a result>'",
 	}
 	if messages.Total > len(results) {
 		result.Guidance = fmt.Sprintf("Showing %d of %d matches, newest first.", len(results), messages.Total)

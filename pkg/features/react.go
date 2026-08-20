@@ -71,7 +71,7 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Could not find channel '%s'", channel),
-			Guidance: "Use 'list-channels' to see available channels",
+			Guidance: "Use 'estate view='channels'' to see available channels",
 		}, nil
 	}
 

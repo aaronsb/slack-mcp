@@ -118,7 +118,7 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 			return &FeatureResult{
 				Success:  false,
 				Message:  fmt.Sprintf("No such message in %s — it may have been deleted.", where),
-				Guidance: "Poll again for a current handle.",
+				Guidance: "Check inbox view='new' again for a current handle.",
 			}, nil
 		}
 		return &FeatureResult{
@@ -205,7 +205,7 @@ func messagesResult(apiProvider *provider.ApiProvider, where, kind, channel stri
 	}
 	if lastHandle != "" {
 		result.NextActions = []string{
-			fmt.Sprintf("Record that you have read this: ack handle='%s'", lastHandle),
+			fmt.Sprintf("Record that you have read this: dismiss handle='%s'", lastHandle),
 		}
 	}
 	if more {

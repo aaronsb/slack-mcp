@@ -11,7 +11,7 @@ import (
 
 // WriteMessage sends a message to a channel or DM
 var WriteMessage = &Feature{
-	Name:        "send-message",
+	Name:        "say",
 	Description: "Send a message to a channel or direct message conversation",
 	Schema: map[string]interface{}{
 		"type": "object",
@@ -67,7 +67,7 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Could not find channel or user '%s'", channel),
-			Guidance: "💡 Use 'list-channels' to see available channels or provide a username for DMs",
+			Guidance: "💡 Use 'estate view='channels'' to see available channels or provide a username for DMs",
 		}, nil
 	}
 
@@ -109,17 +109,17 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	if threadTs == "" {
 		// New message - provide context-aware follow-ups
 		result.NextActions = []string{
-			fmt.Sprintf("Read conversation context: catch-up channel='%s' since='1h'", channel),
+			fmt.Sprintf("Read conversation context: messages target='%s' since='1h'", channel),
 			fmt.Sprintf("Monitor for responses: search threadId='%s:%s'", channelID, timestamp),
-			fmt.Sprintf("Reply to your message: send-message channel='%s' threadTs='%s'", channel, timestamp),
+			fmt.Sprintf("Reply to your message: say to='%s' threadTs='%s'", channel, timestamp),
 		}
 		result.Guidance = "💡 Your message was sent. Use catch-up to see recent context or monitor for responses."
 	} else {
 		// Thread reply - focus on thread context
 		result.NextActions = []string{
 			fmt.Sprintf("Read full thread: search threadId='%s:%s'", channelID, threadTs),
-			fmt.Sprintf("Continue thread: send-message channel='%s' threadTs='%s'", channel, threadTs),
-			fmt.Sprintf("See channel context: catch-up channel='%s' since='4h'", channel),
+			fmt.Sprintf("Continue thread: say to='%s' threadTs='%s'", channel, threadTs),
+			fmt.Sprintf("See channel context: messages target='%s' since='4h'", channel),
 		}
 		result.Guidance = "💬 Reply sent to thread. Check the full discussion for context."
 	}

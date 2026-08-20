@@ -23,7 +23,7 @@ var EstateViews = &Feature{
 		"properties": map[string]interface{}{
 			"view": map[string]interface{}{
 				"type":        "string",
-				"description": "Which view: 'about', 'families', 'person', 'initiatives', 'convergence'",
+				"description": "Which view: 'about', 'families', 'person', 'initiatives', 'convergence', 'people' (directory search), 'channels' (channel listing)",
 			},
 			"person": map[string]interface{}{
 				"type":        "string",
@@ -48,8 +48,22 @@ var EstateViews = &Feature{
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
-				"description": "families only: maximum families to return (default 10, max 50)",
+				"description": "families/people/channels: maximum items to return",
 				"default":     10,
+			},
+			"includeDeleted": map[string]interface{}{
+				"type":        "boolean",
+				"description": "people/channels: include tombstoned entries as dated facts",
+				"default":     false,
+			},
+			"includeArchived": map[string]interface{}{
+				"type":        "boolean",
+				"description": "channels: include archived channels",
+				"default":     false,
+			},
+			"filter": map[string]interface{}{
+				"type":        "string",
+				"description": "channels: 'member' (default), 'all', 'public', 'private', 'dm', 'group-dm'",
 			},
 			"offset": map[string]interface{}{
 				"type":        "number",
@@ -184,6 +198,31 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 		cv.Offset = viewOffset(params)
 		return result(cv, "convergence view")
 
+	case "people":
+		if person == "" {
+			if s, ok := params["search"].(string); ok {
+				person = strings.TrimSpace(s)
+			}
+		}
+		if person == "" {
+			return &FeatureResult{Success: false, Message: "The people view needs person='<name or partial>' (or search=)"}, nil
+		}
+		params["query"] = person
+		res, err := ListUsers.Handler(ctx, params)
+		if err == nil && res != nil {
+			res.RenderAs = "list-users"
+			res.Echo = "estate view='people' query='" + person + "'"
+		}
+		return res, err
+
+	case "channels":
+		res, err := ListChannels.Handler(ctx, params)
+		if err == nil && res != nil {
+			res.RenderAs = "estate view='channels'"
+			res.Echo = echoLine("estate", "view='channels'", params, "search", "filter", "includeArchived", "includeDeleted", "limit")
+		}
+		return res, err
+
 	case "about":
 		if person == "" {
 			return &FeatureResult{Success: false, Message: "The about view needs person='<@handle, name, or user ID>'"}, nil
@@ -193,7 +232,7 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 	default:
 		return &FeatureResult{
 			Success:  false,
-			Message:  fmt.Sprintf("Unknown view %q. Available views: about, families, person, initiatives, convergence", view),
+			Message:  fmt.Sprintf("Unknown view %q. Available views: about, families, person, initiatives, convergence, people, channels", view),
 			Guidance: "Start with view='about' person='<who>' — it composes the others and returns a reading plan.",
 		}, nil
 	}
@@ -473,7 +512,7 @@ func formatFamiliesView(view *estateFamiliesData) string {
 		}
 		fmt.Fprintf(&b, "**Next page:** %d more families — %s\n", view.TotalFamilies-view.Offset-view.Shown, next)
 	}
-	b.WriteString("**Next:** whole picture: estate view='about' person='@<handle>' | read a channel: catch-up channel='#<name>' | narrow: estate view='families' search='<stem>'")
+	b.WriteString("**Next:** whole picture: estate view='about' person='@<handle>' | read a channel: messages target='#<name>' | narrow: estate view='families' search='<stem>'")
 
 	return b.String()
 }
