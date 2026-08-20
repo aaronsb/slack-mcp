@@ -136,58 +136,22 @@ func writeTombstoned(b *strings.Builder, data map[string]interface{}) {
 	}
 }
 
-// estateFooter states the coverage claim in plain language: what the estate
-// has mapped, what it is mapping right now, and whether "not found" can
-// mean "does not exist". During a walk, repeated queries show the seen
-// count advancing.
+// estateFooter surfaces the estate only while it is actively acquiring —
+// the live walk line whose seen count advances across repeated queries.
+// Idle state stays out of tool returns: absence claims carry their own
+// coverage in the result message, and the structured coverage block in the
+// data map holds the rest.
 func estateFooter(data map[string]interface{}) string {
 	cov, _ := data["coverage"].(map[string]interface{})
 	est, _ := cov["estate"].(map[string]interface{})
-	if est == nil {
+	channels, _ := est["channels"].(map[string]interface{})
+	enum, ok := channels["enumerating"].(map[string]interface{})
+	if !ok {
 		return ""
 	}
-	if avail, ok := est["available"].(bool); ok && !avail {
-		return "\nEstate: ledger unavailable this session — no workspace history\n"
-	}
-
-	if swept, _ := est["swept"].(bool); swept {
-		ts, _ := est["lastFullSweep"].(string)
-		return fmt.Sprintf("\nEstate: complete picture as of %s (%s users, %s channels mapped)\n",
-			ts, countOf(est, "users"), countOf(est, "channels"))
-	}
-
-	var parts []string
-	if lc := classComplete(est, "users"); lc != "" {
-		parts = append(parts, fmt.Sprintf("users mapped (%s, as of %s)", countOf(est, "users"), lc))
-	} else {
-		parts = append(parts, "users not yet mapped")
-	}
-	channels, _ := est["channels"].(map[string]interface{})
-	if enum, ok := channels["enumerating"].(map[string]interface{}); ok {
-		seen, _ := enum["seen"].(int)
-		secs, _ := enum["startedSecsAgo"].(int)
-		parts = append(parts, fmt.Sprintf("mapping channels now — %d seen so far (%ds in, re-query to watch progress)", seen, secs))
-	} else if lc := classComplete(est, "channels"); lc != "" {
-		parts = append(parts, fmt.Sprintf("channels mapped (%s, as of %s)", countOf(est, "channels"), lc))
-	} else {
-		parts = append(parts, "channels not yet mapped")
-	}
-	return "\nEstate: " + strings.Join(parts, "; ") +
-		" — until both are mapped, \"not found\" may mean \"not yet seen\"\n"
-}
-
-func countOf(est map[string]interface{}, class string) string {
-	m, _ := est[class].(map[string]interface{})
-	if n, ok := m["count"].(int); ok {
-		return fmt.Sprintf("%d", n)
-	}
-	return "?"
-}
-
-func classComplete(est map[string]interface{}, class string) string {
-	m, _ := est[class].(map[string]interface{})
-	ts, _ := m["lastComplete"].(string)
-	return ts
+	seen, _ := enum["seen"].(int)
+	secs, _ := enum["startedSecsAgo"].(int)
+	return fmt.Sprintf("\nEstate: mapping the workspace — %d conversations seen (%ds in, re-query to watch progress)\n", seen, secs)
 }
 
 func dataMap(result *FeatureResult) map[string]interface{} {

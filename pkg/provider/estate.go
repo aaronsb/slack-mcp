@@ -421,6 +421,24 @@ func (ap *ApiProvider) EstateChannels() map[string]estate.ChannelRecord {
 	return st.Channels()
 }
 
+// EstateUser returns one fold record by ID without copying the whole fold.
+func (ap *ApiProvider) EstateUser(id string) (estate.UserRecord, bool) {
+	st := ap.est()
+	if st == nil {
+		return estate.UserRecord{}, false
+	}
+	return st.User(id)
+}
+
+// EstateChannel returns one fold record by ID.
+func (ap *ApiProvider) EstateChannel(id string) (estate.ChannelRecord, bool) {
+	st := ap.est()
+	if st == nil {
+		return estate.ChannelRecord{}, false
+	}
+	return st.Channel(id)
+}
+
 // EstateLastFullSweep reports when the estate last had a complete picture.
 // Zero means absence cannot be asserted — either no full sweep has
 // completed or the ledger is unavailable — and coverage reporting must say

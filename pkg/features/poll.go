@@ -83,6 +83,7 @@ type conversation struct {
 // tick accumulates what one poll found, including everything it could not
 // reach. Coverage is assembled from this rather than from prose.
 type tick struct {
+	render func(string) string
 	events []map[string]interface{}
 
 	scanned   int
@@ -192,6 +193,7 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 	// point is being cheap.
 	naming := newNameIndex(apiProvider, t)
 	usersMap := apiProvider.ProvideUsersMap()
+	t.render = newBodyRenderer(apiProvider)
 
 	hydrateConversations(ctx, api, store, hydrated, naming, usersMap, limit, now.Add(-firstLookWindow), t)
 	tickThreads(ctx, api, internal, store, naming, usersMap, limit, now, t)
@@ -289,7 +291,7 @@ func hydrateConversations(
 				t.limitReached = true
 				return
 			}
-			t.events = append(t.events, buildEvent(c, msg, where, usersMap))
+			t.events = append(t.events, buildEvent(c, msg, where, usersMap, t.render))
 		}
 	}
 }
@@ -505,10 +507,7 @@ func groupName(raw string, byName map[string]string) string {
 }
 
 func displayName(u slack.User) string {
-	if u.RealName != "" {
-		return u.RealName
-	}
-	return u.Name
+	return displayNameFor(u)
 }
 
 // flattenCounts merges the three conversation kinds client.counts reports
@@ -527,7 +526,7 @@ func flattenCounts(counts *provider.ClientCountsResponse) []conversation {
 	return out
 }
 
-func buildEvent(c conversation, msg slack.Message, where string, usersMap map[string]slack.User) map[string]interface{} {
+func buildEvent(c conversation, msg slack.Message, where string, usersMap map[string]slack.User, render func(string) string) map[string]interface{} {
 	kind := "message"
 	if c.Kind == "dm" {
 		kind = "dm"
@@ -544,7 +543,7 @@ func buildEvent(c conversation, msg slack.Message, where string, usersMap map[st
 		"where":   where,
 		"who":     getUserName(msg.User, usersMap),
 		"when":    formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
-		"preview": preview(msg.Text),
+		"preview": preview(render(msg.Text)),
 	}
 
 	if msg.ThreadTimestamp != "" {

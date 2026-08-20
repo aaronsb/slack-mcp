@@ -84,6 +84,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 	}
 	currentUserID := authTest.UserID
 	usersMap := provider.ProvideUsersMap()
+	render := newBodyRenderer(provider)
 
 	// Initialize result categories
 	unreads := map[string]interface{}{
@@ -159,7 +160,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 				dm := map[string]interface{}{
 					"type":        "dm",
 					"author":      authorName,
-					"message":     msg.Text,
+					"message":     render(msg.Text),
 					"timestamp":   formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 					"channelId":   channel.ID,
 					"unreadCount": channel.UnreadCount,
@@ -188,7 +189,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 						"type":      "mention",
 						"channel":   channel.Name,
 						"author":    authorName,
-						"message":   msg.Text,
+						"message":   render(msg.Text),
 						"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 						"channelId": channel.ID,
 						"threadId":  fmt.Sprintf("%s:%s", channel.ID, msg.Timestamp),
@@ -220,7 +221,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 				if len(resp.Messages) > 0 {
 					lastMsg := resp.Messages[0]
 					authorName := getUserName(lastMsg.User, usersMap)
-					channelInfo["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(lastMsg.Text, 100))
+					channelInfo["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(render(lastMsg.Text), 100))
 					channelInfo["timestamp"] = formatTimestamp(parseSlackTimestamp(lastMsg.Timestamp))
 				}
 
@@ -272,10 +273,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 
 func getUserName(userID string, usersMap map[string]slack.User) string {
 	if user, ok := usersMap[userID]; ok {
-		if user.RealName != "" {
-			return user.RealName
-		}
-		return user.Name
+		return displayNameFor(user)
 	}
 	return "Unknown User"
 }

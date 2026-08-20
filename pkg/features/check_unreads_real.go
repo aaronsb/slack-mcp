@@ -78,6 +78,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	}
 	currentUserID := authTest.UserID
 	usersMap := apiProvider.ProvideUsersMap()
+	render := newBodyRenderer(apiProvider)
 
 	// Initialize result categories
 	unreads := map[string]interface{}{
@@ -163,7 +164,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 						}
 
 						messages = append(messages, map[string]interface{}{
-							"text":      msg.Text,
+							"text":      render(msg.Text),
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 							"user":      getUserName(msg.User, usersMap),
 						})
@@ -244,7 +245,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 							"type":      "mention",
 							"channel":   info.Name,
 							"author":    authorName,
-							"message":   msg.Text,
+							"message":   render(msg.Text),
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 							"channelId": mpim.ID,
 							"threadId":  fmt.Sprintf("%s:%s", mpim.ID, msg.Timestamp),
@@ -303,7 +304,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 							"type":      "mention",
 							"channel":   info.Name,
 							"author":    authorName,
-							"message":   msg.Text,
+							"message":   render(msg.Text),
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 							"channelId": ch.ID,
 							"threadId":  fmt.Sprintf("%s:%s", ch.ID, msg.Timestamp),
@@ -360,7 +361,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				if err == nil && len(resp.Messages) > 0 {
 					lastMsg := resp.Messages[0]
 					authorName := getUserName(lastMsg.User, usersMap)
-					channelData["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(lastMsg.Text, 100))
+					channelData["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(render(lastMsg.Text), 100))
 					channelData["timestamp"] = formatTimestamp(parseSlackTimestamp(lastMsg.Timestamp))
 				}
 

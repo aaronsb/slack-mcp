@@ -86,6 +86,7 @@ func getThreadContextImpl(ctx context.Context, params map[string]interface{}, th
 	// Process messages
 	messages := []map[string]interface{}{}
 	usersMap := apiProvider.ProvideUsersMap()
+	render := newBodyRenderer(apiProvider)
 
 	for _, msg := range replies {
 		// Get user info
@@ -103,7 +104,7 @@ func getThreadContextImpl(ctx context.Context, params map[string]interface{}, th
 
 		message := map[string]interface{}{
 			"user":      userName,
-			"text":      msg.Text,
+			"text":      render(msg.Text),
 			"timestamp": timeAgo,
 			"ts":        msg.Timestamp,
 		}

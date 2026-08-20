@@ -298,6 +298,11 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 	// Add guidance
 	if len(filteredChannels) == 0 {
 		result.Guidance = "🔍 No channels found matching your criteria"
+		if apiProvider.EstateLastFullSweep().IsZero() {
+			// The rendered text is all the agent sees; an absence claim
+			// without its coverage caveat reads as "does not exist".
+			result.Guidance += " — note: no full workspace mapping has completed, so \"not found\" may mean \"not yet seen\""
+		}
 		result.NextActions = []string{
 			"Try a different filter: list-channels filter='all'",
 			"Force refresh the cache: list-channels forceRefresh=true",
