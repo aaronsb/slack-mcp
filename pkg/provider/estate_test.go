@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -450,5 +453,91 @@ func TestASecondSweepSkipsTheFreshChannelWalk(t *testing.T) {
 	}
 	if got := srv.Calls("users.list"); got != 1 {
 		t.Fatalf("second sweep listed users %d times, want 1", got)
+	}
+}
+
+func walkStatePath() string {
+	return filepath.Join(filepath.Dir(ledgerPath()), "walk-state.json")
+}
+
+// A reconnect can kill the server mid-walk at any time. The walk must
+// resume from its checkpoint, not restart from page one — and the absence
+// pass must run against the union of resumed and fresh pages.
+func TestAnInterruptedWalkResumesFromItsCheckpoint(t *testing.T) {
+	srv := slacktest.New(t)
+
+	// The interrupted walk had already seen C1 (page-wise observation in
+	// the ledger) and checkpointed cursor CUR2.
+	seedLedger(t, func(st *estate.Store) {
+		var c1 slack.Channel
+		c1.ID, c1.Name = "C1", "eng"
+		if _, err := st.ObserveChannels([]slack.Channel{c1}, false, estate.SourceSweep, estateBase); err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+	})
+	state := fmt.Sprintf(`{"cursor":"CUR2","startedAt":%q,"seen":["C1"]}`,
+		time.Now().Add(-time.Minute).Format(time.RFC3339))
+	if err := os.WriteFile(walkStatePath(), []byte(state), 0o600); err != nil {
+		t.Fatalf("write checkpoint: %v", err)
+	}
+
+	var gotCursors []string
+	var mu sync.Mutex
+	srv.Handle("conversations.list", func(r *http.Request) any {
+		_ = r.ParseForm()
+		cursor := r.Form.Get("cursor")
+		mu.Lock()
+		gotCursors = append(gotCursors, cursor)
+		mu.Unlock()
+		if cursor == "CUR2" {
+			var c2 slack.Channel
+			c2.ID, c2.Name = "C2", "platform"
+			return map[string]any{
+				"ok":                true,
+				"channels":          []slack.Channel{c2},
+				"response_metadata": map[string]any{"next_cursor": ""},
+			}
+		}
+		return map[string]any{
+			"ok": false, "error": "test should not walk from page one",
+		}
+	})
+
+	p := srv.Provider(t)
+	if _, err := p.Provide(); err != nil {
+		t.Fatalf("Provide: %v", err)
+	}
+	srv.Quiesce(t)
+	if err := p.RunEstateSweep(context.Background()); err != nil {
+		t.Fatalf("RunEstateSweep: %v", err)
+	}
+
+	mu.Lock()
+	cursors := append([]string(nil), gotCursors...)
+	mu.Unlock()
+	if len(cursors) != 1 || cursors[0] != "CUR2" {
+		t.Fatalf("walk did not resume from the checkpoint: cursors %v", cursors)
+	}
+
+	// C1 was not re-fetched, yet it is in the resumed seen set — the
+	// absence pass must not tombstone it.
+	if rec, ok := p.EstateChannels()["C1"]; !ok || rec.Gone != nil {
+		t.Fatalf("resumed-seen channel was tombstoned: %+v", rec)
+	}
+	if rec, ok := p.EstateChannels()["C2"]; !ok || rec.Gone != nil {
+		t.Fatalf("fresh page not observed: %+v", rec)
+	}
+	if _, err := os.Stat(walkStatePath()); !os.IsNotExist(err) {
+		t.Fatalf("completed walk left its checkpoint behind")
+	}
+}
+
+func TestACompletedWalkLeavesNoCheckpoint(t *testing.T) {
+	_, p := sweptProvider(t)
+	if err := p.RunEstateSweep(context.Background()); err != nil {
+		t.Fatalf("RunEstateSweep: %v", err)
+	}
+	if _, err := os.Stat(walkStatePath()); !os.IsNotExist(err) {
+		t.Fatalf("completed walk left a checkpoint")
 	}
 }

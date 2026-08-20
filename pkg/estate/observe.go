@@ -253,6 +253,62 @@ func (s *Store) ObserveChannels(channels []slack.Channel, complete bool, src Sou
 	return res, nil
 }
 
+// CloseChannelEnumeration finishes a channel enumeration whose members were
+// observed page-wise as they were fetched: it confirms the seen set and
+// runs the absence pass against it. This is what makes an enumeration
+// resumable across restarts — the pages already in the ledger carry the
+// records, and this call carries the completeness claim.
+func (s *Store) CloseChannelEnumeration(seen map[string]bool, src Source, now time.Time) (ObserveResult, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if s.readOnly {
+		return ObserveResult{}, ErrReadOnly
+	}
+
+	var events []event
+	res := ObserveResult{}
+
+	var proposed []*ChannelRecord
+	live := 0
+	for id, rec := range s.fold.channels {
+		if rec.Gone != nil {
+			continue
+		}
+		live++
+		if !seen[id] {
+			proposed = append(proposed, rec)
+		}
+	}
+	res.ProposedAbsent = len(proposed)
+	if absenceAborts(len(proposed), live) {
+		res.AbsenceAborted = true
+	} else {
+		for _, rec := range proposed {
+			events = append(events, event{
+				V: schemaVersion, At: now, Src: src, Kind: kindTombstone,
+				Entity: entityChannel, ID: rec.ID,
+				Reason: ReasonAbsent, NotBefore: confirmedBound(rec.LastConfirmed, rec.LastChanged),
+				Last: mustRaw(rec.Props),
+			})
+		}
+	}
+
+	if err := s.appendAndApply(events); err != nil {
+		return res, err
+	}
+	res.Appended = len(events)
+
+	s.foldMu.Lock()
+	for id := range seen {
+		if rec := s.fold.channels[id]; rec != nil {
+			rec.LastConfirmed = now
+		}
+	}
+	s.foldMu.Unlock()
+	return res, nil
+}
+
 // RecordSweep appends the sweep event that closes a pass and advances the
 // per-class watermarks for the classes that completed.
 func (s *Store) RecordSweep(rep SweepReport, now time.Time) error {

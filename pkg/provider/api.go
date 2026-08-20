@@ -506,26 +506,24 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 	ap.backfillMutex.Unlock()
 
 	log.Println("Starting background channel backfill...")
-	fetched, complete := ap.fetchAllChannels(ctx, ap.mergeNewChannels)
-
-	// Observe the map's reconciled view of the enumerated channels, not the
-	// raw fetch: member-loaded entries carry the authoritative IsMember, and
-	// both observers must feed the estate the same values or the ledger
-	// records a flip-flop that never happened.
-	observed := make([]slack.Channel, 0, len(fetched))
-	ap.channelsMutex.RLock()
-	for _, ch := range fetched {
-		if current, ok := ap.channels[ch.ID]; ok {
-			observed = append(observed, current)
-		}
-	}
-	ap.channelsMutex.RUnlock()
-
-	res := ap.observeChannelsEstate(observed, complete, estate.SourceBoot)
+	appended := 0
+	_, seen, complete := ap.fetchAllChannels(ctx, func(page []slack.Channel) {
+		ap.mergeNewChannels(page)
+		// Observe each page as it lands (asserting no absences), so an
+		// interrupted walk's knowledge is already durable and the resumed
+		// walk appends nothing for what it re-sees. Observe the map's
+		// reconciled view, not the raw fetch: member-loaded entries carry
+		// the authoritative IsMember, and both observers must feed the
+		// estate the same values or the ledger records a flip-flop that
+		// never happened.
+		res := ap.observeChannelsEstate(ap.reconciledView(page), false, estate.SourceBoot)
+		appended += res.Appended
+	})
 
 	if !complete {
-		// Walk failed partway: merged pages stay, backfillDone stays false
-		// so RefreshChannelCache can retry, and no absences were asserted.
+		// Walk failed partway: merged pages stay, the checkpoint stays for
+		// the next attempt, backfillDone stays false so RefreshChannelCache
+		// can retry, and no absences were asserted.
 		return
 	}
 
@@ -533,31 +531,53 @@ func (ap *ApiProvider) backgroundBackfill(ctx context.Context) {
 	ap.backfillDone = true
 	ap.backfillMutex.Unlock()
 
+	res := ap.closeChannelEnumerationEstate(seen, estate.SourceBoot)
 	ap.recordEstateSweep(estate.SweepReport{
 		Channels: estate.ClassReport{
-			Complete: true, Count: len(observed),
+			Complete: true, Count: len(seen),
 			ArchivedIncluded: true, AbsenceAborted: res.AbsenceAborted,
 		},
-		Appended: res.Appended,
+		Appended: appended + res.Appended,
 	})
 
-	log.Printf("Background backfill complete: %d channels", len(fetched))
+	log.Printf("Background backfill complete: %d channels", len(seen))
 	ap.markDirty()
 	ap.flushCaches()
 }
 
+// reconciledView returns the map's current structs for a fetched page, so
+// estate observation sees post-merge values.
+func (ap *ApiProvider) reconciledView(page []slack.Channel) []slack.Channel {
+	out := make([]slack.Channel, 0, len(page))
+	ap.channelsMutex.RLock()
+	for _, ch := range page {
+		if current, ok := ap.channels[ch.ID]; ok {
+			out = append(out, current)
+		}
+	}
+	ap.channelsMutex.RUnlock()
+	return out
+}
+
 // fetchAllChannels walks conversations.list to cursor exhaustion — archived
 // channels included, which ADR-007 makes a requirement rather than the
-// accident it was — with the relaxed pacing backfill has always used. Each
-// page is handed to onPage as it lands so channels stay progressively
-// available during a long walk. Returns every fetched channel and whether
-// the walk completed.
-func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack.Channel)) ([]slack.Channel, bool) {
-	cursor := ""
+// accident it was. Each page is handed to onPage as it lands so channels
+// stay progressively available, and the walk checkpoints its cursor and
+// seen set per page so a killed process resumes instead of restarting from
+// page one. Returns the channels fetched this process, the seen set across
+// resumes, and whether the enumeration completed.
+func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack.Channel)) ([]slack.Channel, map[string]bool, bool) {
+	cursor, startedAt, seen, resumed := ap.loadWalkState()
+	if !resumed {
+		startedAt = time.Now()
+		seen = make(map[string]bool)
+	} else {
+		log.Printf("Channel walk resuming: %d conversations already seen", len(seen))
+	}
 	var all []slack.Channel
 
 	ap.walkMu.Lock()
-	ap.channelWalk = WalkProgress{Active: true, Started: time.Now()}
+	ap.channelWalk = WalkProgress{Active: true, Started: startedAt, Seen: len(seen)}
 	ap.walkMu.Unlock()
 	defer func() {
 		ap.walkMu.Lock()
@@ -577,22 +597,38 @@ func (ap *ApiProvider) fetchAllChannels(ctx context.Context, onPage func([]slack
 				time.Sleep(rateLimitErr.RetryAfter)
 				continue
 			}
+			if resumed && strings.Contains(err.Error(), "invalid_cursor") {
+				// The checkpointed cursor expired. Restart the enumeration
+				// clean — the resumed pages' knowledge is already in the
+				// ledger, so only the API cost is lost.
+				log.Printf("Channel walk cursor expired; restarting the enumeration")
+				ap.clearWalkState()
+				cursor, resumed = "", false
+				startedAt = time.Now()
+				seen = make(map[string]bool)
+				continue
+			}
 			log.Printf("Channel walk failed: %v", err)
-			return all, false
+			return all, seen, false
 		}
 
 		all = append(all, channels...)
+		for i := range channels {
+			seen[channels[i].ID] = true
+		}
 		if onPage != nil {
 			onPage(channels)
 		}
 		ap.walkMu.Lock()
-		ap.channelWalk.Seen = len(all)
+		ap.channelWalk.Seen = len(seen)
 		ap.walkMu.Unlock()
 
 		if nextCursor == "" {
-			return all, true
+			ap.clearWalkState()
+			return all, seen, true
 		}
 		cursor = nextCursor
+		ap.saveWalkState(cursor, startedAt, seen)
 
 		// conversations.list is a ~20 req/min tier. The old 1s/3s pacing ran
 		// ~36/min, so past page twenty every page ate a 30s penalty and a

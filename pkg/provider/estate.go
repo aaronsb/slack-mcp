@@ -85,6 +85,22 @@ func (ap *ApiProvider) observeChannelsEstate(channels []slack.Channel, complete 
 	return res
 }
 
+// closeChannelEnumerationEstate runs the absence pass over a completed
+// enumeration's seen set.
+func (ap *ApiProvider) closeChannelEnumerationEstate(seen map[string]bool, src estate.Source) estate.ObserveResult {
+	if ap.estate == nil || ap.estate.ReadOnly() {
+		return estate.ObserveResult{}
+	}
+	res, err := ap.estate.CloseChannelEnumeration(seen, src, time.Now())
+	if err != nil {
+		log.Printf("Estate: close channel enumeration: %v", err)
+	}
+	if res.AbsenceAborted {
+		log.Printf("Estate: channel absence pass aborted — %d proposed absent, treating the listing as degraded", res.ProposedAbsent)
+	}
+	return res
+}
+
 func (ap *ApiProvider) recordEstateSweep(rep estate.SweepReport) {
 	if ap.estate == nil || ap.estate.ReadOnly() {
 		return
@@ -255,23 +271,24 @@ func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
 	memberIDs, membersComplete := ap.fetchMemberChannelIDs(ctx)
 	rep.Membership = estate.ClassReport{Complete: membersComplete, Count: len(memberIDs)}
 
-	// Channels: the full walk, archived included.
-	channels, channelsComplete := ap.fetchAllChannels(ctx, nil)
-	if len(channels) > 0 {
+	// Channels: the full walk, archived included, observed page-wise so an
+	// interrupted sweep's knowledge is durable and a resumed one appends
+	// nothing for what it re-sees.
+	_, seen, channelsComplete := ap.fetchAllChannels(ctx, func(page []slack.Channel) {
 		var dms []slack.Channel
 		ap.channelsMutex.Lock()
-		for i := range channels {
+		for i := range page {
 			if membersComplete {
-				channels[i].IsMember = memberIDs[channels[i].ID]
-			} else if existing, ok := ap.channels[channels[i].ID]; ok {
+				page[i].IsMember = memberIDs[page[i].ID]
+			} else if existing, ok := ap.channels[page[i].ID]; ok {
 				// Membership walk failed: keep the map's answer rather than
 				// clobbering member-loaded truth with a possibly-stale flag.
-				channels[i].IsMember = existing.IsMember
+				page[i].IsMember = existing.IsMember
 			}
-			ap.channels[channels[i].ID] = channels[i]
-			ap.indexChannel(channels[i])
-			if channels[i].IsIM {
-				dms = append(dms, channels[i])
+			ap.channels[page[i].ID] = page[i]
+			ap.indexChannel(page[i])
+			if page[i].IsIM {
+				dms = append(dms, page[i])
 			}
 		}
 		ap.channelsMutex.Unlock()
@@ -279,14 +296,15 @@ func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
 			ap.indexChannelDM(ch)
 		}
 
-		res := ap.observeChannelsEstate(channels, channelsComplete, estate.SourceSweep)
-		rep.Channels = estate.ClassReport{
-			Complete: channelsComplete, Count: len(channels),
-			ArchivedIncluded: true, AbsenceAborted: res.AbsenceAborted,
-		}
+		res := ap.observeChannelsEstate(page, false, estate.SourceSweep)
 		rep.Appended += res.Appended
-	} else {
-		rep.Channels = estate.ClassReport{Complete: channelsComplete, ArchivedIncluded: true}
+	})
+
+	rep.Channels = estate.ClassReport{Complete: channelsComplete, Count: len(seen), ArchivedIncluded: true}
+	if channelsComplete {
+		res := ap.closeChannelEnumerationEstate(seen, estate.SourceSweep)
+		rep.Channels.AbsenceAborted = res.AbsenceAborted
+		rep.Appended += res.Appended
 	}
 
 	ap.markDirty()
