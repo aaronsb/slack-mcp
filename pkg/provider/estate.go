@@ -152,6 +152,41 @@ func (ap *ApiProvider) waitForBackfill(stop chan struct{}, bound time.Duration) 
 	}
 }
 
+// backfillIfStale runs the boot channel walk only when the estate cannot
+// prove a complete enumeration within the sweep interval. Skipping still
+// marks the backfill done so the sweep scheduler proceeds immediately, and
+// an explicit RefreshChannelCache bypasses this by respawning
+// backgroundBackfill directly. Without a ledger the walk runs every boot,
+// as it always has.
+func (ap *ApiProvider) backfillIfStale(ctx context.Context) {
+	if fresh, age := ap.channelEnumerationFresh(); fresh {
+		ap.backfillMutex.Lock()
+		ap.backfillDone = true
+		ap.backfillMutex.Unlock()
+		log.Printf("Channel walk skipped: estate enumerated the workspace %s ago", age.Round(time.Minute))
+		return
+	}
+	ap.backgroundBackfill(ctx)
+}
+
+// channelEnumerationFresh reports whether the estate holds a complete
+// channel enumeration younger than the sweep interval, and its age.
+func (ap *ApiProvider) channelEnumerationFresh() (bool, time.Duration) {
+	if ap.estate == nil {
+		return false, 0
+	}
+	interval := ap.estateSweepInterval
+	if interval <= 0 {
+		interval = defaultEstateSweepInterval
+	}
+	last := ap.estate.LastChannelSweep()
+	if last.IsZero() {
+		return false, 0
+	}
+	age := time.Since(last)
+	return age < interval, age
+}
+
 // RunEstateSweep performs one synchronous full estate sweep: users.list,
 // the membership walk, and the full channel walk, each merged into the
 // provider maps and observed into the ledger. A class whose enumeration
@@ -258,6 +293,49 @@ func (ap *ApiProvider) RunEstateSweep(ctx context.Context) error {
 	log.Printf("Estate sweep complete: %d users, %d channels, %d events appended in %s",
 		rep.Users.Count, rep.Channels.Count, rep.Appended, rep.Duration.Round(time.Millisecond))
 	return nil
+}
+
+// WalkProgress is the live state of a channel enumeration in flight.
+type WalkProgress struct {
+	Active  bool
+	Seen    int
+	Started time.Time
+}
+
+// EstateCoverageInfo is everything coverage reporting needs to state what
+// the estate knows and what it is doing about the rest: per-class
+// enumeration watermarks, live fold counts, and walk progress. Repeated
+// queries during a walk show Seen advancing, which is the honest substitute
+// for a bare "not swept yet".
+type EstateCoverageInfo struct {
+	Available     bool
+	LastFullSweep time.Time
+	UserSweep     time.Time
+	ChannelSweep  time.Time
+	Users         int
+	Channels      int
+	ChannelWalk   WalkProgress
+}
+
+// EstateCoverage assembles the coverage picture. Zero-valued (Available
+// false) when the ledger is unavailable.
+func (ap *ApiProvider) EstateCoverage() EstateCoverageInfo {
+	if ap.estate == nil {
+		return EstateCoverageInfo{}
+	}
+	stats := ap.estate.Stats()
+	ap.walkMu.Lock()
+	walk := ap.channelWalk
+	ap.walkMu.Unlock()
+	return EstateCoverageInfo{
+		Available:     true,
+		LastFullSweep: ap.estate.LastFullSweep(),
+		UserSweep:     ap.estate.LastUserSweep(),
+		ChannelSweep:  ap.estate.LastChannelSweep(),
+		Users:         stats.Users,
+		Channels:      stats.Channels,
+		ChannelWalk:   walk,
+	}
 }
 
 // EstateUsers returns the fold's user records — tombstoned included, which
