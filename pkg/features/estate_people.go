@@ -76,7 +76,11 @@ func labelFor(labels map[string]convInfo, conv string) string {
 
 func userLabel(ap *provider.ApiProvider, id string) string {
 	if u, ok := ap.ProvideUsersMap()[id]; ok {
-		return displayName(u)
+		name := displayName(u)
+		if u.Deleted {
+			name += " (departed)"
+		}
+		return name
 	}
 	if rec, ok := ap.EstateUser(id); ok {
 		name := rec.Props.RealName
@@ -88,7 +92,9 @@ func userLabel(ap *provider.ApiProvider, id string) string {
 		}
 		return name
 	}
-	return id
+	// Slack Connect externals are in neither the users map nor the estate;
+	// the ID is the only identifier held, so it renders labelled as such.
+	return "external (" + id + ")"
 }
 
 func sinceDay(days int) string {

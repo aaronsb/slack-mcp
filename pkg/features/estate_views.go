@@ -317,9 +317,9 @@ func familiesData(apiProvider *provider.ApiProvider, search, person string, limi
 	data.Families = fams
 	data.Shown = len(fams)
 
-	// Resolve creator names once, estate fallback included so a departed
-	// creator renders as a dated fact instead of a raw ID.
-	users := apiProvider.ProvideUsersMap()
+	// Resolve creator names once through the shared chain: users map, then
+	// the estate fold with a departed marker, then the labelled-unknown
+	// fallback — every view renders an unknown user the same way.
 	for _, f := range fams {
 		for _, c := range f.Channels {
 			if c.Creator == "" {
@@ -328,29 +328,7 @@ func familiesData(apiProvider *provider.ApiProvider, search, person string, limi
 			if _, done := data.CreatorNames[c.Creator]; done {
 				continue
 			}
-			if u, ok := users[c.Creator]; ok {
-				name := u.RealName
-				if name == "" {
-					name = u.Name
-				}
-				if u.Deleted {
-					name += " (departed)"
-				}
-				data.CreatorNames[c.Creator] = name
-				continue
-			}
-			if rec, ok := apiProvider.EstateUser(c.Creator); ok {
-				name := rec.Props.RealName
-				if name == "" {
-					name = rec.Props.Name
-				}
-				if rec.Gone != nil {
-					name += " (departed)"
-				}
-				data.CreatorNames[c.Creator] = name
-				continue
-			}
-			data.CreatorNames[c.Creator] = c.Creator
+			data.CreatorNames[c.Creator] = userLabel(apiProvider, c.Creator)
 		}
 	}
 	return data
