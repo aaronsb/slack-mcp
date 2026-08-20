@@ -79,8 +79,6 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		}, nil
 	}
 
-	usersMap := apiProvider.ProvideUsersMap()
-	render := newBodyRenderer(apiProvider)
 	var messages []slack.Message
 	isThread := false
 
@@ -151,23 +149,21 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 	observeTraffic(apiProvider, channelID, messages)
 
 	// Format messages (reverse to oldest-first)
+	r := newMessageRenderer(apiProvider)
 	formatted := make([]map[string]interface{}, 0, len(messages))
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
-		userName := msg.User
-		if user, ok := usersMap[msg.User]; ok {
-			if user.RealName != "" {
-				userName = user.RealName
-			} else {
-				userName = user.Name
-			}
-		}
+		rm := r.Render(msg)
+		userName := rm.Author
 
 		entry := map[string]interface{}{
 			"ts":   msg.Timestamp,
 			"user": userName,
-			"text": render(msg.Text),
+			"text": rm.Body,
 			"time": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
+		}
+		if len(rm.Unresolved) > 0 {
+			entry["unresolved"] = rm.Unresolved
 		}
 
 		if msg.ThreadTimestamp != "" && msg.ThreadTimestamp != msg.Timestamp {

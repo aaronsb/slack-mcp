@@ -91,7 +91,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 	totalScanned := 0
 
 	usersMap := provider.ProvideUsersMap()
-	render := newBodyRenderer(provider)
+	renderer := newMessageRenderer(provider)
 	mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 
 	// Limit channels to scan based on activity
@@ -139,13 +139,10 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 			channelSet[channelName] = true
 
 			// Get author info
-			authorName := "unknown"
+			rm := renderer.Render(msg)
+			authorName := rm.Author
 			msgIsBot := false
 			if user, ok := usersMap[msg.User]; ok {
-				authorName = user.Name
-				if user.RealName != "" {
-					authorName = user.RealName
-				}
 				msgIsBot = user.IsBot
 			}
 
@@ -176,7 +173,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 				"type":      msgType,
 				"channel":   channelName,
 				"author":    authorName,
-				"message":   render(msg.Text),
+				"message":   rm.Body,
 				"timestamp": formatTimestamp(msgTime),
 				"threadId":  fmt.Sprintf("%s:%s", channel.ID, msg.Timestamp),
 				"responded": responded,

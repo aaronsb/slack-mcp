@@ -85,8 +85,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		"reactions":     0,
 	}
 
-	usersMap := provider.ProvideUsersMap()
-	render := newBodyRenderer(provider)
+	renderer := newMessageRenderer(provider)
 	currentCursor := cursor
 	hasMore := true
 	pageCount := 0
@@ -120,7 +119,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 			allMessages = append(allMessages, msg)
 
 			// Analyze each message
-			item := analyzeMessage(msg, usersMap, render)
+			item := analyzeMessage(msg, renderer)
 			if item != nil {
 				importantItems = append(importantItems, item)
 			}
@@ -299,27 +298,21 @@ func isRecentTimeframe(timeframe string) bool {
 	return false
 }
 
-func analyzeMessage(msg slack.Message, usersMap map[string]slack.User, render func(string) string) map[string]interface{} {
+func analyzeMessage(msg slack.Message, renderer *messageRenderer) map[string]interface{} {
 	// Skip if not important
 	if !isImportantMessage(msg) {
 		return nil
 	}
 
-	// Get user info
-	userName := "unknown"
-	if user, ok := usersMap[msg.User]; ok {
-		userName = user.Name
-		if user.RealName != "" {
-			userName = user.RealName
-		}
-	}
-
-	// Build item
+	rm := renderer.Render(msg)
 	item := map[string]interface{}{
-		"author":    userName,
-		"message":   render(msg.Text),
+		"author":    rm.Author,
+		"message":   rm.Body,
 		"timestamp": msg.Timestamp,
 		"type":      "message",
+	}
+	if len(rm.Unresolved) > 0 {
+		item["unresolved"] = rm.Unresolved
 	}
 
 	// Categorize the message

@@ -84,6 +84,7 @@ type conversation struct {
 // reach. Coverage is assembled from this rather than from prose.
 type tick struct {
 	render func(string) string
+	rm     *messageRenderer
 	events []map[string]interface{}
 
 	scanned   int
@@ -197,9 +198,10 @@ func pollHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 	naming := newNameIndex(apiProvider, t)
 	usersMap := apiProvider.ProvideUsersMap()
 	t.render = newBodyRenderer(apiProvider)
+	t.rm = newMessageRenderer(apiProvider)
 
 	observe := func(conv string, msgs []slack.Message) { observeTraffic(apiProvider, conv, msgs) }
-	hydrateConversations(ctx, api, store, hydrated, naming, usersMap, limit, now.Add(-firstLookWindow), observe, t)
+	hydrateConversations(ctx, api, store, hydrated, naming, limit, now.Add(-firstLookWindow), observe, t)
 	tickThreads(ctx, api, internal, store, naming, usersMap, limit, now, t)
 
 	return buildPollResult(t, counts.Threads.UnreadCountByChannel), nil
@@ -242,7 +244,6 @@ func hydrateConversations(
 	store *watermark.Store,
 	conversations []conversation,
 	naming func(conversation) string,
-	usersMap map[string]slack.User,
 	limit int,
 	cutoff time.Time,
 	observe func(string, []slack.Message),
@@ -299,7 +300,7 @@ func hydrateConversations(
 				t.limitReached = true
 				return
 			}
-			t.events = append(t.events, buildEvent(c, msg, where, usersMap, t.render))
+			t.events = append(t.events, buildEvent(c, msg, where, t.rm))
 		}
 	}
 }
@@ -541,7 +542,8 @@ func flattenCounts(counts *provider.ClientCountsResponse) []conversation {
 	return out
 }
 
-func buildEvent(c conversation, msg slack.Message, where string, usersMap map[string]slack.User, render func(string) string) map[string]interface{} {
+func buildEvent(c conversation, msg slack.Message, where string, rm *messageRenderer) map[string]interface{} {
+	rendered := rm.Render(msg)
 	kind := "message"
 	if c.Kind == "dm" {
 		kind = "dm"
@@ -556,9 +558,9 @@ func buildEvent(c conversation, msg slack.Message, where string, usersMap map[st
 		"handle":  handle.Message(c.ID, msg.Timestamp),
 		"kind":    kind,
 		"where":   where,
-		"who":     getUserName(msg.User, usersMap),
+		"who":     rendered.Author,
 		"when":    formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
-		"preview": preview(render(msg.Text)),
+		"preview": preview(rendered.Body),
 	}
 
 	if msg.ThreadTimestamp != "" {

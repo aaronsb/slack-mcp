@@ -66,11 +66,11 @@ func tickThreads(
 				return
 			}
 			t.events = append(t.events, threadEvent(
-				root.Channel, root.ThreadTS, root.LatestReply, root.Text,
+				root.Channel, root.ThreadTS, root.LatestReply,
+				preview(t.rm.RenderText(root.Text)),
 				root.ReplyCount, entry.UnreadReplies,
 				naming(conversation{ID: root.Channel, Kind: "channel"}),
-				getUserName(root.User, usersMap),
-				t.render))
+				t.rm.AuthorByID(root.User)))
 		}
 	}
 
@@ -101,12 +101,13 @@ func tickThreads(
 			t.limitReached = true
 			return
 		}
+		rm := t.rm.Render(*root)
 		t.events = append(t.events, threadEvent(
-			th.Channel, th.ThreadTS, root.LatestReply, root.Text,
+			th.Channel, th.ThreadTS, root.LatestReply,
+			preview(rm.Body),
 			root.ReplyCount, 0,
 			naming(conversation{ID: th.Channel, Kind: "channel"}),
-			getUserName(root.User, usersMap),
-			t.render))
+			rm.Author))
 	}
 }
 
@@ -127,7 +128,7 @@ func threadRoot(ctx context.Context, api *slack.Client, channel, threadTS string
 	return &msgs[0], nil
 }
 
-func threadEvent(channel, threadTS, latestReply, rootText string, replyCount, unread int, where, who string, render func(string) string) map[string]interface{} {
+func threadEvent(channel, threadTS, latestReply, rootPreview string, replyCount, unread int, where, who string) map[string]interface{} {
 	event := map[string]interface{}{
 		// The thread handle, so read opens the whole thread rather than one
 		// reply out of context.
@@ -136,7 +137,7 @@ func threadEvent(channel, threadTS, latestReply, rootText string, replyCount, un
 		"where":      where,
 		"who":        who,
 		"when":       formatTimestamp(parseSlackTimestamp(latestReply)),
-		"preview":    preview(render(rootText)),
+		"preview":    rootPreview,
 		"replyCount": replyCount,
 	}
 	if unread > 0 {

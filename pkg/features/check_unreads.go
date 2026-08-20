@@ -83,8 +83,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 		}, nil
 	}
 	currentUserID := authTest.UserID
-	usersMap := provider.ProvideUsersMap()
-	render := newBodyRenderer(provider)
+	renderer := newMessageRenderer(provider)
 
 	// Initialize result categories
 	unreads := map[string]interface{}{
@@ -151,7 +150,8 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 					continue
 				}
 
-				authorName := getUserName(msg.User, usersMap)
+				rm := renderer.Render(msg)
+				authorName := rm.Author
 				isUrgent := categorizeUrgency(msg.Text) == "high"
 
 				if isUrgent {
@@ -161,7 +161,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 				dm := map[string]interface{}{
 					"type":        "dm",
 					"author":      authorName,
-					"message":     render(msg.Text),
+					"message":     rm.Body,
 					"timestamp":   formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 					"channelId":   channel.ID,
 					"unreadCount": channel.UnreadCount,
@@ -179,7 +179,8 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 
 			for _, msg := range resp.Messages {
 				if strings.Contains(msg.Text, mentionPattern) {
-					authorName := getUserName(msg.User, usersMap)
+					rm := renderer.Render(msg)
+					authorName := rm.Author
 					isUrgent := categorizeUrgency(msg.Text) == "high"
 
 					if isUrgent {
@@ -190,7 +191,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 						"type":      "mention",
 						"channel":   channel.Name,
 						"author":    authorName,
-						"message":   render(msg.Text),
+						"message":   rm.Body,
 						"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 						"channelId": channel.ID,
 						"threadId":  fmt.Sprintf("%s:%s", channel.ID, msg.Timestamp),
@@ -221,8 +222,9 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 				// Get preview of last message
 				if len(resp.Messages) > 0 {
 					lastMsg := resp.Messages[0]
-					authorName := getUserName(lastMsg.User, usersMap)
-					channelInfo["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(render(lastMsg.Text), 100))
+					rm := renderer.Render(lastMsg)
+					authorName := rm.Author
+					channelInfo["lastMessage"] = fmt.Sprintf("%s: %s", authorName, truncateMessage(rm.Body, 100))
 					channelInfo["timestamp"] = formatTimestamp(parseSlackTimestamp(lastMsg.Timestamp))
 				}
 
