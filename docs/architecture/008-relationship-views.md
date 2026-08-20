@@ -58,6 +58,27 @@ second system of record for content. Rejected; activity is metadata.
 
 ## Decision
 
+### Terminology
+
+Implementation names come from the established literatures, not this
+project's working analogies:
+
+- **Temporal interaction graph** — the whole structure: nodes and edges
+  whose presence is time-qualified (temporal-networks literature).
+- **Inferred edges** — every relationship is computed from observation
+  events, never declared or stored (organizational network analysis; the
+  informal graph inferred from interaction metadata).
+- **Two time constants** — the durable lifecycle plane (estate: intervals,
+  unbounded history) beneath the decaying activity plane (attention:
+  strips inside the sliding ninety-day window).
+- **Temporal motif** — a named time-qualified shape searched for in the
+  graph (dynamic-networks literature). Each view instantiates one:
+  `convergence` is the co-activity motif, `initiatives` the
+  creator-activity motif, handoff detection the phase-transition motif.
+- **Projection / read model** (CQRS) — the folds are projections of the
+  event ledgers; a view is a parameterized read model executing a motif
+  query.
+
 ### The projection gains ownership
 
 `estate.channel/v1` gains `creator` (user ID) and `created` (Slack's
