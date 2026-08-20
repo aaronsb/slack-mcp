@@ -1,18 +1,18 @@
 {
   "name": "@aaronsb/slack-mcp",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "MCP server for Slack workspaces using session tokens. Automatic browser-based token extraction, stealth reads, channel caching.",
   "main": "bin/index.js",
   "bin": {
     "slack-mcp": "bin/index.js"
   },
   "optionalDependencies": {
-    "@aaronsb/slack-mcp-darwin-amd64": "2.1.0",
-    "@aaronsb/slack-mcp-darwin-arm64": "2.1.0",
-    "@aaronsb/slack-mcp-linux-amd64": "2.1.0",
-    "@aaronsb/slack-mcp-linux-arm64": "2.1.0",
-    "@aaronsb/slack-mcp-windows-amd64": "2.1.0",
-    "@aaronsb/slack-mcp-windows-arm64": "2.1.0"
+    "@aaronsb/slack-mcp-darwin-amd64": "2.1.1",
+    "@aaronsb/slack-mcp-darwin-arm64": "2.1.1",
+    "@aaronsb/slack-mcp-linux-amd64": "2.1.1",
+    "@aaronsb/slack-mcp-linux-arm64": "2.1.1",
+    "@aaronsb/slack-mcp-windows-amd64": "2.1.1",
+    "@aaronsb/slack-mcp-windows-arm64": "2.1.1"
   },
   "repository": {
     "type": "git",
