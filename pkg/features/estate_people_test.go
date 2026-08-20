@@ -208,3 +208,40 @@ func searchMatch(channelID, ts string) map[string]any {
 		"channel": map[string]any{"id": channelID, "name": "eng"},
 	}
 }
+
+func TestCompiledExecutorRefusesAReadOnlyLedger(t *testing.T) {
+	srv := slacktest.New(t)
+	writer := bootedProvider(t, srv) // wins the attention writer election
+	_ = writer
+	reader := bootedProvider(t, srv) // loses it
+
+	srv.ResetCalls()
+	out := estateViewOut(t, reader, map[string]any{"view": "person", "person": "schen"})
+
+	if n := srv.Calls("search.messages"); n != 0 {
+		t.Fatalf("read-only instance compiled anyway: %d search calls", n)
+	}
+	if !strings.Contains(out, "fold executor, 0 Slack calls") {
+		t.Fatalf("coverage does not admit the fold-only answer:\n%s", out)
+	}
+}
+
+func TestDMDaysCountOnceWhenBothSidesObserved(t *testing.T) {
+	srv := slacktest.New(t)
+	var dm slack.Channel
+	dm.ID = "D1"
+	dm.IsIM = true
+	dm.User = "U2"
+	srv.SeedChannels(dm)
+	ap := bootedProvider(t, srv)
+
+	// Day 1: both sides of the DM observed. Day 2: only the operator's side.
+	seedActivity(ap, "D1", "U1", 1, 2)
+	seedActivity(ap, "D1", "U2", 1)
+
+	out := estateViewOut(t, ap, map[string]any{"view": "person", "person": "bockeliea"})
+
+	if !strings.Contains(out, "Sarah Chen — 1 co-active days + 1 DM days") {
+		t.Fatalf("DM day counting wrong (want 1 co-active + 1 DM, both-observed day counted once):\n%s", out)
+	}
+}

@@ -151,7 +151,7 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 		if person == "" {
 			return &FeatureResult{Success: false, Message: "The person view needs person='<@handle, name, or user ID>'"}, nil
 		}
-		return result(personView(ctx, apiProvider, person, viewDays(params, 30), false), "person view")
+		return result(personView(ctx, apiProvider, person, viewDays(params, 30)), "person view")
 
 	case "initiatives":
 		return result(initiativesView(apiProvider, viewDays(params, 7)), "initiatives view")

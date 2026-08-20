@@ -40,17 +40,19 @@ func (ap *ApiProvider) CompileActivity(ctx context.Context, people map[string]st
 	stats := CompiledStats{Truncated: map[string]int{}, Failed: map[string]string{}}
 	api, err := ap.Provide()
 	if err != nil {
-		stats.Failed["*"] = err.Error()
+		stats.Failed["all"] = err.Error()
 		return stats
 	}
 	start := time.Now()
 	after := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
 
 	first := true
+	attempted := map[string]bool{}
 	for id, handle := range people {
 		if handle == "" || id == "" {
 			continue
 		}
+		attempted[handle] = true
 		query := fmt.Sprintf("from:@%s after:%s", handle, after)
 		page := 1
 		for {
@@ -59,6 +61,11 @@ func (ap *ApiProvider) CompileActivity(ctx context.Context, people map[string]st
 				case <-time.After(compiledPace):
 				case <-ctx.Done():
 					stats.Failed[handle] = ctx.Err().Error()
+					for _, h := range people {
+						if !attempted[h] {
+							stats.Failed[h] = "not attempted (cancelled)"
+						}
+					}
 					stats.Elapsed = time.Since(start)
 					return stats
 				}

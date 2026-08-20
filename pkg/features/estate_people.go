@@ -45,6 +45,25 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 			out[ch.ID] = convInfo{Label: "#" + ch.Name}
 		}
 	}
+	// The estate fold still names conversations the snapshot has dropped —
+	// activity in a since-deleted channel renders as a dated fact, never as
+	// a raw internal ID.
+	for id, rec := range ap.EstateChannels() {
+		if _, ok := out[id]; ok {
+			continue
+		}
+		p := rec.Props
+		switch {
+		case p.IsIM:
+			out[id] = convInfo{Label: "DM " + p.User, IsIM: true, Counterpart: p.User}
+		case p.Name != "":
+			label := "#" + p.Name
+			if rec.Gone != nil {
+				label += " (gone)"
+			}
+			out[id] = convInfo{Label: label}
+		}
+	}
 	return out
 }
 
@@ -116,9 +135,10 @@ func resolvePeople(ap *provider.ApiProvider, inputs []string) (map[string]string
 // observed encounters, when a writable attention ledger exists to receive
 // the observations. Returns stats when the compiled executor ran.
 func ensureCoverage(ctx context.Context, ap *provider.ApiProvider, ids map[string]string, since string, days, pages int) *provider.CompiledStats {
-	if _, ok := ap.AttentionStats(); !ok {
-		// No ledger to receive the observations; compiling would discard
-		// its own results.
+	if !ap.AttentionWritable() {
+		// No writable ledger to receive the observations; compiling would
+		// discard its own results. A read-only instance answers from the
+		// fold and says so in coverage.
 		return nil
 	}
 	need := map[string]string{}
@@ -172,12 +192,11 @@ type personViewData struct {
 	Labels       map[string]convInfo
 	Names        map[string]string
 	Miss         *provider.PersonResolution
-	Deeper       bool
 	Handle       string
 }
 
-func personView(ctx context.Context, ap *provider.ApiProvider, person string, days int, deeper bool) *personViewData {
-	data := &personViewData{Days: days, Deeper: deeper}
+func personView(ctx context.Context, ap *provider.ApiProvider, person string, days int) *personViewData {
+	data := &personViewData{Days: days}
 	ids, labels, misses := resolvePeople(ap, []string{person})
 	if len(misses) > 0 {
 		data.Miss = &misses[0]
@@ -214,9 +233,18 @@ func personView(ctx context.Context, ap *provider.ApiProvider, person string, da
 	data.Labels = convLabels(ap)
 	data.Names = map[string]string{}
 
-	// Counterparts: co-active days in shared conversations, DM days counted
-	// through the COUNTERPART join.
-	co := map[string]*counterpartRow{}
+	// Counterparts: distinct co-active days in shared conversations, DM
+	// days counted through the COUNTERPART join. Day sets, not increments —
+	// the same calendar day shared across three channels is one co-active
+	// day, and a DM day where both sides were observed counts once.
+	coDays := map[string]map[string]struct{}{}
+	dmDays := map[string]map[string]struct{}{}
+	mark := func(m map[string]map[string]struct{}, u, day string) {
+		if m[u] == nil {
+			m[u] = map[string]struct{}{}
+		}
+		m[u][day] = struct{}{}
+	}
 	plane := ap.AttentionByConversation()
 	for conv := range byConv {
 		own := map[string]struct{}{}
@@ -232,31 +260,35 @@ func personView(ctx context.Context, ap *provider.ApiProvider, person string, da
 			if _, active := own[day]; !active {
 				continue
 			}
+			counterpartSeen := false
 			for _, u := range users {
 				if u == id {
 					continue
 				}
-				row, ok := co[u]
-				if !ok {
-					row = &counterpartRow{ID: u}
-					co[u] = row
+				mark(coDays, u, day)
+				if u == counterpart {
+					counterpartSeen = true
 				}
-				row.CoDays++
 			}
-			// A day active in an IM counts toward the counterpart even
-			// when only the seed's side was observed.
-			if isIM && counterpart != "" && counterpart != id {
-				row, ok := co[counterpart]
-				if !ok {
-					row = &counterpartRow{ID: counterpart}
-					co[counterpart] = row
-				}
-				row.DMDays++
+			// An IM day where only the seed's side was observed still
+			// belongs to the counterpart; a both-observed day already
+			// counted above.
+			if isIM && counterpart != "" && counterpart != id && !counterpartSeen {
+				mark(dmDays, counterpart, day)
 			}
 		}
 	}
-	for _, row := range co {
-		data.Counterparts = append(data.Counterparts, *row)
+	cpIDs := map[string]struct{}{}
+	for u := range coDays {
+		cpIDs[u] = struct{}{}
+	}
+	for u := range dmDays {
+		cpIDs[u] = struct{}{}
+	}
+	for u := range cpIDs {
+		data.Counterparts = append(data.Counterparts, counterpartRow{
+			ID: u, CoDays: len(coDays[u]), DMDays: len(dmDays[u]),
+		})
 	}
 	sort.Slice(data.Counterparts, func(i, j int) bool {
 		ti := data.Counterparts[i].CoDays + data.Counterparts[i].DMDays
@@ -342,6 +374,14 @@ func initiativesView(ap *provider.ApiProvider, days int) *initiativesViewData {
 	for _, ch := range ap.GetCachedChannels() {
 		if !ch.IsIM && !ch.IsMpIM && ch.Creator != "" {
 			creatorByConv[ch.ID] = ch.Creator
+		}
+	}
+	// The estate fold supplies creators the snapshot no longer holds, so a
+	// channel deleted mid-window keeps its movement attributed.
+	for id, rec := range ap.EstateChannels() {
+		p := rec.Props
+		if _, ok := creatorByConv[id]; !ok && !p.IsIM && !p.IsMpim && p.Creator != "" {
+			creatorByConv[id] = p.Creator
 		}
 	}
 

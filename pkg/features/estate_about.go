@@ -32,7 +32,7 @@ type aboutViewData struct {
 
 func aboutView(ctx context.Context, ap *provider.ApiProvider, person string, days int, deeper bool) *aboutViewData {
 	data := &aboutViewData{Deeper: deeper}
-	data.Person = personView(ctx, ap, person, days, deeper)
+	data.Person = personView(ctx, ap, person, days)
 	if data.Person.Miss != nil {
 		return data
 	}
@@ -62,7 +62,7 @@ func aboutView(ctx context.Context, ap *provider.ApiProvider, person string, day
 		data.Plan = append(data.Plan, readingStep{
 			Why: fmt.Sprintf("%s — top counterpart as observed (%d co-active days) — read for the working relationship",
 				data.Person.Names[top.ID], top.CoDays+top.DMDays),
-			Next: fmt.Sprintf("estate view='person' person='%s'", data.Person.Names[top.ID]),
+			Next: fmt.Sprintf("estate view='person' person='%s'", top.ID),
 		})
 	}
 
@@ -333,6 +333,10 @@ func formatAboutView(v *aboutViewData) string {
 	}
 
 	if v.Convergence != nil {
+		for i := range v.Convergence.Misses {
+			renderMiss(&b, &v.Convergence.Misses[i])
+			b.WriteString("\n")
+		}
 		b.WriteString("Second hop — where the circle converges:\n")
 		for i, cell := range v.Convergence.Cells {
 			if i >= 5 {
@@ -350,7 +354,25 @@ func formatAboutView(v *aboutViewData) string {
 
 	compiled := v.Person.Compiled
 	if v.Convergence != nil && v.Convergence.Compiled != nil {
-		compiled = v.Convergence.Compiled
+		if compiled == nil {
+			compiled = v.Convergence.Compiled
+		} else {
+			merged := *compiled
+			merged.Calls += v.Convergence.Compiled.Calls
+			merged.Elapsed += v.Convergence.Compiled.Elapsed
+			merged.Matches += v.Convergence.Compiled.Matches
+			merged.Truncated = map[string]int{}
+			merged.Failed = map[string]string{}
+			for _, src := range []*provider.CompiledStats{compiled, v.Convergence.Compiled} {
+				for k, n := range src.Truncated {
+					merged.Truncated[k] = n
+				}
+				for k, m := range src.Failed {
+					merged.Failed[k] = m
+				}
+			}
+			compiled = &merged
+		}
 	}
 	renderPlaneFooter(&b, v.Person.Coverage, v.Person.Attention, compiled)
 	if !v.Deeper {

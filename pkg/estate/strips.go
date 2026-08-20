@@ -15,8 +15,8 @@ type Strip struct {
 }
 
 // Strips folds encounters into maximal runs. Hour resolution collapses to
-// days here; the hour plane is queried separately. Encounters outside no
-// window are filtered — callers window first.
+// days here; the hour plane is queried separately. No windowing happens
+// here — callers window first.
 func Strips(encs []Encounter, gapDays int) []Strip {
 	if len(encs) == 0 {
 		return nil

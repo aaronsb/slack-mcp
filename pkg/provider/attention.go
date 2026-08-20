@@ -98,6 +98,14 @@ func (ap *ApiProvider) AttentionStats() (estate.AttentionStats, bool) {
 	return att.Stats(), true
 }
 
+// AttentionWritable reports whether this instance won the attention
+// ledger's writer election — the gate for the compiled executor, whose
+// results would otherwise be discarded.
+func (ap *ApiProvider) AttentionWritable() bool {
+	att := ap.attn()
+	return att != nil && !att.ReadOnly()
+}
+
 // AttentionInfo is AttentionStats in one coverage-friendly value.
 type AttentionInfo struct {
 	Available bool
