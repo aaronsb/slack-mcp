@@ -245,3 +245,54 @@ func TestDMDaysCountOnceWhenBothSidesObserved(t *testing.T) {
 		t.Fatalf("DM day counting wrong (want 1 co-active + 1 DM, both-observed day counted once):\n%s", out)
 	}
 }
+
+func TestFamiliesPagingNamesTheNextCall(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(
+		famChannel("C1", "acme-sales", "U1", estateBase),
+		famChannel("C2", "acme-implementation", "U1", estateBase),
+		famChannel("C3", "globex-sales", "U1", estateBase),
+		famChannel("C4", "globex-support", "U1", estateBase),
+	)
+	ap := bootedProvider(t, srv)
+
+	page1 := estateViewOut(t, ap, map[string]any{"view": "families", "limit": float64(1)})
+	if !strings.Contains(page1, "showing 1–1") {
+		t.Fatalf("window not stated:\n%s", page1)
+	}
+	if !strings.Contains(page1, "estate view='families' offset=1") {
+		t.Fatalf("no exact next call:\n%s", page1)
+	}
+
+	page2 := estateViewOut(t, ap, map[string]any{"view": "families", "limit": float64(1), "offset": float64(1)})
+	if !strings.Contains(page2, "showing 2–2") {
+		t.Fatalf("offset did not advance the window:\n%s", page2)
+	}
+	// The two pages show different families.
+	if strings.Contains(page1, "### globex") == strings.Contains(page2, "### globex") {
+		t.Fatalf("pages show the same family:\npage1:\n%s\npage2:\n%s", page1, page2)
+	}
+}
+
+func TestPersonFootprintPagesWithOffset(t *testing.T) {
+	srv := slacktest.New(t)
+	ap := bootedProvider(t, srv)
+
+	// Twelve conversations exceed the ten-surface window.
+	for i := 0; i < 12; i++ {
+		seedActivity(ap, fmt.Sprintf("C%d", i+1), "U2", 1)
+	}
+
+	out := estateViewOut(t, ap, map[string]any{"view": "person", "person": "schen"})
+	if !strings.Contains(out, "Active surfaces 1–10 of 12") {
+		t.Fatalf("window not stated:\n%s", out)
+	}
+	if !strings.Contains(out, "person='schen' offset=10") {
+		t.Fatalf("no exact next call:\n%s", out)
+	}
+
+	page2 := estateViewOut(t, ap, map[string]any{"view": "person", "person": "schen", "offset": float64(10)})
+	if !strings.Contains(page2, "Active surfaces 11–12 of 12") {
+		t.Fatalf("offset did not advance:\n%s", page2)
+	}
+}

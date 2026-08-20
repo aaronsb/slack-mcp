@@ -199,6 +199,7 @@ type personViewData struct {
 	Names        map[string]string
 	Miss         *provider.PersonResolution
 	Handle       string
+	Offset       int
 }
 
 func personView(ctx context.Context, ap *provider.ApiProvider, person string, days int) *personViewData {
@@ -363,6 +364,7 @@ type initiativeRow struct {
 
 type initiativesViewData struct {
 	Days      int
+	Offset    int
 	Rows      []initiativeRow
 	Names     map[string]string
 	Labels    map[string]convInfo
@@ -454,6 +456,7 @@ type convergenceCell struct {
 
 type convergenceViewData struct {
 	Days      int
+	Offset    int
 	People    map[string]string // id -> label
 	Baseline  map[string]int    // id -> active days in window
 	Cells     []convergenceCell

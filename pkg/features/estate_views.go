@@ -51,6 +51,11 @@ var EstateViews = &Feature{
 				"description": "families only: maximum families to return (default 10, max 50)",
 				"default":     10,
 			},
+			"offset": map[string]interface{}{
+				"type":        "number",
+				"description": "Skip the first N items of the view's ranked lists — a cap never prevents paging; capped responses name the exact next call",
+				"default":     0,
+			},
 		},
 		"required": []string{"view"},
 	},
@@ -96,6 +101,15 @@ type estateFamiliesData struct {
 	PersonLabel   string
 	PersonMiss    *provider.PersonResolution
 	Shown         int
+	Offset        int
+	Limit         int
+}
+
+func viewOffset(params map[string]interface{}) int {
+	if o, ok := params["offset"].(float64); ok && int(o) > 0 {
+		return int(o)
+	}
+	return 0
 }
 
 func viewDays(params map[string]interface{}, def int) int {
@@ -144,17 +158,21 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 				limit = 1
 			}
 		}
-		data := familiesData(apiProvider, search, person, limit)
+		data := familiesData(apiProvider, search, person, limit, viewOffset(params))
 		return result(data, fmt.Sprintf("families view: %d of %d families", data.Shown, data.TotalFamilies))
 
 	case "person":
 		if person == "" {
 			return &FeatureResult{Success: false, Message: "The person view needs person='<@handle, name, or user ID>'"}, nil
 		}
-		return result(personView(ctx, apiProvider, person, viewDays(params, 30)), "person view")
+		pv := personView(ctx, apiProvider, person, viewDays(params, 30))
+		pv.Offset = viewOffset(params)
+		return result(pv, "person view")
 
 	case "initiatives":
-		return result(initiativesView(apiProvider, viewDays(params, 7)), "initiatives view")
+		iv := initiativesView(apiProvider, viewDays(params, 7))
+		iv.Offset = viewOffset(params)
+		return result(iv, "initiatives view")
 
 	case "convergence":
 		raw, _ := params["people"].(string)
@@ -162,7 +180,9 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 		if len(people) < 2 {
 			return &FeatureResult{Success: false, Message: "The convergence view needs people='a,b[,c...]' — at least two"}, nil
 		}
-		return result(convergenceView(ctx, apiProvider, people, viewDays(params, 14)), "convergence view")
+		cv := convergenceView(ctx, apiProvider, people, viewDays(params, 14))
+		cv.Offset = viewOffset(params)
+		return result(cv, "convergence view")
 
 	case "about":
 		if person == "" {
@@ -181,8 +201,8 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 
 // familiesData executes the families view: stem grouping ⋈ lifecycle ⋈
 // creator, from local state only.
-func familiesData(apiProvider *provider.ApiProvider, search, person string, limit int) *estateFamiliesData {
-	data := &estateFamiliesData{Search: search, CreatorNames: map[string]string{}}
+func familiesData(apiProvider *provider.ApiProvider, search, person string, limit, offset int) *estateFamiliesData {
+	data := &estateFamiliesData{Search: search, CreatorNames: map[string]string{}, Offset: offset, Limit: limit}
 	data.Coverage = apiProvider.EstateCoverage()
 	data.Attention = apiProvider.AttentionInfo()
 
@@ -311,6 +331,11 @@ func familiesData(apiProvider *provider.ApiProvider, search, person string, limi
 	})
 
 	data.TotalFamilies = len(fams)
+	if offset >= len(fams) {
+		fams = nil
+	} else {
+		fams = fams[offset:]
+	}
 	if len(fams) > limit {
 		fams = fams[:limit]
 	}
@@ -384,8 +409,8 @@ func formatFamiliesView(view *estateFamiliesData) string {
 	if view.GoneIncluded > 0 {
 		fmt.Fprintf(&b, ", %d of them gone channels only the estate still remembers", view.GoneIncluded)
 	}
-	if view.Shown < view.TotalFamilies {
-		fmt.Fprintf(&b, "; showing %d — narrow with search='stem' or raise limit", view.Shown)
+	if view.Offset > 0 || view.Offset+view.Shown < view.TotalFamilies {
+		fmt.Fprintf(&b, "; showing %d–%d", view.Offset+1, view.Offset+view.Shown)
 	}
 	b.WriteString(".\n\n")
 
@@ -440,6 +465,13 @@ func formatFamiliesView(view *estateFamiliesData) string {
 	} else {
 		fmt.Fprintf(&b, "Activity plane: %d encounters, %d people, %d conversations (%s → %s), as observed by this agent's reading.\n",
 			att.Stats.Events, att.Stats.Users, att.Stats.Convs, att.Stats.FirstDay, att.Stats.LastDay)
+	}
+	if view.Offset+view.Shown < view.TotalFamilies {
+		next := fmt.Sprintf("estate view='families' offset=%d", view.Offset+view.Shown)
+		if view.Search != "" {
+			next += fmt.Sprintf(" search='%s'", view.Search)
+		}
+		fmt.Fprintf(&b, "**Next page:** %d more families — %s\n", view.TotalFamilies-view.Offset-view.Shown, next)
 	}
 	b.WriteString("**Next:** whole picture: estate view='about' person='@<handle>' | read a channel: catch-up channel='#<name>' | narrow: estate view='families' search='<stem>'")
 

@@ -39,7 +39,7 @@ func aboutView(ctx context.Context, ap *provider.ApiProvider, person string, day
 
 	// The founder plane: families anchored on the seed, via the same path
 	// the families view takes.
-	data.Families = familiesData(ap, "", person, 5)
+	data.Families = familiesData(ap, "", person, 5, 0)
 
 	// The reading plan: top-ranked handles with the evidence that ranked
 	// them and the question each read answers.
@@ -82,6 +82,19 @@ func aboutView(ctx context.Context, ap *provider.ApiProvider, person string, day
 }
 
 // ---- renderers ----
+
+// pageWindow slices a ranked list at [offset, offset+cap) and reports how
+// many items remain beyond the window — a cap never prevents paging.
+func pageWindow(total, offset, cap_ int) (from, to, remaining int) {
+	if offset >= total {
+		return 0, 0, 0
+	}
+	to = offset + cap_
+	if to > total {
+		to = total
+	}
+	return offset, to, total - to
+}
 
 func renderPlaneFooter(b *strings.Builder, cov provider.EstateCoverageInfo, att provider.AttentionInfo, compiled *provider.CompiledStats) {
 	b.WriteString("---\n")
@@ -148,15 +161,14 @@ func formatPersonView(v *personViewData) string {
 		fmt.Fprintf(&b, "Founder of %d channels: #%s\n\n", len(v.Created), strings.Join(v.Created, ", #"))
 	}
 
+	from, to, remaining := pageWindow(len(v.Footprint), v.Offset, 10)
 	if len(v.Footprint) == 0 {
 		b.WriteString("No activity observed in the window.\n")
+	} else if from == to {
+		fmt.Fprintf(&b, "Offset %d is past the end (%d surfaces).\n", v.Offset, len(v.Footprint))
 	} else {
-		b.WriteString("Active surfaces, as observed:\n")
-		for i, row := range v.Footprint {
-			if i >= 10 {
-				fmt.Fprintf(&b, "- … %d more\n", len(v.Footprint)-10)
-				break
-			}
+		fmt.Fprintf(&b, "Active surfaces %d–%d of %d, as observed:\n", from+1, to, len(v.Footprint))
+		for _, row := range v.Footprint[from:to] {
 			line := fmt.Sprintf("- %s — %d active days", labelFor(v.Labels, row.Conv), row.Days)
 			if len(row.Strips) > 0 {
 				last := row.Strips[len(row.Strips)-1]
@@ -164,22 +176,28 @@ func formatPersonView(v *personViewData) string {
 			}
 			b.WriteString(line + "\n")
 		}
+		if remaining > 0 {
+			fmt.Fprintf(&b, "… %d more — next page: estate view='person' person='%s' offset=%d\n", remaining, v.Handle, to)
+		}
 		b.WriteString("\n")
 	}
 
 	if len(v.Counterparts) > 0 {
-		b.WriteString("Top counterparts, as observed:\n")
-		for i, row := range v.Counterparts {
-			if i >= 5 {
-				break
+		cfrom, cto, cleft := pageWindow(len(v.Counterparts), v.Offset, 5)
+		if cfrom < cto {
+			fmt.Fprintf(&b, "Counterparts %d–%d of %d, as observed:\n", cfrom+1, cto, len(v.Counterparts))
+			for _, row := range v.Counterparts[cfrom:cto] {
+				line := fmt.Sprintf("- %s — %d co-active days", v.Names[row.ID], row.CoDays)
+				if row.DMDays > 0 {
+					line += fmt.Sprintf(" + %d DM days", row.DMDays)
+				}
+				b.WriteString(line + "\n")
 			}
-			line := fmt.Sprintf("- %s — %d co-active days", v.Names[row.ID], row.CoDays)
-			if row.DMDays > 0 {
-				line += fmt.Sprintf(" + %d DM days", row.DMDays)
+			if cleft > 0 {
+				fmt.Fprintf(&b, "… %d more — next page: estate view='person' person='%s' offset=%d\n", cleft, v.Handle, cto)
 			}
-			b.WriteString(line + "\n")
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	}
 
 	if v.Parallelism != nil && len(v.Parallelism) > 0 {
@@ -206,11 +224,8 @@ func formatInitiativesView(v *initiativesViewData) string {
 	if len(v.Rows) == 0 {
 		b.WriteString("No channel activity observed in the window. The view reads the attention ledger, so it only knows conversations this agent has read.\n\n")
 	}
-	for i, row := range v.Rows {
-		if i >= 10 {
-			fmt.Fprintf(&b, "… %d more creators with observed movement\n\n", len(v.Rows)-10)
-			break
-		}
+	rfrom, rto, rleft := pageWindow(len(v.Rows), v.Offset, 10)
+	for _, row := range v.Rows[rfrom:rto] {
 		fmt.Fprintf(&b, "### %s — %d channel(s) moving\n", v.Names[row.Creator], len(row.Channels))
 		if !row.CreatorActive {
 			b.WriteString("(creator not observed in these channels this window)\n")
@@ -219,6 +234,9 @@ func formatInitiativesView(v *initiativesViewData) string {
 			fmt.Fprintf(&b, "- %s — %d active days, %d people observed\n", labelFor(v.Labels, ch.Conv), ch.ActiveDays, ch.People)
 		}
 		b.WriteString("\n")
+	}
+	if rleft > 0 {
+		fmt.Fprintf(&b, "… %d more creators with observed movement — next page: estate view='initiatives' days=%d offset=%d\n\n", rleft, v.Days, rto)
 	}
 	renderPlaneFooter(&b, v.Coverage, v.Attention, nil)
 	b.WriteString("**Next:** read a moving channel: catch-up channel='#<name>' | the people: estate view='person' person='@<handle>'")
@@ -246,17 +264,18 @@ func formatConvergenceView(v *convergenceViewData) string {
 	if len(v.Cells) == 0 {
 		b.WriteString("No co-active windows observed for this group.\n\n")
 	} else {
-		b.WriteString("Densest co-occurrence windows, as observed:\n")
-		for i, cell := range v.Cells {
-			if i >= 10 {
-				break
-			}
+		cfrom, cto, cleft := pageWindow(len(v.Cells), v.Offset, 10)
+		fmt.Fprintf(&b, "Densest co-occurrence windows %d–%d of %d, as observed:\n", cfrom+1, cto, len(v.Cells))
+		for _, cell := range v.Cells[cfrom:cto] {
 			seen := make([]string, 0, len(cell.Seen))
 			for _, id := range cell.Seen {
 				seen = append(seen, v.People[id])
 			}
 			fmt.Fprintf(&b, "- %s — co-active %d day(s), %s → %s (%s)\n",
 				labelFor(v.Labels, cell.Conv), cell.CoDays, cell.First, cell.Last, strings.Join(seen, ", "))
+		}
+		if cleft > 0 {
+			fmt.Fprintf(&b, "… %d more — next page: same call with offset=%d\n", cleft, cto)
 		}
 		b.WriteString("\n")
 	}
@@ -324,6 +343,7 @@ func formatAboutView(v *aboutViewData) string {
 		b.WriteString("\n")
 	}
 
+	b.WriteString("(Summary view — full lists page through view='person', view='families', view='convergence'.)\n\n")
 	if len(v.Plan) > 0 {
 		b.WriteString("Reading plan (ranked; depth is yours):\n")
 		for i, step := range v.Plan {
