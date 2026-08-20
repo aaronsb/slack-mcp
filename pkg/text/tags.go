@@ -16,6 +16,7 @@ var (
 	channelTag = regexp.MustCompile(`<#([CDG][A-Z0-9]+)(?:\|([^>]*))?>`)
 	bangTag    = regexp.MustCompile(`<!(here|channel|everyone)(?:\|@?[^>]*)?>`)
 	groupTag   = regexp.MustCompile(`<!subteam\^([A-Z0-9]+)(?:\|@?([^>]*))?>`)
+	linkTag    = regexp.MustCompile(`<((?:https?://|mailto:|tel:)[^>|]*)(?:\|([^>]*))?>`)
 )
 
 // TagKind names what a tag refers to, for the resolver callback.
@@ -74,5 +75,20 @@ func ResolveTagsReport(s string, resolve func(kind TagKind, id, label string) (s
 		return m
 	})
 	s = bangTag.ReplaceAllString(s, "@$1")
+	s = linkTag.ReplaceAllStringFunc(s, func(m string) string {
+		parts := linkTag.FindStringSubmatch(m)
+		return flattenLink(parts[1], parts[2])
+	})
 	return s, unresolved
+}
+
+// flattenLink renders Slack's <url|label> form. A label with a space is
+// prose and keeps the url beside it; a label without one is the url
+// itself, usually elided, and the full url outranks it.
+func flattenLink(url, label string) string {
+	bare := strings.TrimPrefix(strings.TrimPrefix(url, "mailto:"), "tel:")
+	if strings.Contains(strings.TrimSpace(label), " ") {
+		return label + " (" + bare + ")"
+	}
+	return bare
 }
