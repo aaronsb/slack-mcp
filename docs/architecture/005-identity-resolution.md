@@ -4,6 +4,11 @@
 
 Proposed
 
+Amended: step 4 of the ladder now returns ranked candidates with evidence
+instead of a hint to search — a miss must cost the agent zero extra hops.
+Partially implemented: `ResolvePerson` runs the ladder behind `search from:`;
+rings, encounter recency, and the remaining person parameters are open.
+
 ## Context
 
 ADR-003 requires that parameters be answerable from what the caller knows, and lists
@@ -110,14 +115,25 @@ Precedence, evaluated in order, entirely against cached state:
 2. **Exact display name or real name**, unique in the workspace — resolve.
 3. **Prefix match** across handle, display name, and real name — return candidates ranked by
    encounter recency.
-4. **No match** — return `resolved: false` with a reason and the search fallback named.
+4. **No match** — run the directory search inline and return the ranked
+   near-matches with their evidence. A miss is a candidate set, never a
+   pointer to another call: the extra reasoning hop was the failure being
+   fixed.
 
-Step 4 is a result, not an empty list:
+Step 4 is a result the caller can act on directly:
 
 ```json
-{ "resolved": false, "reason": "not_encountered",
-  "hint": "list-users query='dana' searches the full directory" }
+{ "resolved": false, "reason": "ambiguous", "candidates": [
+    { "handle": "chanceyc", "displayName": "Clayton Chancey",
+      "title": "Head of AI Strategy" },
+    { "handle": "cpeters", "displayName": "Clay Peterson",
+      "title": "Design" } ] }
 ```
+
+An empty candidate set splits three ways on the estate's coverage
+(ADR-007): `tombstoned` — the person existed and left, returned with dated
+exits; `never_seen` — absent from a completed enumeration; `unswept` — no
+full sweep has happened and absence cannot be asserted.
 
 ### Self-contained means no network
 
