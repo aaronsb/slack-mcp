@@ -11,6 +11,7 @@ import (
 
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/version"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -34,9 +35,11 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 
 	serverName := fmt.Sprintf("Slack MCP Server (%s)", personality)
 
+	// The build stamps version.Version by ldflags; a literal here drifted to
+	// 2.0.0 while releases went on without it (#87).
 	s := server.NewMCPServer(
 		serverName,
-		"2.0.0",
+		version.Version,
 		server.WithLogging(),
 		server.WithRecovery(),
 	)
