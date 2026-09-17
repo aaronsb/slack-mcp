@@ -1,6 +1,6 @@
 # Architecture Decisions
 
-Seven ADRs, and one argument running through the last five.
+Eleven ADRs, and one argument running through the last nine.
 
 ## What this corpus argues
 
@@ -66,6 +66,7 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 | [008](008-relationship-views.md) | Relationship Views | Accepted | Implemented — families/person/initiatives/convergence/about views, encounter observer, compiled executor (#62, #65, #66, stage 3 PR) |
 | [009](009-tool-surface-recomposition.md) | Tool Surface Recomposition | Proposed | Not started — 17 tools → 8 by the verb/noun/parameter assignment rule; ships at v2.0.0, supersedes #49 |
 | [010](010-batch-executor.md) | The Batch Executor | Accepted | One-shot read batches + saved playbooks + the frequency hint |
+| [011](011-time-flows-down-the-page.md) | Time Flows Down the Page | Accepted | Every rendered message list is oldest-first; fetches stay newest-first so caps keep the newest |
 
 ### Auth — how tokens are obtained
 
