@@ -198,6 +198,10 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 		}
 	}
 
+	// The scan grouped mentions by channel; the reader gets one timeline,
+	// oldest-first (ADR-011).
+	oldestFirstByThreadID(mentions)
+
 	// Build channels list
 	channelsList := []string{}
 	for ch := range channelSet {
