@@ -147,6 +147,28 @@ jobs:
           [ "$fail" = 0 ] || { echo "Run 'make version-sync VERSION=$VERSION' and commit the result."; exit 1; }
           echo "server.json and its npm package both say $VERSION"
 
+      # npm acknowledges a publish before the version is fetchable: v2.3.0's
+      # publish returned "being processed" at 17:50:19 and the registry's
+      # validation got a 404 for the wrapper at 17:51:07 (#89). The registry
+      # fetches the package to validate server.json, so this job waits until
+      # npm serves the version. --prefer-online revalidates each attempt
+      # instead of trusting a cached miss.
+      - name: Wait for npm to serve the wrapper
+        run: |
+          set -euo pipefail
+          NAME=$(node -p "require('./server.json').packages[0].identifier")
+          VERSION="${GITHUB_REF_NAME#v}"
+          DEADLINE=$((SECONDS + 600))
+          until npm view --prefer-online "$NAME@$VERSION" version >/dev/null 2>&1; do
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              echo "$NAME@$VERSION is still not on npm after 10 minutes."
+              exit 1
+            fi
+            echo "$NAME@$VERSION not on npm yet; retrying in 15s..."
+            sleep 15
+          done
+          echo "npm serves $NAME@$VERSION"
+
       # No secret. The registry validates the token's issuer and audience, then
       # grants io.github.<repository_owner>/* from the repository_owner claim —
       # which means it needs no registry-side configuration, and equally offers
