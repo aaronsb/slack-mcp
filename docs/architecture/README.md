@@ -32,8 +32,8 @@ permission — all were missing facts. An agent's autonomy comes from knowing, n
 
 - **Reads: unbounded and complete.** Resolve every referent, extract every body, report every
   gap. No second call should be needed to understand what the first returned.
-- **Writes: few, named, explicit.** Exactly two tools change anything in Slack; one changes read
-  state; `ack` moves only the agent's private position.
+- **Writes: few, named, explicit.** One tool contributes content to Slack; one fires read
+  receipts; `dismiss` moves only the agent's private position.
 
 Widening writes to compensate for narrow reads is what produces a passive briefing that clears
 five channels.
@@ -53,8 +53,8 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 
 | ADR | Title | Status | In the code |
 |---|---|---|---|
-| [003](003-resolvable-tool-surface.md) | A Resolvable Tool Surface | Accepted | **Partial** — see arrears |
-| [004](004-self-contained-payloads.md) | Self-Contained Payloads | Proposed | **Partial** — tag resolution on the render path shipped (#59); the renderMessage seam and unresolved field are #63 |
+| [003](003-resolvable-tool-surface.md) | A Resolvable Tool Surface | Accepted | Implemented — `poll`/`read`/`ack` live on as `inbox`/`messages`/`dismiss`; the five tools it retired were removed by ADR-009 |
+| [004](004-self-contained-payloads.md) | Self-Contained Payloads | Proposed | **Partial** — tag resolution on the render path (#59) and the renderMessage seam with its unresolved field (#73) shipped; unresolved tags are reported as data but still render raw in markdown |
 | [005](005-identity-resolution.md) | Identity Resolution | Proposed | **Partial** — the resolution ladder runs behind search from: (#56); rings, encounters, and the remaining person parameters are open |
 
 ### State — what persists and for how long
@@ -64,7 +64,7 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 | [006](006-observation-ledger.md) | Observation Ledger and Folded Caches | Proposed, amended by 007 | **Partial** — its mechanisms shipped inside ADR-007's estate; the attention ledger is not started |
 | [007](007-estate-ledger.md) | The Estate Ledger | Accepted | **Implemented** — #51–#57; running against a live workspace |
 | [008](008-relationship-views.md) | Relationship Views | Accepted | Implemented — families/person/initiatives/convergence/about views, encounter observer, compiled executor (#62, #65, #66, stage 3 PR) |
-| [009](009-tool-surface-recomposition.md) | Tool Surface Recomposition | Proposed | Not started — 17 tools → 8 by the verb/noun/parameter assignment rule; ships at v2.0.0, supersedes #49 |
+| [009](009-tool-surface-recomposition.md) | Tool Surface Recomposition | Accepted | Implemented — shipped at v2.0.0; eight tools by the verb/noun/parameter assignment rule, pinned by `TestV2SurfaceIsExactlyEightTools`; superseded #49 |
 | [010](010-batch-executor.md) | The Batch Executor | Accepted | One-shot read batches + saved playbooks + the frequency hint |
 | [011](011-time-flows-down-the-page.md) | Time Flows Down the Page | Accepted | Every rendered message list is oldest-first; fetches stay newest-first so caps keep the newest |
 
@@ -85,25 +85,23 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 Where a decision and the code disagree. This section exists because ADR-003 was invisible
 enough to be rediscovered from scratch and filed as issue #47.
 
-**ADR-003 shipped its additive half only.** `poll`, `read`, and `ack` are registered;
-`pkg/watermark/` implements the watermark including `Prune`. The five tools ADR-003 retired —
-`catch-up`, `check-unreads`, `check-mentions`, `check-timing`, `get-context` — are all still
-registered and undeprecated. Sixteen tools where the ADR decided eleven. Tracked in **#49**.
-
-Consequences of that gap, all observed in one test-drive: an agent selecting by natural
-phrasing lands on `catch-up`, which ADR-003 retired; it then reads `catch-up`'s "marking as
-read" guidance, which sits directly above `// TODO: Actually mark as read` and describes an
-effect that never occurs; and it cites the 177-channel figure from #24, which ADR-003's live
-probe corrected to 30.
+**ADR-003's arrears closed at v2.0.0.** Its five retired tools stayed registered for months
+alongside their replacements (#49), and one test-drive showed the cost: an agent landed on
+`catch-up`, read guidance describing a mark-as-read effect that never occurred, and cited a
+channel count the ADR's live probe had already corrected. ADR-009 removed them with the
+recomposition. The implementation files still carry the old names — `catchup.go`,
+`get_context.go`, `check_unreads_simple.go` — but nothing registers them as tools.
 
 **ADR-002 shipped Tiers 2 and 3.** The Firefox extension flow and the manual flow are in
 `pkg/setup/`, alongside keyring-based cookie extraction for Linux, macOS, and Windows. Tier 1 —
 Chrome DevTools Protocol via `go-rod/rod` — is absent; neither `rod` nor `chromedp` is in
 `go.mod`. Status `Draft` is accurate.
 
-**ADR-001 specifies ten tools.** Sixteen are registered. `CLAUDE.md`'s tool table still lists
-ADR-001's ten, so it never picked up `poll`, `read`, `ack`, `list-users`, `download-file`, or
-`auth-setup` either. Both land on eleven via #49.
+**ADR-001 specifies ten tools.** Nine are registered — ADR-009's eight plus ADR-010's
+`batch` — and none carries an ADR-001 name. `CLAUDE.md` and the README document the current
+nine. ADR-001's tool list is superseded rather than in arrears; its status stays Proposed
+because the rest of the decision (Go, session tokens, the fusion of two prior servers) is what
+the code implements.
 
 ## Concerns with no ADR
 
@@ -117,8 +115,10 @@ Named so they are not rediscovered:
 - **Multi-workspace.** Issue #14. The watermark is already keyed by workspace and ADR-005's
   rings are workspace-scoped; the key shape is a live dependency in two ADRs and decided in
   neither.
-- **Distribution and release.** Issues #20 and #25. `docs/release-runbook.md` records steps,
-  not the decisions behind the npm-wrapper pattern, the cross-compile matrix, or OIDC.
+- **Distribution and release.** Issues #20 and #25 landed OIDC publishing and the release
+  workflows. `docs/release-runbook.md` records steps and the workflow comments record the
+  publisher identity, but no ADR holds the decisions behind the npm-wrapper pattern, the
+  cross-compile matrix, or OIDC. Issue #89 records the registry-publish race.
 
 ## Conventions
 
