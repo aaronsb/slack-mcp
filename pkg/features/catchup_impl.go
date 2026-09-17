@@ -160,6 +160,10 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		}
 	}
 
+	// Time flows down the page (ADR-011): pages arrived newest-first, the
+	// reader gets the window oldest-first.
+	reverseItems(importantItems)
+
 	// Build response
 	result := &FeatureResult{
 		Success: true,

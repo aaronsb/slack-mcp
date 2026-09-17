@@ -108,7 +108,12 @@ func TestGetContextReturnsThread(t *testing.T) {
 	if isThread, _ := data["isThread"].(bool); !isThread {
 		t.Errorf("thread request not flagged as a thread: %+v", data)
 	}
-	if got := len(data["messages"].([]map[string]any)); got != 2 {
-		t.Errorf("want 2 thread messages, got %d", got)
+	msgs := data["messages"].([]map[string]any)
+	if got := len(msgs); got != 2 {
+		t.Fatalf("want 2 thread messages, got %d", got)
+	}
+	// Replies arrive oldest-first and must render that way: root on top (ADR-011).
+	if msgs[0]["text"] != "deploy rollback?" || msgs[1]["text"] != "on it" {
+		t.Errorf("thread rendered out of order: %v then %v", msgs[0]["text"], msgs[1]["text"])
 	}
 }

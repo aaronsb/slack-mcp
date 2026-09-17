@@ -175,6 +175,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					if isUrgent {
 						stats["urgent"] = stats["urgent"].(int) + 1
 					}
+					reverseItems(messages)
 
 					dm := map[string]interface{}{
 						"type":        "dm",
@@ -381,6 +382,9 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 	}
 
 	// Build result
+	// One timeline across MPIMs and channels, oldest-first (ADR-011).
+	oldestFirstByThreadID(unreads["mentions"].([]map[string]interface{}))
+
 	result := &FeatureResult{
 		Success: true,
 		Data: map[string]interface{}{

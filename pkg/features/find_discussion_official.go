@@ -118,6 +118,9 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 
 		results = append(results, entry)
 	}
+	// Fetched newest-first so the cap keeps the newest; rendered oldest-first
+	// so the list reads as a timeline (ADR-011).
+	reverseItems(results)
 
 	coverage := map[string]interface{}{
 		"searchedSince": since.Format("2006-01-02"),
@@ -160,7 +163,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		"Read one in full: messages target='<handle from a result>'",
 	}
 	if messages.Total > len(results) {
-		result.Guidance = fmt.Sprintf("Showing %d of %d matches, newest first.", len(results), messages.Total)
+		result.Guidance = fmt.Sprintf("Showing the newest %d of %d matches.", len(results), messages.Total)
 	}
 	if widened {
 		result.Guidance = strings.TrimSpace(result.Guidance +
