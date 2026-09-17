@@ -2,10 +2,12 @@
 
 ## Status
 
-Proposed
+Accepted
 
 Supersedes issue #49's 16→11 cut. Depends on ADR-008's view pattern;
-extends ADR-003's surface decisions. Ships at v2.0.0 — breaking.
+extends ADR-003's surface decisions. Shipped at v2.0.0 — breaking.
+`TestV2SurfaceIsExactlyEightTools` pins the surface; ADR-010 adds the
+ninth tool.
 
 ## Context
 

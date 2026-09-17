@@ -21,13 +21,13 @@
       "environmentVariables": [
         {
           "name": "SLACK_MCP_XOXC_TOKEN",
-          "description": "Slack session token. Optional — the auth-setup tool extracts it from your browser and stores it in the config file.",
+          "description": "Slack session token. Optional — the auth tool extracts it from your browser and stores it in the config file.",
           "required": false,
           "sensitive": true
         },
         {
           "name": "SLACK_MCP_XOXD_TOKEN",
-          "description": "Slack session cookie. Optional — the auth-setup tool extracts it from your browser and stores it in the config file.",
+          "description": "Slack session cookie. Optional — the auth tool extracts it from your browser and stores it in the config file.",
           "required": false,
           "sensitive": true
         }
