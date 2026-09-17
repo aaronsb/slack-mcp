@@ -35,8 +35,9 @@ func threadTS(item map[string]interface{}) string {
 	return id
 }
 
-// tsLess orders Slack "sec.usec" timestamps numerically, so a change in the
-// width of either half cannot reorder a list.
+// tsLess orders Slack "sec.usec" timestamps numerically. The fraction is
+// right-padded to microseconds before parsing, so ".5" and ".500000" compare
+// equal rather than by digit count.
 func tsLess(a, b string) bool {
 	as, au := splitTS(a)
 	bs, bu := splitTS(b)
@@ -48,6 +49,9 @@ func tsLess(a, b string) bool {
 
 func splitTS(ts string) (int64, int64) {
 	sec, usec, _ := strings.Cut(ts, ".")
+	if len(usec) < 6 {
+		usec += strings.Repeat("0", 6-len(usec))
+	}
 	s, _ := strconv.ParseInt(sec, 10, 64)
 	u, _ := strconv.ParseInt(usec, 10, 64)
 	return s, u

@@ -164,6 +164,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 					"message":     rm.Body,
 					"timestamp":   formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 					"channelId":   channel.ID,
+					"threadId":    fmt.Sprintf("%s:%s", channel.ID, msg.Timestamp),
 					"unreadCount": channel.UnreadCount,
 					"urgent":      isUrgent,
 				}
@@ -239,6 +240,10 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 	}
 
 	// Build result
+	// One timeline per list, oldest-first (ADR-011).
+	oldestFirstByThreadID(unreads["dms"].([]map[string]interface{}))
+	oldestFirstByThreadID(unreads["mentions"].([]map[string]interface{}))
+
 	result := &FeatureResult{
 		Success: true,
 		Data: map[string]interface{}{

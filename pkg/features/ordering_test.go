@@ -53,6 +53,51 @@ func run(t *testing.T, srv *slacktest.Server, f *features.Feature, params map[st
 	return res
 }
 
+func TestTargetReadsOldestFirst(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(channel("C1", "engineering"))
+	srv.Handle("conversations.history", func(*http.Request) any {
+		return map[string]any{
+			"ok": true, "has_more": false,
+			"messages": []any{
+				slacktest.Message("U2", "third", "1782246300.000000"),
+				slacktest.Message("U2", "second", "1782246200.000000"),
+				slacktest.Message("U2", "first", "1782246100.000000"),
+			},
+		}
+	})
+
+	res := run(t, srv, features.Read, map[string]any{"handle": "engineering"})
+	msgs := res.Data.(map[string]any)["messages"].([]map[string]any)
+	assertOrder(t, texts(msgs, "text"), []string{"first", "second", "third"})
+}
+
+func TestAroundReadsHistoryOldestFirst(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(channel("C1", "engineering"))
+	// No thread at the anchor: replies returns the anchor alone, so the
+	// handler falls through to history on both sides of it.
+	srv.Handle("conversations.replies", func(*http.Request) any {
+		return map[string]any{"ok": true, "has_more": false, "messages": []any{}}
+	})
+	srv.Handle("conversations.history", func(r *http.Request) any {
+		_ = r.ParseForm()
+		if r.Form.Get("oldest") != "" {
+			return map[string]any{"ok": true, "has_more": false, "messages": []any{
+				slacktest.Message("U2", "after", "1782246300.000000"),
+			}}
+		}
+		return map[string]any{"ok": true, "has_more": false, "messages": []any{
+			slacktest.Message("U2", "anchor", "1782246200.000000"),
+			slacktest.Message("U2", "before", "1782246100.000000"),
+		}}
+	})
+
+	res := run(t, srv, features.GetContext, map[string]any{"channel": "engineering", "messageTs": "1782246200.000000"})
+	msgs := res.Data.(map[string]any)["messages"].([]map[string]any)
+	assertOrder(t, texts(msgs, "text"), []string{"before", "anchor", "after"})
+}
+
 func TestSinceWindowReadsOldestFirst(t *testing.T) {
 	srv := slacktest.New(t)
 	srv.SeedChannels(channel("C1", "engineering"))
@@ -125,17 +170,24 @@ func TestUnreadPreviewsReadOldestFirst(t *testing.T) {
 				slacktest.Message("U2", "<@U1> channel later", "1782246300.000000"),
 				slacktest.Message("U2", "<@U1> channel earlier", "1782246100.000000"),
 			}}
+		case "G1":
+			return map[string]any{"ok": true, "has_more": false, "messages": []any{
+				slacktest.Message("U2", "<@U1> group between", "1782246200.000000"),
+			}}
 		}
 		return nil
 	})
 
-	// The default counts fixture allows one mention in C1; two are needed to
-	// observe an order.
+	// The default counts fixture allows one mention in C1 and no MPIMs; the
+	// order across sources needs two in C1 and one in a group DM scanned
+	// first.
 	srv.Handle("client.counts", func(*http.Request) any {
-		return slacktest.Counts(
+		counts := slacktest.Counts(
 			[]any{slacktest.Conversation("C1", "1782246000.000000", "1782246300.000000", true, 2)},
 			[]any{slacktest.Conversation("D1", "1782246000.000000", "1782246300.000000", true, 0)},
 		)
+		counts["mpims"] = []any{slacktest.Conversation("G1", "1782246000.000000", "1782246200.000000", true, 1)}
+		return counts
 	})
 
 	res := run(t, srv, features.CheckUnreads, map[string]any{})
@@ -148,5 +200,45 @@ func TestUnreadPreviewsReadOldestFirst(t *testing.T) {
 	assertOrder(t, texts(dms[0]["messages"].([]map[string]any), "text"), []string{"dm earlier", "dm later"})
 
 	mentions := unreads["mentions"].([]map[string]any)
-	assertOrder(t, texts(mentions, "message"), []string{"@Aaron Bockelie (you) channel earlier", "@Aaron Bockelie (you) channel later"})
+	assertOrder(t, texts(mentions, "message"), []string{
+		"@Aaron Bockelie (you) channel earlier",
+		"@Aaron Bockelie (you) group between",
+		"@Aaron Bockelie (you) channel later",
+	})
+}
+
+// When client.counts is unavailable the unreads view falls back to the
+// standard API. The law holds there too.
+func TestUnreadFallbackReadsOldestFirst(t *testing.T) {
+	srv := slacktest.New(t)
+	dm := dmWith("D1", "U2")
+	dm.UnreadCount = 2
+	ch := channel("C1", "engineering")
+	ch.UnreadCount = 2
+	srv.SeedChannels(dm, ch)
+	srv.Handle("client.counts", func(*http.Request) any {
+		return map[string]any{"ok": false, "error": "internal_error"}
+	})
+	srv.Handle("conversations.history", func(r *http.Request) any {
+		_ = r.ParseForm()
+		switch r.Form.Get("channel") {
+		case "D1":
+			return map[string]any{"ok": true, "has_more": false, "messages": []any{
+				slacktest.Message("U2", "dm later", "1782246300.000000"),
+				slacktest.Message("U2", "dm earlier", "1782246100.000000"),
+			}}
+		case "C1":
+			return map[string]any{"ok": true, "has_more": false, "messages": []any{
+				slacktest.Message("U2", "<@U1> channel later", "1782246300.000000"),
+				slacktest.Message("U2", "<@U1> channel earlier", "1782246100.000000"),
+			}}
+		}
+		return nil
+	})
+
+	res := run(t, srv, features.CheckUnreads, map[string]any{})
+	unreads := res.Data.(map[string]any)["unreads"].(map[string]any)
+	assertOrder(t, texts(unreads["dms"].([]map[string]any), "message"), []string{"dm earlier", "dm later"})
+	assertOrder(t, texts(unreads["mentions"].([]map[string]any), "message"),
+		[]string{"@Aaron Bockelie (you) channel earlier", "@Aaron Bockelie (you) channel later"})
 }

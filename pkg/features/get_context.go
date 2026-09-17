@@ -81,6 +81,9 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 
 	var messages []slack.Message
 	isThread := false
+	// conversations.replies arrives oldest-first; conversations.history arrives
+	// newest-first. Only the latter needs flipping (ADR-011).
+	fromHistory := false
 
 	// If a message timestamp is given, try thread replies first
 	if messageTs != "" {
@@ -101,6 +104,7 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 
 	// Fall back to channel history (only if no messages found above)
 	if len(messages) == 0 {
+		fromHistory = true
 		if messageTs != "" {
 			// Get messages around the specified timestamp
 			halfCount := count/2 + 1
@@ -147,19 +151,20 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 	}
 
 	observeTraffic(apiProvider, channelID, messages)
-
-	// The caps-always-page law (#23): the oldest timestamp shown is the
-	// cursor into earlier history.
-	oldestShown := ""
-	if len(messages) > 0 {
-		oldestShown = messages[len(messages)-1].Timestamp
+	if fromHistory {
+		reverse(messages)
 	}
 
-	// Format messages (reverse to oldest-first)
+	// The caps-always-page law (#23): the oldest timestamp shown is the
+	// cursor into earlier history. Oldest-first, that is the top line.
+	oldestShown := ""
+	if len(messages) > 0 {
+		oldestShown = messages[0].Timestamp
+	}
+
 	r := newMessageRenderer(apiProvider)
 	formatted := make([]map[string]interface{}, 0, len(messages))
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
+	for _, msg := range messages {
 		rm := r.Render(msg)
 		userName := rm.Author
 
