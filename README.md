@@ -99,7 +99,7 @@ export SLACK_MCP_XOXD_TOKEN="xoxd-..."
 
 ## Lifecycle
 
-Over stdio the server exits cleanly when its client is gone: stdin closes, a termination signal arrives (`SIGTERM`, `SIGINT`, `SIGHUP`), or its parent process exits. Each exit flushes the caches and releases the ledger locks, so the next instance is not left read-only.
+Over stdio the server exits cleanly when its client is gone: stdin closes, a termination signal arrives (`SIGTERM`, `SIGINT`, `SIGHUP`), or its parent process exits. Each exit flushes the caches and releases the ledger locks, so the next instance is not left read-only. On Windows, the npm wrapper's `child.kill` terminates the server forcibly, so this graceful shutdown does not run there.
 
 A wedged connection, such as a half-open SSH session, leaves the pipe open with nobody reading it. Only an idle timeout catches that, and it is valid only where it can happen, so the server ties the timeout to how it is deployed:
 
@@ -109,7 +109,20 @@ A wedged connection, such as a half-open SSH session, leaves the pipe open with 
 | stdio, remote (over SSH) | Defaults to `2h`. Set a duration (`90m`) to change it, or `off` to disable. |
 | SSE | Not allowed. Each session is cleaned up when its connection ends. |
 
-The deployment is `remote` when `SSH_CONNECTION` or `SSH_CLIENT` is set, and `local` otherwise. Set `SLACK_MCP_DEPLOYMENT=local` or `remote` where detection is wrong, such as a server started inside tmux. A timeout set where it is not allowed, or a value that does not parse, stops the server at startup with the reason on stderr.
+The deployment is `local` unless you declare it. The server does not detect it: `SSH_CONNECTION` only means some ancestor logged in over SSH (running `claude` in an SSH session, VS Code Remote-SSH), not that the MCP pipe crosses SSH. Only the MCP client config that launches the server knows, so declare `remote` there, in the entry that starts the server over SSH. `ssh` does not forward your environment, so pass the variable through the remote command line with `env`:
+
+```json
+{
+  "mcpServers": {
+    "slack": {
+      "command": "ssh",
+      "args": ["host", "env", "SLACK_MCP_DEPLOYMENT=remote", "slack-mcp"]
+    }
+  }
+}
+```
+
+(ssh joins the arguments into one remote command line, so this runs `env SLACK_MCP_DEPLOYMENT=remote slack-mcp` on the host. Setting it in the client's `env` block does not work, because that only reaches the local `ssh` process.) A timeout set where it is not allowed, or a value that does not parse, stops the server at startup with the reason on stderr.
 
 ## Tools
 

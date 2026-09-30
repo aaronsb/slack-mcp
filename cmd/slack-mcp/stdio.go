@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -42,6 +43,10 @@ func runStdio(s *server.SemanticMCPServer, idle time.Duration) int {
 		})
 	})
 
+	// A write to a closed stdout must return EPIPE, not kill the process with
+	// SIGPIPE before Shutdown runs.
+	signal.Ignore(syscall.SIGPIPE)
+
 	// SIGHUP too: its default action kills the process before the ledgers
 	// close.
 	sigs := make(chan os.Signal, 1)
@@ -49,17 +54,24 @@ func runStdio(s *server.SemanticMCPServer, idle time.Duration) int {
 	go func() {
 		select {
 		case sig := <-sigs:
+			// Restore default handling so a second Ctrl-C is not swallowed
+			// while shutdown runs.
+			signal.Stop(sigs)
 			cancel(fmt.Errorf("received %v", sig))
 		case <-ctx.Done():
 		}
 	}()
+
+	// Read synchronously: if the parent dies before the watcher goroutine is
+	// scheduled, a baseline read there would already be the subreaper.
+	startPPID := os.Getppid()
 
 	activity := lifecycle.NewActivity()
 	if idle > 0 {
 		log.Printf("Idle exit enabled: %s without client input", idle)
 		go lifecycle.WatchIdle(ctx, idle, activity.Last, cancel)
 	}
-	go lifecycle.WatchParent(ctx, os.Getppid, lifecycle.ParentPollInterval, cancel)
+	go lifecycle.WatchParent(ctx, startPPID, os.Getppid, lifecycle.ParentPollInterval, cancel)
 
 	in := lifecycle.ActivityReader(os.Stdin, activity.Touch, func() {
 		time.AfterFunc(eofDrain, func() { cancel(lifecycle.ErrStdinEOF) })
@@ -69,10 +81,14 @@ func runStdio(s *server.SemanticMCPServer, idle time.Duration) int {
 	// Listen returns on its own only at EOF once the queue drains; every
 	// other stop has already set its cause, and a second cancel keeps it.
 	status := 0
-	if err != nil && !errors.Is(err, context.Canceled) {
+	switch {
+	case err != nil && (errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)):
+		// The client closed its read end: it is gone, which is a clean exit.
+		cancel(fmt.Errorf("client closed stdout: %w", err))
+	case err != nil && !errors.Is(err, context.Canceled):
 		cancel(err)
 		status = 1
-	} else {
+	default:
 		cancel(lifecycle.ErrStdinEOF)
 	}
 	log.Printf("Stopping: %v", context.Cause(ctx))

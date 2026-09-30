@@ -66,8 +66,11 @@ type ApiProvider struct {
 	estate *estate.Store
 	// attention is the operator-scoped encounter ledger (ADR-008 stage 2),
 	// under the same pointer guard.
-	attention           *estate.AttentionStore
-	estateMu            sync.RWMutex
+	attention *estate.AttentionStore
+	estateMu  sync.RWMutex
+	// closed is set by Shutdown under estateMu. A boot still running then
+	// closes the ledger it just opened instead of leaking it.
+	closed              bool
 	estateSweepInterval time.Duration
 
 	// Live channel-walk progress, so coverage reporting can show the
@@ -227,6 +230,9 @@ func (ap *ApiProvider) Shutdown() {
 		if ap.store != nil {
 			ap.store.Stop()
 		}
+		ap.estateMu.Lock()
+		ap.closed = true
+		ap.estateMu.Unlock()
 		if st := ap.attn(); st != nil {
 			if err := st.Close(); err != nil {
 				log.Printf("Attention ledger close: %v", err)

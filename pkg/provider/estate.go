@@ -57,6 +57,11 @@ func (ap *ApiProvider) openEstate() {
 		return
 	}
 	ap.estateMu.Lock()
+	if ap.closed {
+		ap.estateMu.Unlock()
+		st.Close()
+		return
+	}
 	ap.estate = st
 	ap.estateMu.Unlock()
 	if st.ReadOnly() {

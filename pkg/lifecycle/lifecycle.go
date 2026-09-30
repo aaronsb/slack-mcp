@@ -104,16 +104,16 @@ func WatchIdle(ctx context.Context, timeout time.Duration, last func() time.Time
 	}
 }
 
-// WatchParent cancels with ErrOrphaned when getppid stops returning the value
-// it returned at start. The comparison is against the starting PID rather
+// WatchParent cancels with ErrOrphaned when getppid stops returning start, the
+// parent PID the caller read synchronously at startup (reading it here would
+// race a parent that dies before this goroutine runs). The comparison is against the starting PID rather
 // than 1, because an orphan re-parents to the nearest subreaper — observed as
 // systemd --user, not init. Windows does not re-parent, so there the watch is
 // a no-op. Returns when ctx ends.
-func WatchParent(ctx context.Context, getppid func() int, interval time.Duration, cancel context.CancelCauseFunc) {
+func WatchParent(ctx context.Context, start int, getppid func() int, interval time.Duration, cancel context.CancelCauseFunc) {
 	if runtime.GOOS == "windows" {
 		return
 	}
-	start := getppid()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -139,7 +139,8 @@ const (
 	// wedge the pipe, and Claude Code does not respawn a stdio server that
 	// exits, so an idle exit would only leave a healthy client disconnected.
 	Local Deployment = "local"
-	// Remote: the client reaches the server over SSH. A half-open connection
+	// Remote: the client reaches the server over SSH, declared explicitly with
+	// SLACK_MCP_DEPLOYMENT=remote. A half-open connection
 	// keeps the pipe open with nobody reading, which only the idle timer sees.
 	Remote Deployment = "remote"
 )
@@ -148,8 +149,11 @@ const (
 // SLACK_MCP_IDLE_TIMEOUT is unset.
 const DefaultRemoteIdle = 2 * time.Hour
 
-// DeploymentFromEnv reads SLACK_MCP_DEPLOYMENT ("local" or "remote"). Unset,
-// it detects: a server launched by sshd sees SSH_CONNECTION or SSH_CLIENT.
+// DeploymentFromEnv reads SLACK_MCP_DEPLOYMENT ("local" or "remote",
+// case-insensitive). Unset means Local. The environment is deliberately not
+// probed: SSH_CONNECTION only says some ancestor logged in over SSH (running
+// claude inside an SSH session, VS Code Remote-SSH), not that the MCP pipe
+// crosses SSH. Only the MCP client config that launches the server knows.
 func DeploymentFromEnv() (Deployment, error) {
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("SLACK_MCP_DEPLOYMENT"))); v {
 	case "local":
@@ -157,9 +161,6 @@ func DeploymentFromEnv() (Deployment, error) {
 	case "remote":
 		return Remote, nil
 	case "":
-		if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != "" {
-			return Remote, nil
-		}
 		return Local, nil
 	default:
 		return "", fmt.Errorf("SLACK_MCP_DEPLOYMENT=%q: want local or remote", v)
@@ -201,9 +202,12 @@ func IdlePolicy(transport string, dep Deployment, raw string) (time.Duration, er
 	}
 	switch {
 	case transport != "stdio":
-		return 0, fmt.Errorf("SLACK_MCP_IDLE_TIMEOUT applies only to stdio; %s cleans up each session when its connection ends", transport)
+		if transport == "sse" {
+			return 0, fmt.Errorf("SLACK_MCP_IDLE_TIMEOUT applies only to stdio; sse cleans up each session when its connection ends")
+		}
+		return 0, fmt.Errorf("SLACK_MCP_IDLE_TIMEOUT applies only to stdio; transport %q has no idle timeout", transport)
 	case dep == Local:
-		return 0, fmt.Errorf("SLACK_MCP_IDLE_TIMEOUT is not valid for a local stdio server: the client does not respawn a server that exits. Set SLACK_MCP_DEPLOYMENT=remote if this server is reached over SSH")
+		return 0, fmt.Errorf("SLACK_MCP_IDLE_TIMEOUT is not valid for a local stdio server: the client does not respawn a server that exits. Set SLACK_MCP_DEPLOYMENT=remote in the MCP client config if this server is reached over SSH")
 	}
 	return d, nil
 }

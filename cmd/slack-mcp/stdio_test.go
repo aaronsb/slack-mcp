@@ -29,6 +29,12 @@ func TestMain(m *testing.M) {
 // stdin, which the caller holds open to simulate a client that never closes.
 func startServer(t *testing.T, env ...string) (*exec.Cmd, *os.File) {
 	t.Helper()
+	return startServerOut(t, nil, env...)
+}
+
+// startServerOut is startServer with the server's stdout wired to out.
+func startServerOut(t *testing.T, out *os.File, env ...string) (*exec.Cmd, *os.File) {
+	t.Helper()
 	home := t.TempDir()
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(),
@@ -47,6 +53,7 @@ func startServer(t *testing.T, env ...string) (*exec.Cmd, *os.File) {
 		t.Fatal(err)
 	}
 	cmd.Stdin = r
+	cmd.Stdout = out
 	t.Cleanup(func() { w.Close() })
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -108,4 +115,25 @@ func TestStdioExitsCleanlyOnSignal(t *testing.T) {
 	time.Sleep(300 * time.Millisecond) // let it install the handler
 	cmd.Process.Signal(syscall.SIGTERM)
 	exitWithin(t, cmd, 10*time.Second)
+}
+
+// A client that closes its read end of stdout and then sends a request must
+// get a clean exit: the write returns EPIPE instead of SIGPIPE killing the
+// process (status 141) before Shutdown runs.
+func TestStdioExitsCleanlyOnClosedStdout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no SIGPIPE on windows")
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, in := startServerOut(t, outW)
+	outW.Close()
+	outR.Close() // the client is gone before the response is written
+	const initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}` + "\n"
+	if _, err := in.WriteString(initialize); err != nil {
+		t.Fatal(err)
+	}
+	exitWithin(t, cmd, 15*time.Second)
 }

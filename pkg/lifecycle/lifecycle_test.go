@@ -105,7 +105,7 @@ func TestWatchParentFiresOnReparent(t *testing.T) {
 
 	// Stable parent: no fire.
 	err := watch(t, 50*time.Millisecond, func(ctx context.Context, cancel context.CancelCauseFunc) {
-		WatchParent(ctx, getppid, 5*time.Millisecond, cancel)
+		WatchParent(ctx, 100, getppid, 5*time.Millisecond, cancel)
 	})
 	if err != nil {
 		t.Fatalf("fired with %v while the parent stayed", err)
@@ -117,7 +117,7 @@ func TestWatchParentFiresOnReparent(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			ppid.Store(1457)
 		}()
-		WatchParent(ctx, getppid, 5*time.Millisecond, cancel)
+		WatchParent(ctx, 100, getppid, 5*time.Millisecond, cancel)
 	})
 	if !errors.Is(err, ErrOrphaned) {
 		t.Fatalf("cause = %v, want ErrOrphaned", err)
@@ -162,8 +162,10 @@ func TestDeploymentFromEnv(t *testing.T) {
 		wantErr                      bool
 	}{
 		{"", "", "", Local, false},
-		{"", "10.0.0.1 5000 10.0.0.2 22", "", Remote, false},
-		{"", "", "10.0.0.1 5000 22", Remote, false},
+		// An ancestor logged in over SSH; the pipe is still local.
+		{"", "10.0.0.1 5000 10.0.0.2 22", "", Local, false},
+		{"", "", "10.0.0.1 5000 22", Local, false},
+		{"remote", "10.0.0.1 5000 10.0.0.2 22", "", Remote, false},
 		{"local", "10.0.0.1 5000 10.0.0.2 22", "", Local, false},
 		{"Remote", "", "", Remote, false},
 		{"cloud", "", "", "", true},

@@ -29,7 +29,16 @@ const child = childProcess.spawn(resolveBinaryPath(), process.argv.slice(2), {
 });
 
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
-    process.on(signal, () => child.kill(signal));
+    process.on(signal, () => {
+        // On win32 only SIGINT/SIGTERM/SIGKILL/SIGQUIT are killable; kill()
+        // throws ENOSYS for SIGHUP (console close), so map it to SIGTERM.
+        const forward = process.platform === 'win32' && signal === 'SIGHUP' ? 'SIGTERM' : signal;
+        try {
+            child.kill(forward);
+        } catch (err) {
+            console.error(`slack-mcp: could not forward ${signal}: ${err.message}`);
+        }
+    });
 }
 
 child.on('error', (err) => {
