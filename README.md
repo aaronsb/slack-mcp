@@ -101,6 +101,10 @@ export SLACK_MCP_XOXD_TOKEN="xoxd-..."
 
 Over stdio the server exits cleanly when its client is gone: stdin closes, a termination signal arrives (`SIGTERM`, `SIGINT`, `SIGHUP`), or its parent process exits. Each exit flushes the caches and releases the ledger locks, so the next instance is not left read-only. On Windows, the npm wrapper's `child.kill` terminates the server forcibly, so this graceful shutdown does not run there.
 
+### Remote deployment (experimental)
+
+Remote deployment is experimental and has not been tested against a real SSH session. Whether the server supports remote use at all, and in what form, is still open (see #102). Nothing below applies unless you set `SLACK_MCP_DEPLOYMENT=remote`.
+
 A wedged connection, such as a half-open SSH session, leaves the pipe open with nobody reading it. Only an idle timeout catches that, and it is valid only where it can happen, so the server ties the timeout to how it is deployed:
 
 | Deployment | `SLACK_MCP_IDLE_TIMEOUT` |
