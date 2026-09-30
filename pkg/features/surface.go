@@ -150,8 +150,18 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 
 	switch {
 	case query != "":
-		echo := echoLine("messages", "query='"+query+"'", params, "cursor", "timeframe")
-		return delegate(ctx, FindDiscussion, params, echo)
+		echo := echoLine("messages", "query='"+query+"'", params, "cursor", "limit", "timeframe")
+		res, err := delegate(ctx, FindDiscussion, params, echo)
+		if res != nil && res.Success {
+			if data, ok := res.Data.(map[string]interface{}); ok {
+				if cov, ok := data["coverage"].(map[string]interface{}); ok {
+					if pg, ok := cov["page"].(int); ok && cov["pages"].(int) > 1 {
+						res.Echo += fmt.Sprintf(" page=%d/%d", pg, cov["pages"])
+					}
+				}
+			}
+		}
+		return res, err
 	case target != "" && around != "":
 		params["channel"] = conversationOf(target)
 		params["messageTs"] = around
