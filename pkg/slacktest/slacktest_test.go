@@ -45,8 +45,8 @@ func TestProviderStartsWarm(t *testing.T) {
 		t.Fatalf("Provide(): %v", err)
 	}
 
-	if got := ap.ResolveChannelID("eng"); got != "C1" {
-		t.Errorf("ResolveChannelID(%q) = %q, want C1 — seeded cache did not load", "eng", got)
+	if ch, ok := ap.LookupChannel("eng"); !ok || ch.ID != "C1" {
+		t.Errorf("LookupChannel(%q) = %q, %v; want C1 — seeded cache did not load", "eng", ch.ID, ok)
 	}
 }
 

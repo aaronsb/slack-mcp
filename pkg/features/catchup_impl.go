@@ -34,7 +34,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	}
 
 	// Get the API provider
-	provider, ok := params["_provider"].(*provider.ApiProvider)
+	ap, ok := params["_provider"].(*provider.ApiProvider)
 	if !ok {
 		return &FeatureResult{
 			Success: false,
@@ -43,7 +43,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	}
 
 	// Get Slack API client
-	api, err := provider.Provide()
+	api, err := ap.Provide()
 	if err != nil {
 		return &FeatureResult{
 			Success: false,
@@ -60,16 +60,11 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		}, nil
 	}
 
-	// Find channel by name using provider's cache or use ID directly
-	cleanName := strings.TrimPrefix(channel, "#")
-	channelID := provider.ResolveChannelID(cleanName)
-
-	// If the resolved ID is the same as input, it means the channel wasn't found in cache
-	if channelID == cleanName && !strings.HasPrefix(channelID, "C") && !strings.HasPrefix(channelID, "D") && !strings.HasPrefix(channelID, "G") {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Channel '%s' not found. Use estate view='channels' to see available channels — for a person, use target='@name'.", channel),
-		}, nil
+	// Route by prefix under the read policy: '#name' is a channel only, a
+	// person may resolve from a unique fragment (ADR-005).
+	channelID, terr := resolveTarget(ctx, ap, channel, provider.ReadPolicy, "target")
+	if terr != nil {
+		return terr.result(), nil
 	}
 
 	// Determine if we should auto-follow cursors
@@ -85,7 +80,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 		"reactions":     0,
 	}
 
-	renderer := newMessageRenderer(provider)
+	renderer := newMessageRenderer(ap)
 	currentCursor := cursor
 	hasMore := true
 	pageCount := 0
@@ -112,7 +107,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 				Message: fmt.Sprintf("Failed to fetch channel history: %v", err),
 			}, nil
 		}
-		observeTraffic(provider, channelID, resp.Messages)
+		observeTraffic(ap, channelID, resp.Messages)
 
 		// Process messages
 		for _, msg := range resp.Messages {

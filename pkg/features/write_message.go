@@ -6,7 +6,6 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/slack-go/slack"
 	"log"
-	"strings"
 )
 
 // WriteMessage sends a message to a channel or DM
@@ -61,14 +60,10 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 		}, nil
 	}
 
-	// Resolve channel name to ID
-	channelID := resolveChannelForSending(apiProvider, api, channel)
-	if channelID == "" {
-		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("Could not find channel or user '%s'", channel),
-			Guidance: "💡 See available channels: estate view='channels' — or provide a username for DMs",
-		}, nil
+	// Route the target by prefix; a person resolves only exactly (ADR-005)
+	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy, "to")
+	if terr != nil {
+		return terr.result(), nil
 	}
 
 	// Prepare message options
@@ -125,78 +120,4 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	}
 
 	return result, nil
-}
-
-// isChannelID checks if a string looks like a Slack channel/DM/group ID
-// (capital letter followed by uppercase alphanumeric, no spaces)
-func isChannelID(s string) bool {
-	if len(s) < 2 {
-		return false
-	}
-	if s[0] != 'C' && s[0] != 'D' && s[0] != 'G' {
-		return false
-	}
-	for i := 1; i < len(s); i++ {
-		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) {
-			return false
-		}
-	}
-	return true
-}
-
-func resolveChannelForSending(apiProvider *provider.ApiProvider, api *slack.Client, channel string) string {
-	// First try provider's resolver (includes on-demand display name resolution)
-	cleanName := strings.TrimPrefix(channel, "#")
-	if channelID := apiProvider.ResolveChannelID(cleanName); channelID != cleanName {
-		return channelID
-	}
-
-	// If it already looks like a channel ID, return it
-	if isChannelID(channel) {
-		return channel
-	}
-
-	// Try to resolve as a username for DM
-	usersMap := apiProvider.ProvideUsersMap()
-
-	// Clean up username
-	cleanUser := strings.TrimPrefix(channel, "@")
-
-	// Look for user by name or real name
-	var userID string
-	for uid, user := range usersMap {
-		if user.Name == cleanUser || user.RealName == cleanUser ||
-			strings.EqualFold(user.Name, cleanUser) ||
-			strings.EqualFold(user.RealName, cleanUser) {
-			userID = uid
-			break
-		}
-	}
-
-	if userID == "" {
-		// Try partial name match as last resort
-		lowerClean := strings.ToLower(cleanUser)
-		for uid, user := range usersMap {
-			if strings.Contains(strings.ToLower(user.Name), lowerClean) ||
-				strings.Contains(strings.ToLower(user.RealName), lowerClean) {
-				userID = uid
-				break
-			}
-		}
-	}
-
-	if userID != "" {
-		// Open DM conversation with user
-		channel, _, _, err := api.OpenConversation(&slack.OpenConversationParameters{
-			Users: []string{userID},
-		})
-		if err != nil {
-			log.Printf("Failed to open DM with user %s: %v", cleanUser, err)
-			return ""
-		}
-		return channel.ID
-	}
-
-	return ""
 }

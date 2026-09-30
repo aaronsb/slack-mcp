@@ -132,11 +132,13 @@ func handleTargetMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 }
 
 func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, channel, timestamp string, scope string) (*FeatureResult, error) {
-	// Resolve channel name to ID using provider's cache
-	cleanName := strings.TrimPrefix(channel, "#")
-	channelID := apiProvider.ResolveChannelID(cleanName)
+	// Receipts are public, so mark-read routes like any write: '#name' is a
+	// channel only, a person only by exact handle (ADR-005, issue #94).
+	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy, "channel")
+	if terr != nil {
+		return terr.result(), nil
+	}
 
-	// Get channel info using the resolved ID
 	channelInfo, err := apiProvider.GetChannelInfo(ctx, channelID)
 	if err != nil {
 		return &FeatureResult{
@@ -144,6 +146,10 @@ func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvi
 			Message:  fmt.Sprintf("Channel '%s' not found. Use estate view='channels' to see available channels.", channel),
 			Guidance: "💡 See available channels: estate view='channels'",
 		}, nil
+	}
+	label := "#" + channelInfo.Name
+	if channelInfo.Name == "" || channelInfo.IsIM {
+		label = channel
 	}
 
 	var client *slack.Client
@@ -193,18 +199,18 @@ func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvi
 	result := &FeatureResult{
 		Success: true,
 		Data: map[string]interface{}{
-			"channel":    channelInfo.Name,
+			"channel":    label,
 			"markedUpTo": timestamp,
 			"scope":      scope,
 		},
-		Message:  fmt.Sprintf("Marked #%s as read", channelInfo.Name),
+		Message:  fmt.Sprintf("Marked %s as read", label),
 		Guidance: "✅ Channel messages marked as read",
 	}
 
 	// Add next actions
 	result.NextActions = []string{
 		"Check remaining unreads: inbox view='unreads'",
-		fmt.Sprintf("Catch up on #%s again: messages target='%s'", channelInfo.Name, channelInfo.Name),
+		fmt.Sprintf("Catch up on %s again: messages target='%s' since='1d'", label, label),
 	}
 
 	return result, nil
@@ -265,19 +271,14 @@ func handleThreadMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 }
 
 func handleDMMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, user string) (*FeatureResult, error) {
-	// Find DM channel with user
-	userID := user
-
-	// Try to resolve username to ID
-	usersMap := apiProvider.ProvideUsersMap()
-	for uid, u := range usersMap {
-		if u.Name == user || u.RealName == user || uid == user {
-			userID = uid
-			break
-		}
+	// 'dm:' names a person: the same write-policy ladder as say, so a shared
+	// real name or a deactivated user never gets a receipt (issue #94).
+	person := "@" + strings.TrimPrefix(strings.TrimSpace(user), "@")
+	dmID, terr := resolveTarget(ctx, apiProvider, person, provider.WritePolicy, "channel")
+	if terr != nil {
+		return terr.result(), nil
 	}
 
-	// Find IM channel
 	client, err := apiProvider.Provide()
 	if err != nil {
 		return &FeatureResult{
@@ -285,36 +286,9 @@ func handleDMMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, 
 			Message: fmt.Sprintf("Could not get client: %v", err),
 		}, nil
 	}
-	// Get IM conversations
-	conversations, _, err := client.GetConversations(&slack.GetConversationsParameters{
-		Types: []string{"im"},
-		Limit: 1000,
-	})
-	if err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Could not get DM channels: %v", err),
-		}, nil
-	}
 
-	var imChannel *slack.Channel
-	for _, conv := range conversations {
-		if conv.IsIM && conv.User == userID {
-			imChannel = &conv
-			break
-		}
-	}
-
-	if imChannel == nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("No DM channel found with user '%s'", user),
-		}, nil
-	}
-
-	// Get latest message
-	history, err := client.GetConversationHistory(&slack.GetConversationHistoryParameters{
-		ChannelID: imChannel.ID,
+	history, err := client.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
+		ChannelID: dmID,
 		Limit:     1,
 	})
 	if err != nil || len(history.Messages) == 0 {
@@ -324,36 +298,24 @@ func handleDMMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, 
 		}, nil
 	}
 
-	// Mark as read
-	err = client.MarkConversation(imChannel.ID, history.Messages[0].Timestamp)
-	if err != nil {
+	if err := client.MarkConversationContext(ctx, dmID, history.Messages[0].Timestamp); err != nil {
 		return &FeatureResult{
 			Success: false,
 			Message: fmt.Sprintf("Failed to mark DM as read: %v", err),
 		}, nil
 	}
 
-	// Get user's real name for display
-	userName := user
-	if u, ok := usersMap[userID]; ok {
-		userName = u.RealName
-		if userName == "" {
-			userName = u.Name
-		}
-	}
-
 	return &FeatureResult{
 		Success: true,
 		Data: map[string]interface{}{
-			"user":      userName,
-			"userId":    userID,
-			"channelId": imChannel.ID,
+			"user":      person,
+			"channelId": dmID,
 		},
-		Message:  fmt.Sprintf("Marked DM with %s as read", userName),
+		Message:  fmt.Sprintf("Marked DM with %s as read", person),
 		Guidance: "✅ Direct messages marked as read",
 		NextActions: []string{
 			"Check other DMs: inbox view='unreads' focus='dms'",
-			fmt.Sprintf("Catch up with %s: messages target='@%s'", userName, userName),
+			fmt.Sprintf("Catch up with %s: messages target='%s' since='1d'", person, person),
 		},
 	}, nil
 }

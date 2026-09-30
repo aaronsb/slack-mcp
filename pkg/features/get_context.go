@@ -69,14 +69,10 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		}, nil
 	}
 
-	// Resolve channel name to ID (also resolves usernames to DM channels)
-	channelID := resolveChannelForSending(apiProvider, api, channel)
-	if channelID == "" {
-		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("Could not find channel or user '%s'", channel),
-			Guidance: "See available channels: estate view='channels' — or provide a username for DMs",
-		}, nil
+	// A read: a unique fragment may resolve a person (ADR-005 read policy)
+	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.ReadPolicy, "target")
+	if terr != nil {
+		return terr.result(), nil
 	}
 
 	var messages []slack.Message

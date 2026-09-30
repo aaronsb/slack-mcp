@@ -43,7 +43,7 @@ type ApiProvider struct {
 	usersMutex sync.RWMutex
 
 	channels      map[string]slack.Channel // Channel ID -> Channel info
-	channelNames  map[string]string        // Channel name/display name -> Channel ID
+	channelNames  map[string]string        // Channel name -> Channel ID (channels only; DMs are in dmMap)
 	channelsMutex sync.RWMutex
 
 	// DM channel map: user name/ID -> DM channel ID
@@ -440,8 +440,14 @@ func (ap *ApiProvider) loadChannelsFromCache() {
 	if ap.store != nil {
 		var dmMap map[string]string
 		if err := ap.store.Load(dmMapCacheFile, &dmMap); err == nil {
+			// Merge, don't replace: the IMs just indexed are the fresher
+			// record, and DMs are reachable only through dmMap.
 			ap.dmMapMutex.Lock()
-			ap.dmMap = dmMap
+			for user, dm := range dmMap {
+				if _, ok := ap.dmMap[user]; !ok {
+					ap.dmMap[user] = dm
+				}
+			}
 			ap.dmMapMutex.Unlock()
 		}
 	}
@@ -454,44 +460,25 @@ func (ap *ApiProvider) loadChannelsFromCache() {
 	log.Printf("Loaded %d channels from cache", len(loaded))
 }
 
-// indexChannel adds name mappings for a channel (caller must hold channelsMutex write lock)
+// indexChannel adds name mappings for a channel (caller must hold channelsMutex write lock).
+// channelNames holds channel names only; people reach their DM through
+// dmMap (indexChannelDM), never through this index.
 func (ap *ApiProvider) indexChannel(ch slack.Channel) {
 	if ch.Name != "" {
 		ap.channelNames[ch.Name] = ch.ID
 		ap.channelNames[strings.ToLower(ch.Name)] = ch.ID
 	}
-
-	// For DMs, map by user's real name and username.
-	// Note: we do NOT acquire usersMutex or dmMapMutex here to avoid
-	// lock ordering violations. Callers should call indexChannelDM()
-	// separately after releasing channelsMutex.
-	// The name mappings for DMs are best-effort from cached user data.
 }
 
-// indexChannelDM adds DM-specific mappings (user name → channel ID, DM map).
-// Must be called WITHOUT channelsMutex held to avoid lock ordering issues.
+// indexChannelDM records which user a DM belongs to. It deliberately does
+// not write the user's names into channelNames: that namespace is channel
+// names only, so a '#name' lookup can never land in a person's DM when a
+// handle and a channel share a name (issue #94). People resolve through the
+// ADR-005 ladder and reach their DM through dmMap.
 func (ap *ApiProvider) indexChannelDM(ch slack.Channel) {
 	if !ch.IsIM || ch.User == "" {
 		return
 	}
-
-	ap.usersMutex.RLock()
-	user, ok := ap.users[ch.User]
-	ap.usersMutex.RUnlock()
-
-	if ok {
-		ap.channelsMutex.Lock()
-		if user.RealName != "" {
-			ap.channelNames[user.RealName] = ch.ID
-			ap.channelNames[strings.ToLower(user.RealName)] = ch.ID
-		}
-		if user.Name != "" {
-			ap.channelNames[user.Name] = ch.ID
-			ap.channelNames[strings.ToLower(user.Name)] = ch.ID
-		}
-		ap.channelsMutex.Unlock()
-	}
-
 	ap.dmMapMutex.Lock()
 	ap.dmMap[ch.User] = ch.ID
 	ap.dmMapMutex.Unlock()
@@ -846,7 +833,7 @@ func (ap *ApiProvider) GetChannelInfo(ctx context.Context, channelIDOrName strin
 
 	ap.channelsMutex.RLock()
 	// Try name resolution if not already an ID
-	if !looksLikeChannelID(channelIDOrName) {
+	if !LooksLikeChannelID(channelIDOrName) {
 		if id, ok := ap.channelNames[channelIDOrName]; ok {
 			channelID = id
 		} else if id, ok := ap.channelNames[strings.ToLower(channelIDOrName)]; ok {
@@ -863,89 +850,54 @@ func (ap *ApiProvider) GetChannelInfo(ctx context.Context, channelIDOrName strin
 
 	// Cache miss — try on-demand resolution
 
-	// If the input doesn't look like a channel ID, try display name resolution
-	if !looksLikeChannelID(channelIDOrName) {
-		ch, err := ap.resolveByDisplayName(ctx, channelIDOrName)
-		if err == nil {
-			return ch, nil
-		}
-		log.Printf("Display name resolution failed for %q: %v", channelIDOrName, err)
-	}
-
 	// Try direct API fetch with the ID we have
-	if looksLikeChannelID(channelID) {
+	if LooksLikeChannelID(channelID) {
 		return ap.fetchAndCacheChannel(ctx, channelID)
 	}
 
 	return nil, fmt.Errorf("channel_not_found: %s", channelIDOrName)
 }
 
-// resolveByDisplayName tries to resolve a display name to a DM channel.
-// It searches users by real name, then opens a DM via conversations.open.
-func (ap *ApiProvider) resolveByDisplayName(ctx context.Context, name string) (*slack.Channel, error) {
+// ExistingDM returns the DM already known with a user, from dmMap only —
+// no network, and never creating one.
+func (ap *ApiProvider) ExistingDM(userID string) (string, bool) {
+	ap.dmMapMutex.RLock()
+	defer ap.dmMapMutex.RUnlock()
+	dmID, ok := ap.dmMap[userID]
+	return dmID, ok
+}
+
+// OpenDM returns the DM conversation with a user: from dmMap when known,
+// otherwise through conversations.open (which returns the existing DM or
+// creates it), patching the caches. Callers decide who; this only opens.
+func (ap *ApiProvider) OpenDM(ctx context.Context, userID string) (string, error) {
+	if dmID, ok := ap.ExistingDM(userID); ok {
+		return dmID, nil
+	}
+
 	client, err := ap.Provide()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-
-	// Search users for matching real name or username
-	nameLower := strings.ToLower(name)
-
-	ap.usersMutex.RLock()
-	var matchedUserID string
-	for _, user := range ap.users {
-		if strings.ToLower(user.RealName) == nameLower || strings.ToLower(user.Name) == nameLower {
-			matchedUserID = user.ID
-			break
-		}
-	}
-	ap.usersMutex.RUnlock()
-
-	if matchedUserID == "" {
-		return nil, fmt.Errorf("no user matching %q", name)
-	}
-
-	// Check DM map first
-	ap.dmMapMutex.RLock()
-	if dmID, ok := ap.dmMap[matchedUserID]; ok {
-		ap.dmMapMutex.RUnlock()
-		// We have the DM channel ID, fetch info
-		ap.channelsMutex.RLock()
-		if ch, ok := ap.channels[dmID]; ok {
-			ap.channelsMutex.RUnlock()
-			return &ch, nil
-		}
-		ap.channelsMutex.RUnlock()
-		return ap.fetchAndCacheChannel(ctx, dmID)
-	}
-	ap.dmMapMutex.RUnlock()
-
-	// Open DM conversation (creates if needed, returns existing if already open)
-	dmChannel, _, _, err := client.OpenConversationContext(ctx, &slack.OpenConversationParameters{
-		Users: []string{matchedUserID},
+	dm, _, _, err := client.OpenConversationContext(ctx, &slack.OpenConversationParameters{
+		Users: []string{userID},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("open DM for %q: %w", name, err)
+		return "", err
+	}
+	if dm.User == "" {
+		dm.User = userID
+		dm.IsIM = true
 	}
 
-	dmChannelID := dmChannel.ID
-
-	// Patch DM map
-	ap.dmMapMutex.Lock()
-	ap.dmMap[matchedUserID] = dmChannelID
-	ap.dmMapMutex.Unlock()
-
-	// Cache the channel info we already have
 	ap.channelsMutex.Lock()
-	ap.channels[dmChannelID] = *dmChannel
-	ap.indexChannel(*dmChannel)
-	ap.channelNames[name] = dmChannelID
-	ap.channelNames[nameLower] = dmChannelID
+	ap.channels[dm.ID] = *dm
+	ap.indexChannel(*dm)
 	ap.channelsMutex.Unlock()
 
-	ap.indexChannelDM(*dmChannel)
+	ap.indexChannelDM(*dm)
 	ap.markDirty()
-	return dmChannel, nil
+	return dm.ID, nil
 }
 
 // fetchAndCacheChannel fetches a channel from API and patches the cache
@@ -984,31 +936,37 @@ func (ap *ApiProvider) ResolveChannelName(ctx context.Context, channelID string)
 	return info.Name
 }
 
-// ResolveChannelID resolves a channel name to ID.
-// On cache miss, tries display name resolution via user search + conversations.open.
-func (ap *ApiProvider) ResolveChannelID(channelNameOrID string) string {
-	if looksLikeChannelID(channelNameOrID) {
-		return channelNameOrID
-	}
-
+// LookupChannel finds a conversation by cached ID or by channel name, from
+// the cache only — no network. channelNames holds channel names alone, so a
+// name never lands in a person's DM; a bare cached ID may be any conversation.
+func (ap *ApiProvider) LookupChannel(nameOrID string) (slack.Channel, bool) {
 	ap.channelsMutex.RLock()
-	if id, ok := ap.channelNames[channelNameOrID]; ok {
-		ap.channelsMutex.RUnlock()
-		return id
-	}
-	if id, ok := ap.channelNames[strings.ToLower(channelNameOrID)]; ok {
-		ap.channelsMutex.RUnlock()
-		return id
-	}
+	ch, ok := ap.channels[nameOrID]
 	ap.channelsMutex.RUnlock()
-
-	// Cache miss — try on-demand resolution
-	ch, err := ap.resolveByDisplayName(context.Background(), channelNameOrID)
-	if err != nil {
-		log.Printf("ResolveChannelID: no match for %q: %v", channelNameOrID, err)
-		return channelNameOrID
+	if ok {
+		return ch, true
 	}
-	return ch.ID
+	return ap.LookupChannelName(nameOrID)
+}
+
+// LookupChannelName finds a channel by name only — never by ID, so a
+// '#'-prefixed input cannot address a DM by its ID.
+func (ap *ApiProvider) LookupChannelName(name string) (slack.Channel, bool) {
+	ap.channelsMutex.RLock()
+	defer ap.channelsMutex.RUnlock()
+	id, ok := ap.channelNames[name]
+	if !ok {
+		id, ok = ap.channelNames[strings.ToLower(name)]
+	}
+	if !ok {
+		return slack.Channel{}, false
+	}
+	ch, ok := ap.channels[id]
+	if !ok {
+		ch.ID = id
+		ch.Name = name
+	}
+	return ch, true
 }
 
 // ResolveUser resolves a user ID to user info, fetching on cache miss.
@@ -1126,23 +1084,26 @@ func (ap *ApiProvider) GetCacheInfo() CacheInfo {
 	}
 }
 
-// looksLikeChannelID returns true if the string looks like a Slack channel/DM/group ID
-// looksLikeChannelID returns true if the string looks like a Slack channel/DM/group ID.
-// Real IDs are a capital letter (C, D, G) followed by uppercase alphanumeric chars, no spaces.
-func looksLikeChannelID(s string) bool {
-	if len(s) < 2 {
+// LooksLikeChannelID reports whether s has the shape of a Slack channel,
+// DM, or group ID: C, D or G, then uppercase alphanumerics, at least nine
+// characters in all and carrying digits — the same bounds looksLikeUserID
+// uses, so an all-caps name like DAVE or GARY is not mistaken for an ID.
+func LooksLikeChannelID(s string) bool {
+	if len(s) < 9 || (s[0] != 'C' && s[0] != 'D' && s[0] != 'G') {
 		return false
 	}
-	if s[0] != 'C' && s[0] != 'D' && s[0] != 'G' {
-		return false
-	}
+	digits := false
 	for i := 1; i < len(s); i++ {
 		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) {
+		if c >= '0' && c <= '9' {
+			digits = true
+			continue
+		}
+		if !(c >= 'A' && c <= 'Z') {
 			return false
 		}
 	}
-	return true
+	return digits
 }
 
 func withHTTPClientOption(cookie string) func(c *slack.Client) {
