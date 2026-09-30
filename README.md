@@ -101,7 +101,15 @@ export SLACK_MCP_XOXD_TOKEN="xoxd-..."
 
 Over stdio the server exits cleanly when its client is gone: stdin closes, a termination signal arrives (`SIGTERM`, `SIGINT`, `SIGHUP`), or its parent process exits. Each exit flushes the caches and releases the ledger locks, so the next instance is not left read-only.
 
-A wedged connection, such as a half-open SSH session, leaves the pipe open with nobody reading it. For hosts where that happens, set `SLACK_MCP_IDLE_TIMEOUT` to a duration (`90m`, `2h`) and the server exits after that long without client input. The timeout is off by default: a stdio client does not respawn a server that exits, so an idle-but-healthy session would find it disconnected. SSE mode ignores the setting.
+A wedged connection, such as a half-open SSH session, leaves the pipe open with nobody reading it. Only an idle timeout catches that, and it is valid only where it can happen, so the server ties the timeout to how it is deployed:
+
+| Deployment | `SLACK_MCP_IDLE_TIMEOUT` |
+|---|---|
+| stdio, local | Not allowed. A stdio client does not respawn a server that exits, so an idle-but-healthy session would find it disconnected. |
+| stdio, remote (over SSH) | Defaults to `2h`. Set a duration (`90m`) to change it, or `off` to disable. |
+| SSE | Not allowed. Each session is cleaned up when its connection ends. |
+
+The deployment is `remote` when `SSH_CONNECTION` or `SSH_CLIENT` is set, and `local` otherwise. Set `SLACK_MCP_DEPLOYMENT=local` or `remote` where detection is wrong, such as a server started inside tmux. A timeout set where it is not allowed, or a value that does not parse, stops the server at startup with the reason on stderr.
 
 ## Tools
 

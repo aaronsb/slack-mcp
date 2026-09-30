@@ -5,6 +5,7 @@ package main
 // so no Slack call and no real ledger is involved.
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"runtime"
@@ -38,6 +39,7 @@ func startServer(t *testing.T, env ...string) (*exec.Cmd, *os.File) {
 		"SLACK_MCP_XOXC_TOKEN=",
 		"SLACK_MCP_XOXD_TOKEN=",
 		"SLACK_MCP_IDLE_TIMEOUT=",
+		"SLACK_MCP_DEPLOYMENT=local",
 	)
 	cmd.Env = append(cmd.Env, env...)
 	r, w, err := os.Pipe()
@@ -76,8 +78,26 @@ func TestStdioExitsOnEOF(t *testing.T) {
 }
 
 func TestStdioExitsWhenIdle(t *testing.T) {
-	cmd, _ := startServer(t, "SLACK_MCP_IDLE_TIMEOUT=300ms")
+	cmd, _ := startServer(t, "SLACK_MCP_DEPLOYMENT=remote", "SLACK_MCP_IDLE_TIMEOUT=300ms")
 	exitWithin(t, cmd, 10*time.Second)
+}
+
+// A local stdio server with an idle timeout would leave its client
+// disconnected, so the server refuses the combination before it boots.
+func TestStdioRefusesLocalIdleTimeout(t *testing.T) {
+	cmd, _ := startServer(t, "SLACK_MCP_IDLE_TIMEOUT=300ms")
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			t.Fatalf("server exited with %v, want status 1", err)
+		}
+	case <-time.After(10 * time.Second):
+		cmd.Process.Kill()
+		t.Fatal("server started with a local idle timeout")
+	}
 }
 
 func TestStdioExitsCleanlyOnSignal(t *testing.T) {

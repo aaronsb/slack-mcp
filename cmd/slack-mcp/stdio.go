@@ -29,9 +29,9 @@ const (
 // runStdio serves MCP over stdio until the client is gone, then shuts the
 // provider down and returns the exit status. The client is gone when stdin
 // reaches EOF, a termination signal arrives, the parent process exits, or no
-// input arrives for SLACK_MCP_IDLE_TIMEOUT (#82). All of those are clean
+// input arrives for idle, when it is non-zero (#82). All of those are clean
 // exits; only a transport error returns 1.
-func runStdio(s *server.SemanticMCPServer) int {
+func runStdio(s *server.SemanticMCPServer, idle time.Duration) int {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 
@@ -55,7 +55,7 @@ func runStdio(s *server.SemanticMCPServer) int {
 	}()
 
 	activity := lifecycle.NewActivity()
-	if idle := lifecycle.IdleTimeoutFromEnv(); idle > 0 {
+	if idle > 0 {
 		log.Printf("Idle exit enabled: %s without client input", idle)
 		go lifecycle.WatchIdle(ctx, idle, activity.Last, cancel)
 	}

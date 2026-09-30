@@ -124,20 +124,57 @@ func TestWatchParentFiresOnReparent(t *testing.T) {
 	}
 }
 
-func TestParseIdleTimeout(t *testing.T) {
-	cases := map[string]time.Duration{
-		"":        0,
-		"0":       0,
-		"off":     0,
-		"OFF":     0,
-		"90s":     90 * time.Second,
-		" 2h ":    2 * time.Hour,
-		"garbage": 0,
-		"-5m":     0,
+func TestIdlePolicy(t *testing.T) {
+	cases := []struct {
+		transport string
+		dep       Deployment
+		raw       string
+		want      time.Duration
+		wantErr   bool
+	}{
+		{"stdio", Local, "", 0, false},
+		{"stdio", Local, "off", 0, false},
+		{"stdio", Local, "0", 0, false},
+		{"stdio", Local, "90m", 0, true},
+		{"stdio", Remote, "", DefaultRemoteIdle, false},
+		{"stdio", Remote, "OFF", 0, false},
+		{"stdio", Remote, " 90s ", 90 * time.Second, false},
+		{"stdio", Remote, "garbage", 0, true},
+		{"stdio", Remote, "-5m", 0, true},
+		{"sse", Local, "", 0, false},
+		{"sse", Remote, "", 0, false},
+		{"sse", Remote, "off", 0, false},
+		{"sse", Remote, "2h", 0, true},
+		{"sse", Local, "garbage", 0, true},
 	}
-	for in, want := range cases {
-		if got := parseIdleTimeout(in); got != want {
-			t.Errorf("parseIdleTimeout(%q) = %s, want %s", in, got, want)
+	for _, c := range cases {
+		got, err := IdlePolicy(c.transport, c.dep, c.raw)
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("IdlePolicy(%s, %s, %q) = %s, %v; want %s, err=%v", c.transport, c.dep, c.raw, got, err, c.want, c.wantErr)
+		}
+	}
+}
+
+func TestDeploymentFromEnv(t *testing.T) {
+	cases := []struct {
+		explicit, sshConn, sshClient string
+		want                         Deployment
+		wantErr                      bool
+	}{
+		{"", "", "", Local, false},
+		{"", "10.0.0.1 5000 10.0.0.2 22", "", Remote, false},
+		{"", "", "10.0.0.1 5000 22", Remote, false},
+		{"local", "10.0.0.1 5000 10.0.0.2 22", "", Local, false},
+		{"Remote", "", "", Remote, false},
+		{"cloud", "", "", "", true},
+	}
+	for _, c := range cases {
+		t.Setenv("SLACK_MCP_DEPLOYMENT", c.explicit)
+		t.Setenv("SSH_CONNECTION", c.sshConn)
+		t.Setenv("SSH_CLIENT", c.sshClient)
+		got, err := DeploymentFromEnv()
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("DeploymentFromEnv(%q, ssh=%q/%q) = %q, %v; want %q, err=%v", c.explicit, c.sshConn, c.sshClient, got, err, c.want, c.wantErr)
 		}
 	}
 }

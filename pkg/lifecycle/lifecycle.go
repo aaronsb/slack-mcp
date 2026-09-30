@@ -14,6 +14,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -129,28 +130,80 @@ func WatchParent(ctx context.Context, getppid func() int, interval time.Duration
 	}
 }
 
-// IdleTimeoutFromEnv reads SLACK_MCP_IDLE_TIMEOUT as a Go duration ("90m",
-// "2h"). Unset, "0" and "off" all disable the timer. It is opt-in because a
-// healthy client that merely goes quiet cannot tell an idle exit from a
-// crash: Claude Code does not respawn a stdio server that exits, so the
-// operator sees it disconnected until /mcp reconnects it. Where orphans come
-// from wedged connections (remote hosts over SSH), set it. This is a knob
-// where the estate has none: when to give up on a silent client is operator
-// policy, not something the server can learn.
-func IdleTimeoutFromEnv() time.Duration {
-	return parseIdleTimeout(os.Getenv("SLACK_MCP_IDLE_TIMEOUT"))
+// Deployment is where a stdio server runs relative to its client. It decides
+// whether an idle timeout is valid (#82).
+type Deployment string
+
+const (
+	// Local: the client spawned the server on the same machine. Nothing can
+	// wedge the pipe, and Claude Code does not respawn a stdio server that
+	// exits, so an idle exit would only leave a healthy client disconnected.
+	Local Deployment = "local"
+	// Remote: the client reaches the server over SSH. A half-open connection
+	// keeps the pipe open with nobody reading, which only the idle timer sees.
+	Remote Deployment = "remote"
+)
+
+// DefaultRemoteIdle is the idle timeout a remote stdio server gets when
+// SLACK_MCP_IDLE_TIMEOUT is unset.
+const DefaultRemoteIdle = 2 * time.Hour
+
+// DeploymentFromEnv reads SLACK_MCP_DEPLOYMENT ("local" or "remote"). Unset,
+// it detects: a server launched by sshd sees SSH_CONNECTION or SSH_CLIENT.
+func DeploymentFromEnv() (Deployment, error) {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("SLACK_MCP_DEPLOYMENT"))); v {
+	case "local":
+		return Local, nil
+	case "remote":
+		return Remote, nil
+	case "":
+		if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != "" {
+			return Remote, nil
+		}
+		return Local, nil
+	default:
+		return "", fmt.Errorf("SLACK_MCP_DEPLOYMENT=%q: want local or remote", v)
+	}
 }
 
-func parseIdleTimeout(v string) time.Duration {
-	v = strings.TrimSpace(v)
-	switch strings.ToLower(v) {
-	case "", "0", "off":
-		return 0
+// IdleTimeoutFromEnv resolves SLACK_MCP_IDLE_TIMEOUT for the given transport
+// and the deployment from DeploymentFromEnv. See IdlePolicy.
+func IdleTimeoutFromEnv(transport string) (time.Duration, error) {
+	dep, err := DeploymentFromEnv()
+	if err != nil {
+		return 0, err
 	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d < 0 {
-		log.Printf("Ignoring SLACK_MCP_IDLE_TIMEOUT=%q (want a duration like 90m, or off); idle exit stays off", v)
-		return 0
+	return IdlePolicy(transport, dep, os.Getenv("SLACK_MCP_IDLE_TIMEOUT"))
+}
+
+// IdlePolicy returns the idle timeout for a transport and deployment, given
+// the raw SLACK_MCP_IDLE_TIMEOUT value, or an error naming the invalid
+// combination so the server refuses to start rather than run with a timeout
+// that cannot help. Only remote stdio may idle out, and it does by default;
+// "0" or "off" disables it there and is accepted everywhere.
+func IdlePolicy(transport string, dep Deployment, raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	var d time.Duration
+	switch strings.ToLower(raw) {
+	case "":
+		if transport == "stdio" && dep == Remote {
+			return DefaultRemoteIdle, nil
+		}
+		return 0, nil
+	case "0", "off":
+		return 0, nil
+	default:
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			return 0, fmt.Errorf("SLACK_MCP_IDLE_TIMEOUT=%q: want a duration like 90m, or off", raw)
+		}
+		d = parsed
 	}
-	return d
+	switch {
+	case transport != "stdio":
+		return 0, fmt.Errorf("SLACK_MCP_IDLE_TIMEOUT applies only to stdio; %s cleans up each session when its connection ends", transport)
+	case dep == Local:
+		return 0, fmt.Errorf("SLACK_MCP_IDLE_TIMEOUT is not valid for a local stdio server: the client does not respawn a server that exits. Set SLACK_MCP_DEPLOYMENT=remote if this server is reached over SSH")
+	}
+	return d, nil
 }
