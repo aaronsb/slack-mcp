@@ -13,7 +13,7 @@ import (
 // conversation by what the caller typed, reads and writes alike. The prefix
 // states intent and is honoured before any lookup:
 //
-//	'#name'   a channel, by channel name only — never a person's DM
+//	'#name'   a channel, by channel name only — never a DM, not even by ID
 //	C…/D…/G…  a real Slack conversation ID passes through
 //	'@name'   a person, through the ADR-005 ladder
 //	bare      a channel if one is named so, otherwise a person
@@ -55,42 +55,50 @@ func personMissResult(res *provider.PersonResolution) *FeatureResult {
 }
 
 // resolveTarget maps a conversation reference to a conversation ID under a
-// policy. A write that fails here has made no Slack call.
-func resolveTarget(ctx context.Context, ap *provider.ApiProvider, input string, policy provider.Policy) (string, *targetError) {
+// policy. param names the caller's parameter ('to', 'target', 'channel') so
+// guidance speaks the tool's own vocabulary. A write that fails here has
+// made no Slack call.
+func resolveTarget(ctx context.Context, ap *provider.ApiProvider, input string, policy provider.Policy, param string) (string, *targetError) {
 	in := strings.TrimSpace(input)
 	switch {
 	case strings.HasPrefix(in, "#"):
-		if id, ok := ap.LookupChannel(strings.TrimPrefix(in, "#")); ok {
-			return id, nil
+		// Channels by name only: '#' never addresses a DM, not even by ID.
+		name := strings.TrimSpace(strings.TrimPrefix(in, "#"))
+		if ch, ok := ap.LookupChannelName(name); ok {
+			return ch.ID, nil
 		}
 		return "", &targetError{
 			Message:  fmt.Sprintf("No channel named '%s' is known, so nothing was done.", in),
-			Guidance: "See available channels: estate view='channels' — for a person, use to='@handle'",
+			Guidance: fmt.Sprintf("See available channels: estate view='channels' — for a person, use %s='@handle'", param),
 		}
 	case provider.LooksLikeChannelID(in):
 		return in, nil
 	case strings.HasPrefix(in, "@"):
-		return personTarget(ctx, ap, in, policy)
+		return personTarget(ctx, ap, in, policy, param)
 	}
 
-	id, isChannel := ap.LookupChannel(in)
+	ch, isChannel := ap.LookupChannel(in)
 	if !isChannel {
-		return personTarget(ctx, ap, in, policy)
+		return personTarget(ctx, ap, in, policy, param)
 	}
 	if policy == provider.ReadPolicy {
-		return id, nil
+		return ch.ID, nil
 	}
 	if res := ap.ResolvePerson(in); namesPersonExactly(res, in) {
 		person := "@" + in
 		if res.Resolved {
 			person = "@" + res.Handle
 		}
+		channel := "#" + in
+		if ch.Name != "" {
+			channel = "#" + ch.Name
+		}
 		return "", &targetError{
-			Message:  fmt.Sprintf("'%s' names both the channel #%s and the person %s, so nothing was sent.", in, in, person),
-			Guidance: fmt.Sprintf("Say which: to='#%s' for the channel, or to='%s' for a DM", in, person),
+			Message:  fmt.Sprintf("'%s' names both the channel %s and the person %s, so nothing was done.", in, channel, person),
+			Guidance: fmt.Sprintf("Say which: %s='%s' for the channel, or %s='%s' for a DM", param, channel, param, person),
 		}
 	}
-	return id, nil
+	return ch.ID, nil
 }
 
 // namesPersonExactly reports whether the ladder found someone whose handle,
@@ -110,20 +118,30 @@ func namesPersonExactly(res provider.PersonResolution, input string) bool {
 }
 
 // personTarget resolves a person through the ladder and opens their DM when
-// the policy accepts the rung.
-func personTarget(ctx context.Context, ap *provider.ApiProvider, input string, policy provider.Policy) (string, *targetError) {
-	res := ap.ResolvePerson(input)
+// the policy accepts the rung. A deactivated person (reads only) is reached
+// through a DM that already exists — never by opening one.
+func personTarget(ctx context.Context, ap *provider.ApiProvider, input string, policy provider.Policy, param string) (string, *targetError) {
+	res := ap.ResolvePersonFor(input, policy)
 	if !policy.Accepts(res) {
 		if policy == provider.ReadPolicy {
 			return "", &targetError{Message: fmt.Sprintf("Could not resolve %q (%s)", input, res.Reason), miss: &res}
 		}
-		return "", unresolvedPerson(input, res)
+		return "", unresolvedPerson(input, res, param)
+	}
+	if strings.HasPrefix(res.Via, "deactivated") {
+		if dm, ok := ap.ExistingDM(res.UserID); ok {
+			return dm, nil
+		}
+		return "", &targetError{
+			Message:  fmt.Sprintf("%s (@%s) is deactivated and has no DM history with you.", res.DisplayName, res.Handle),
+			Guidance: fmt.Sprintf("Search their traffic instead: messages query='from:@%s'", res.Handle),
+		}
 	}
 	dm, err := ap.OpenDM(ctx, res.UserID)
 	if err != nil {
 		log.Printf("Failed to open DM for %q: %v", input, err)
 		return "", &targetError{
-			Message:  fmt.Sprintf("Could not open a conversation with '%s', so nothing was sent.", input),
+			Message:  fmt.Sprintf("Could not open a conversation with '%s', so nothing was done.", input),
 			Guidance: "Retry, or check the handle: estate view='people'",
 		}
 	}
@@ -132,13 +150,13 @@ func personTarget(ctx context.Context, ap *provider.ApiProvider, input string, p
 
 // unresolvedPerson explains a person a write may not act on. Deactivated
 // people are listed as such but never offered as a retry target.
-func unresolvedPerson(input string, res provider.PersonResolution) *targetError {
+func unresolvedPerson(input string, res provider.PersonResolution, param string) *targetError {
 	if res.Resolved {
 		// One person matched, but not by exact handle.
 		label := candidateLabel(provider.PersonCandidate{Handle: res.Handle, DisplayName: res.DisplayName})
 		return &targetError{
-			Message:  fmt.Sprintf("'%s' is not an exact handle, so nothing was sent. Did you mean %s?", input, label),
-			Guidance: fmt.Sprintf("Writes resolve only an exact @handle (or @me). Retry with to='@%s'", res.Handle),
+			Message:  fmt.Sprintf("'%s' is not an exact handle, so nothing was done. Did you mean %s?", input, label),
+			Guidance: fmt.Sprintf("Writes resolve only an exact @handle (or @me). Retry with %s='@%s'", param, res.Handle),
 		}
 	}
 
@@ -151,16 +169,16 @@ func unresolvedPerson(input string, res provider.PersonResolution) *targetError 
 	}
 	if len(res.Candidates) == 0 {
 		return &targetError{
-			Message:  fmt.Sprintf("Could not find a channel or person named '%s', so nothing was sent.", input),
+			Message:  fmt.Sprintf("Could not find a channel or person named '%s', so nothing was done.", input),
 			Guidance: "See available channels: estate view='channels' — or find a person: estate view='people' person='<name>'",
 		}
 	}
 
 	var b strings.Builder
 	if retry == "" {
-		fmt.Fprintf(&b, "'%s' matches only deactivated people, who can't be messaged. Nothing was sent.", input)
+		fmt.Fprintf(&b, "'%s' matches only deactivated people, who can't be messaged. Nothing was done.", input)
 	} else {
-		fmt.Fprintf(&b, "'%s' is not an exact handle, so nothing was sent. Candidates:", input)
+		fmt.Fprintf(&b, "'%s' is not an exact handle, so nothing was done. Candidates:", input)
 	}
 	for _, c := range res.Candidates {
 		b.WriteString("\n  " + candidateLabel(c))
@@ -173,7 +191,7 @@ func unresolvedPerson(input string, res provider.PersonResolution) *targetError 
 	}
 	guidance := "Nothing to retry: a deactivated account cannot receive messages."
 	if retry != "" {
-		guidance = fmt.Sprintf("Retry with the exact @handle of the person you mean, e.g. to='@%s'", retry)
+		guidance = fmt.Sprintf("Retry with the exact @handle of the person you mean, e.g. %s='@%s'", param, retry)
 	}
 	return &targetError{Message: b.String(), Guidance: guidance}
 }

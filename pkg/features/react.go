@@ -72,7 +72,7 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 	}
 
 	// A reaction is a write: route by prefix, a person only exactly (ADR-005)
-	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy)
+	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy, "to")
 	if terr != nil {
 		return terr.result(), nil
 	}

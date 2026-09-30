@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/aaronsb/slack-mcp/pkg/handle"
-	"github.com/aaronsb/slack-mcp/pkg/provider"
 )
 
 // The v2 tool surface (ADR-009): eight tools by the assignment rule — verb
@@ -165,22 +164,8 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 		echo := echoLine("messages", "target='"+target+"' around="+around, params, "limit")
 		return delegate(ctx, GetContext, params, echo)
 	case target != "" && since != "":
+		// catch-up resolves the target itself, under the read policy.
 		channel := conversationOf(target)
-		if strings.HasPrefix(target, "@") {
-			// catch-up's resolver speaks channels; people resolve here,
-			// under the read policy, to their DM conversation.
-			ap, ok := params["_provider"].(*provider.ApiProvider)
-			if !ok {
-				return &FeatureResult{Success: false, Message: "Internal error: provider not available"}, nil
-			}
-			dm, terr := resolveTarget(ctx, ap, target, provider.ReadPolicy)
-			if terr != nil {
-				out := terr.result()
-				out.Echo = echoLine("messages", "target='"+target+"' since="+since, params, "limit", "cursor")
-				return out, nil
-			}
-			channel = dm
-		}
 		params["channel"] = channel
 		echo := echoLine("messages", "target='"+target+"' since="+since, params, "limit", "cursor")
 		return delegate(ctx, CatchUpOnChannel, params, echo)

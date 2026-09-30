@@ -70,7 +70,7 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 	}
 
 	// A read: a unique fragment may resolve a person (ADR-005 read policy)
-	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.ReadPolicy)
+	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.ReadPolicy, "target")
 	if terr != nil {
 		return terr.result(), nil
 	}

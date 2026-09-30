@@ -61,7 +61,7 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	}
 
 	// Route the target by prefix; a person resolves only exactly (ADR-005)
-	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy)
+	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy, "to")
 	if terr != nil {
 		return terr.result(), nil
 	}

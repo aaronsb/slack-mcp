@@ -34,7 +34,7 @@ type PersonResolution struct {
 	Handle      string
 	UserID      string
 	DisplayName string
-	Via         string // "self" | "user-id" | "exact-handle" | "unique-name" | "unique-match"
+	Via         string // "self" | "user-id" | "exact-handle" | "unique-name" | "unique-match" | "deactivated-handle" | "deactivated-user-id"
 	// Reason is set when not Resolved: "empty", "ambiguous", "tombstoned",
 	// "never_seen", or "unswept". Candidates carry the near-matches for
 	// ambiguous and tombstoned outcomes.
@@ -51,34 +51,55 @@ const maxCandidates = 5
 type Policy int
 
 const (
-	// ReadPolicy acts on any resolved rung, a unique fragment included.
-	ReadPolicy Policy = iota
+	// policyUnset is the zero value and accepts nothing: a Policy nobody
+	// chose fails closed.
+	policyUnset Policy = iota
 	// WritePolicy acts only on an exact handle — or on an input that is
 	// exact by construction: the operator's own '@me', a literal user ID.
+	// Deactivated users are never write targets.
 	WritePolicy
-	// bareNamePolicy guards the legacy channel resolvers' person fallback
-	// (ResolveChannelID, GetChannelInfo): a bare string that named no
-	// channel reaches a person only when it names them exactly.
-	bareNamePolicy
+	// ReadPolicy acts on any resolved rung, a unique fragment included, and
+	// may reach a deactivated person's existing DM by exact handle or ID.
+	ReadPolicy
 )
 
-// policyRungs is the one place that lists the rungs each policy accepts;
-// ReadPolicy is absent because it accepts every resolved rung. Admitting a
-// unique exact real/display name as a write target is adding "unique-name"
-// to the WritePolicy line — and amending ADR-005 to match.
+// policyRungs is the one place that lists the rungs each policy accepts. A
+// policy absent from it accepts nothing. Admitting a unique exact real or
+// display name as a write target is adding "unique-name" to the WritePolicy
+// line — and amending ADR-005 to match.
 var policyRungs = map[Policy]map[string]bool{
-	WritePolicy:    {"self": true, "user-id": true, "exact-handle": true},
-	bareNamePolicy: {"self": true, "user-id": true, "exact-handle": true, "unique-name": true},
+	WritePolicy: {"self": true, "user-id": true, "exact-handle": true},
+	ReadPolicy: {"self": true, "user-id": true, "exact-handle": true, "unique-name": true,
+		"unique-match": true, "deactivated-handle": true, "deactivated-user-id": true},
 }
 
 // Accepts reports whether the policy may act on res without asking.
-// Deactivated users never resolve, so no policy can accept one.
 func (p Policy) Accepts(res PersonResolution) bool {
-	if !res.Resolved {
-		return false
+	return res.Resolved && policyRungs[p][res.Via]
+}
+
+// ResolvePersonFor runs the ladder for a caller holding a policy. The ladder
+// never resolves a deactivated user; a policy that admits deactivated rungs
+// (reads) additionally reaches one by exact handle or user ID, so a departed
+// colleague's DM history stays readable by name.
+func (ap *ApiProvider) ResolvePersonFor(input string, p Policy) PersonResolution {
+	res := ap.ResolvePerson(input)
+	if res.Resolved || !policyRungs[p]["deactivated-handle"] {
+		return res
 	}
-	rungs, limited := policyRungs[p]
-	return !limited || rungs[res.Via]
+	name := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(input), "@"))
+	for id, u := range ap.ProvideUsersMap() {
+		if !u.Deleted {
+			continue
+		}
+		if id == name {
+			return resolvedFrom(PersonResolution{Input: input}, u, "deactivated-user-id")
+		}
+		if u.Name != "" && strings.EqualFold(u.Name, name) {
+			return resolvedFrom(PersonResolution{Input: input}, u, "deactivated-handle")
+		}
+	}
+	return res
 }
 
 // ResolvePerson runs the ladder for one person-shaped input. The answer

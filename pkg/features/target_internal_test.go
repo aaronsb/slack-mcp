@@ -19,7 +19,7 @@ func TestUnresolvedPersonNeverOffersTheDeactivated(t *testing.T) {
 			{ID: "U100DANA02", DisplayName: "Dana Whitfield", Deleted: true},
 		},
 	}
-	e := unresolvedPerson("@dana", res)
+	e := unresolvedPerson("@dana", res, "to")
 	if !strings.Contains(e.Message, "deactivated") || !strings.Contains(e.Message, "Dana Whitfield") {
 		t.Errorf("want the deactivated candidates named, got:\n%s", e.Message)
 	}
@@ -45,7 +45,7 @@ func TestUnresolvedPersonRetriesTheLiving(t *testing.T) {
 			{Handle: "bdana", DisplayName: "B Dana"},
 		},
 	}
-	e := unresolvedPerson("dana", res)
+	e := unresolvedPerson("dana", res, "to")
 	if !strings.Contains(e.Guidance, "to='@bdana'") {
 		t.Errorf("want the living candidate as the retry, got: %s", e.Guidance)
 	}

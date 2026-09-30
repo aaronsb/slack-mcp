@@ -399,8 +399,14 @@ func (ap *ApiProvider) loadChannelsFromCache() {
 	if ap.store != nil {
 		var dmMap map[string]string
 		if err := ap.store.Load(dmMapCacheFile, &dmMap); err == nil {
+			// Merge, don't replace: the IMs just indexed are the fresher
+			// record, and DMs are reachable only through dmMap.
 			ap.dmMapMutex.Lock()
-			ap.dmMap = dmMap
+			for user, dm := range dmMap {
+				if _, ok := ap.dmMap[user]; !ok {
+					ap.dmMap[user] = dm
+				}
+			}
 			ap.dmMapMutex.Unlock()
 		}
 	}
@@ -803,15 +809,6 @@ func (ap *ApiProvider) GetChannelInfo(ctx context.Context, channelIDOrName strin
 
 	// Cache miss — try on-demand resolution
 
-	// If the input doesn't look like a channel ID, it may name a person
-	if !LooksLikeChannelID(channelIDOrName) {
-		ch, err := ap.personDM(ctx, channelIDOrName)
-		if err == nil {
-			return ch, nil
-		}
-		log.Printf("Person resolution failed for %q: %v", channelIDOrName, err)
-	}
-
 	// Try direct API fetch with the ID we have
 	if LooksLikeChannelID(channelID) {
 		return ap.fetchAndCacheChannel(ctx, channelID)
@@ -820,36 +817,20 @@ func (ap *ApiProvider) GetChannelInfo(ctx context.Context, channelIDOrName strin
 	return nil, fmt.Errorf("channel_not_found: %s", channelIDOrName)
 }
 
-// personDM is the legacy channel resolvers' person fallback: a bare string
-// that named no channel reaches a DM only when the ADR-005 ladder names a
-// living person exactly (bareNamePolicy) — never first-match-wins, never a
-// deactivated user.
-func (ap *ApiProvider) personDM(ctx context.Context, name string) (*slack.Channel, error) {
-	res := ap.ResolvePerson(name)
-	if !bareNamePolicy.Accepts(res) {
-		return nil, fmt.Errorf("no person named exactly %q (%s)", name, res.Reason)
-	}
-	dmID, err := ap.OpenDM(ctx, res.UserID)
-	if err != nil {
-		return nil, err
-	}
-	ap.channelsMutex.RLock()
-	ch, ok := ap.channels[dmID]
-	ap.channelsMutex.RUnlock()
-	if ok {
-		return &ch, nil
-	}
-	return ap.fetchAndCacheChannel(ctx, dmID)
+// ExistingDM returns the DM already known with a user, from dmMap only —
+// no network, and never creating one.
+func (ap *ApiProvider) ExistingDM(userID string) (string, bool) {
+	ap.dmMapMutex.RLock()
+	defer ap.dmMapMutex.RUnlock()
+	dmID, ok := ap.dmMap[userID]
+	return dmID, ok
 }
 
 // OpenDM returns the DM conversation with a user: from dmMap when known,
 // otherwise through conversations.open (which returns the existing DM or
 // creates it), patching the caches. Callers decide who; this only opens.
 func (ap *ApiProvider) OpenDM(ctx context.Context, userID string) (string, error) {
-	ap.dmMapMutex.RLock()
-	dmID, ok := ap.dmMap[userID]
-	ap.dmMapMutex.RUnlock()
-	if ok {
+	if dmID, ok := ap.ExistingDM(userID); ok {
 		return dmID, nil
 	}
 
@@ -914,42 +895,37 @@ func (ap *ApiProvider) ResolveChannelName(ctx context.Context, channelID string)
 	return info.Name
 }
 
-// LookupChannel finds a channel by name or cached ID in the channel cache
-// only — no network, and never a person's DM, since channelNames holds
-// channel names alone.
-func (ap *ApiProvider) LookupChannel(nameOrID string) (string, bool) {
+// LookupChannel finds a conversation by cached ID or by channel name, from
+// the cache only — no network. channelNames holds channel names alone, so a
+// name never lands in a person's DM; a bare cached ID may be any conversation.
+func (ap *ApiProvider) LookupChannel(nameOrID string) (slack.Channel, bool) {
 	ap.channelsMutex.RLock()
-	defer ap.channelsMutex.RUnlock()
-	if _, ok := ap.channels[nameOrID]; ok {
-		return nameOrID, true
+	ch, ok := ap.channels[nameOrID]
+	ap.channelsMutex.RUnlock()
+	if ok {
+		return ch, true
 	}
-	if id, ok := ap.channelNames[nameOrID]; ok {
-		return id, true
-	}
-	if id, ok := ap.channelNames[strings.ToLower(nameOrID)]; ok {
-		return id, true
-	}
-	return "", false
+	return ap.LookupChannelName(nameOrID)
 }
 
-// ResolveChannelID resolves a channel name to ID for the read paths.
-// On a channel miss it falls back to a person named exactly (personDM);
-// the input comes back unchanged when nothing matches. Writes do not use
-// this — they route by prefix through the write policy (features.resolveTarget).
-func (ap *ApiProvider) ResolveChannelID(channelNameOrID string) string {
-	if LooksLikeChannelID(channelNameOrID) {
-		return channelNameOrID
+// LookupChannelName finds a channel by name only — never by ID, so a
+// '#'-prefixed input cannot address a DM by its ID.
+func (ap *ApiProvider) LookupChannelName(name string) (slack.Channel, bool) {
+	ap.channelsMutex.RLock()
+	defer ap.channelsMutex.RUnlock()
+	id, ok := ap.channelNames[name]
+	if !ok {
+		id, ok = ap.channelNames[strings.ToLower(name)]
 	}
-	if id, ok := ap.LookupChannel(channelNameOrID); ok {
-		return id
+	if !ok {
+		return slack.Channel{}, false
 	}
-
-	ch, err := ap.personDM(context.Background(), channelNameOrID)
-	if err != nil {
-		log.Printf("ResolveChannelID: no match for %q: %v", channelNameOrID, err)
-		return channelNameOrID
+	ch, ok := ap.channels[id]
+	if !ok {
+		ch.ID = id
+		ch.Name = name
 	}
-	return ch.ID
+	return ch, true
 }
 
 // ResolveUser resolves a user ID to user info, fetching on cache miss.

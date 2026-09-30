@@ -197,10 +197,45 @@ func TestChannelNamesHoldNoDMKeys(t *testing.T) {
 		ap.indexChannel(c)
 		ap.indexChannelDM(c)
 	}
-	if id, ok := ap.LookupChannel("dana"); !ok || id != "C1" {
-		t.Fatalf("LookupChannel(dana) = %q, %v; want the channel", id, ok)
+	if ch, ok := ap.LookupChannel("dana"); !ok || ch.ID != "C1" {
+		t.Fatalf("LookupChannel(dana) = %q, %v; want the channel", ch.ID, ok)
 	}
 	if ap.dmMap["U01AAAAA3"] != "D77" {
-		t.Errorf("the DM is still reachable by user through dmMap")
+		t.Errorf("the DM is no longer reachable by user through dmMap")
+	}
+	if _, ok := ap.LookupChannelName("D77"); ok {
+		t.Errorf("a name-only lookup matched a DM by its ID")
+	}
+}
+
+// A Policy nobody chose, or one missing from the table, accepts nothing.
+func TestPolicyFailsClosed(t *testing.T) {
+	r := ladderProvider().ResolvePerson("@chanceyc")
+	if !r.Resolved || r.Via != "exact-handle" {
+		t.Fatalf("fixture: %+v", r)
+	}
+	var unset Policy
+	if unset.Accepts(r) {
+		t.Errorf("the zero Policy accepted an exact handle")
+	}
+	if Policy(99).Accepts(r) {
+		t.Errorf("an unknown Policy accepted an exact handle")
+	}
+}
+
+// Reads reach a deactivated person by exact handle or user ID; writes never.
+func TestReadsReachTheDeactivatedByExactHandle(t *testing.T) {
+	ap := ladderProvider()
+	for _, in := range []string{"@ghost", "ghost", "U01AAAAA4"} {
+		r := ap.ResolvePersonFor(in, ReadPolicy)
+		if !ReadPolicy.Accepts(r) || r.UserID != "U01AAAAA4" {
+			t.Errorf("read of %q: %+v", in, r)
+		}
+		if w := ap.ResolvePersonFor(in, WritePolicy); WritePolicy.Accepts(w) {
+			t.Errorf("write accepted deactivated %q: %+v", in, w)
+		}
+	}
+	if r := ap.ResolvePersonFor("Gone Person", ReadPolicy); r.Resolved {
+		t.Errorf("a deactivated real name resolved on a read: %+v", r)
 	}
 }

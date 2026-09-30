@@ -2,6 +2,7 @@ package features_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -122,33 +123,59 @@ func assertNoWrite(t *testing.T, srv *slacktest.Server) {
 }
 
 // ambiguityServer holds the shapes the bare-word path used to mis-route:
-// duplicate real names, a deactivated user, and a handle that is also a
-// channel name with an open DM.
+// duplicate real names, a deactivated user with DM history, a handle that is
+// also a channel name with an open DM, a person with a DM but no channel of
+// their name, and a group DM.
 func ambiguityServer(t *testing.T) (*slacktest.Server, *[]string) {
 	t.Helper()
 	srv := slacktest.New(t)
 	srv.SeedUsers(
 		slack.User{ID: "U1", Name: "bockeliea", RealName: "Aaron Bockelie"},
+		slack.User{ID: "U100ALICE1", Name: "alice", RealName: "Alice Martin"},
 		slack.User{ID: "U100JOHNA1", Name: "jsmith", RealName: "John Smith"},
 		slack.User{ID: "U100JOHNB1", Name: "johns", RealName: "John Smith"},
 		slack.User{ID: "U100GONE01", Name: "gone", RealName: "Gone Person", Deleted: true},
 		slack.User{ID: "U100ENG001", Name: "eng", RealName: "Eng Bot"},
 	)
-	var eng, dm slack.Channel
+	im := func(id, user string) slack.Channel {
+		var c slack.Channel
+		c.ID, c.IsIM, c.User = id, true, user
+		return c
+	}
+	var eng, mpim slack.Channel
 	eng.ID, eng.Name, eng.IsChannel, eng.IsMember = "C1", "eng", true, true
-	dm.ID, dm.IsIM, dm.User = "D77", true, "U100ENG001"
-	srv.SeedChannels(eng, dm)
+	mpim.ID, mpim.Name, mpim.IsMpIM, mpim.IsMember = "G7", "mpdm-alice--bockeliea-1", true, true
+	srv.SeedChannels(eng, mpim,
+		im("D77", "U100ENG001"), im("D55", "U100ALICE1"), im("D66", "U100GONE01"),
+		im("D11", "U100JOHNA1"), im("D12", "U100JOHNB1"))
 
-	posted := &[]string{}
-	srv.Handle("chat.postMessage", func(r *http.Request) any {
+	touched := &[]string{}
+	record := func(r *http.Request) string {
 		_ = r.ParseForm()
-		*posted = append(*posted, r.FormValue("channel"))
-		return map[string]any{"ok": true, "channel": r.FormValue("channel"), "ts": "1786752114.508819"}
+		*touched = append(*touched, r.FormValue("channel"))
+		return r.FormValue("channel")
+	}
+	srv.Handle("chat.postMessage", func(r *http.Request) any {
+		return map[string]any{"ok": true, "channel": record(r), "ts": "1786752114.508819"}
+	})
+	srv.Handle("conversations.mark", func(r *http.Request) any {
+		record(r)
+		return map[string]any{"ok": true}
+	})
+	srv.Handle("conversations.history", func(r *http.Request) any {
+		record(r)
+		return map[string]any{"ok": true, "has_more": false,
+			"messages": []any{slacktest.Message("U2", "ship it", "1782246118.543969")}}
+	})
+	srv.Handle("conversations.replies", func(r *http.Request) any {
+		record(r)
+		return map[string]any{"ok": true, "has_more": false,
+			"messages": []any{slacktest.Message("U2", "ship it", "1786752114.508819")}}
 	})
 	srv.Handle("conversations.open", func(r *http.Request) any {
 		return map[string]any{"ok": true, "channel": map[string]any{"id": "D9"}}
 	})
-	return srv, posted
+	return srv, touched
 }
 
 func sayWith(t *testing.T, ap *provider.ApiProvider, to string) *features.FeatureResult {
@@ -330,5 +357,177 @@ func TestReactExactHandleStillResolves(t *testing.T) {
 	}
 	if srv.Calls("reactions.add") != 1 {
 		t.Errorf("want one reaction, got %d", srv.Calls("reactions.add"))
+	}
+}
+
+// '#' is channels by name only: a DM's ID after '#' is not a channel.
+func TestSayHashIDIsNotAChannel(t *testing.T) {
+	srv, _ := ambiguityServer(t)
+	ap := bootedProvider(t, srv)
+	srv.ResetCalls()
+
+	if res := sayWith(t, ap, "#D77"); res.Success {
+		t.Fatalf("'#D77' must not post to a DM: %s", res.Message)
+	}
+	assertNoWrite(t, srv)
+}
+
+func TestSayHashToleratesASpace(t *testing.T) {
+	srv, touched := ambiguityServer(t)
+	ap := bootedProvider(t, srv)
+	srv.ResetCalls()
+
+	if res := sayWith(t, ap, "# eng"); !res.Success {
+		t.Fatalf("'# eng' should post to #eng: %s", res.Message)
+	}
+	if len(*touched) != 1 || (*touched)[0] != "C1" {
+		t.Errorf("posted to %v, want [C1]", *touched)
+	}
+}
+
+// A group DM addresses by its name, with or without '#'.
+func TestSayToAGroupDM(t *testing.T) {
+	for _, to := range []string{"#mpdm-alice--bockeliea-1", "mpdm-alice--bockeliea-1"} {
+		t.Run(to, func(t *testing.T) {
+			srv, touched := ambiguityServer(t)
+			ap := bootedProvider(t, srv)
+			srv.ResetCalls()
+
+			if res := sayWith(t, ap, to); !res.Success {
+				t.Fatalf("%s should post: %s", to, res.Message)
+			}
+			if len(*touched) != 1 || (*touched)[0] != "G7" {
+				t.Errorf("posted to %v, want [G7]", *touched)
+			}
+		})
+	}
+}
+
+func markRead(t *testing.T, ap *provider.ApiProvider, params map[string]any) *features.FeatureResult {
+	t.Helper()
+	params["_provider"] = ap
+	res, err := features.MarkAsRead.Handler(context.Background(), params)
+	if err != nil {
+		t.Fatalf("mark-read: %v", err)
+	}
+	return res
+}
+
+// mark-read fires public receipts, so it resolves like a write: '#name' is
+// a channel only, and a person only by exact handle — never a real name, a
+// shared name, or a deactivated user.
+func TestMarkReadNeverGuessesAConversation(t *testing.T) {
+	cases := []map[string]any{
+		{"channel": "#alice"},
+		{"target": "channel:#alice"},
+		{"channel": "Alice Martin"},
+		{"channel": "John Smith"},
+		{"target": "dm:John Smith"},
+		{"channel": "gone"},
+		{"channel": "@gone"},
+		{"target": "dm:gone"},
+		{"target": "dm:Gone Person"},
+		{"channel": "#D77"},
+	}
+	for _, params := range cases {
+		t.Run(fmt.Sprint(params), func(t *testing.T) {
+			srv, _ := ambiguityServer(t)
+			ap := bootedProvider(t, srv)
+			srv.ResetCalls()
+
+			if res := markRead(t, ap, params); res.Success {
+				t.Fatalf("must not mark: %s", res.Message)
+			}
+			if n := srv.Calls("conversations.mark"); n != 0 {
+				t.Errorf("conversations.mark called %d times", n)
+			}
+		})
+	}
+}
+
+func TestMarkReadExactTargetsStillMark(t *testing.T) {
+	cases := []struct {
+		params map[string]any
+		want   string
+	}{
+		{map[string]any{"channel": "@alice"}, "D55"},
+		{map[string]any{"target": "dm:alice"}, "D55"},
+		{map[string]any{"channel": "#eng"}, "C1"},
+		{map[string]any{"channel": "mpdm-alice--bockeliea-1"}, "G7"},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprint(c.params), func(t *testing.T) {
+			srv, touched := ambiguityServer(t)
+			ap := bootedProvider(t, srv)
+			srv.ResetCalls()
+
+			if res := markRead(t, ap, c.params); !res.Success {
+				t.Fatalf("should mark: %s", res.Message)
+			}
+			if srv.Calls("conversations.mark") != 1 || (*touched)[len(*touched)-1] != c.want {
+				t.Errorf("marked %v (%d calls), want %s", *touched, srv.Calls("conversations.mark"), c.want)
+			}
+		})
+	}
+}
+
+func readSince(t *testing.T, ap *provider.ApiProvider, target string) string {
+	t.Helper()
+	return runTool(t, features.Messages, ap, map[string]any{"target": target, "since": "1d"})
+}
+
+// Every since= target routes through the read policy: '#alice' with no such
+// channel never reads Alice's DM; a bare word naming both a channel and a
+// person reads the channel; a deactivated colleague's DM stays readable by
+// exact handle.
+func TestSinceRoutesEveryTargetByPrefix(t *testing.T) {
+	cases := []struct {
+		target, want string
+	}{
+		{"#alice", ""},
+		{"eng", "C1"},
+		{"#eng", "C1"},
+		{"@gone", "D66"},
+		{"gone", "D66"},
+		{"Gone Person", ""},
+		{"John Smith", ""},
+		{"alice", "D55"},
+	}
+	for _, c := range cases {
+		t.Run(c.target, func(t *testing.T) {
+			srv, touched := ambiguityServer(t)
+			ap := bootedProvider(t, srv)
+			srv.ResetCalls()
+			*touched = nil
+
+			out := readSince(t, ap, c.target)
+			if c.want == "" {
+				if len(*touched) != 0 {
+					t.Errorf("%s read %v, want no read:\n%s", c.target, *touched, out)
+				}
+				return
+			}
+			if len(*touched) == 0 || (*touched)[0] != c.want {
+				t.Errorf("%s read %v, want %s:\n%s", c.target, *touched, c.want, out)
+			}
+		})
+	}
+}
+
+// A read of a bare word naming both a channel and a person takes the channel.
+func TestAroundBareWordReadsTheChannel(t *testing.T) {
+	srv, touched := ambiguityServer(t)
+	ap := bootedProvider(t, srv)
+	srv.ResetCalls()
+	*touched = nil
+
+	runTool(t, features.Messages, ap, map[string]any{"target": "eng", "around": "1786752114.508819"})
+	if len(*touched) == 0 {
+		t.Fatalf("the read never reached the conversation")
+	}
+	for _, ch := range *touched {
+		if ch != "C1" {
+			t.Fatalf("read %v, want only C1", *touched)
+		}
 	}
 }
