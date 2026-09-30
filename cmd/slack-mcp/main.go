@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -89,9 +90,18 @@ func main() {
 			port = strconv.Itoa(defaultSsePort)
 		}
 
+		apiKey := os.Getenv(server.SSEAPIKeyEnv)
+		if err := server.ValidateSSEConfig(host, apiKey); err != nil {
+			log.Fatalf("%v", err)
+		}
+
 		sseServer := s.ServeSSE(":" + port)
+		httpServer := &http.Server{
+			Addr:    host + ":" + port,
+			Handler: server.RequireBearer(apiKey, sseServer),
+		}
 		log.Printf("SSE server listening on %s:%s", host, port)
-		if err := sseServer.Start(host + ":" + port); err != nil {
+		if err := httpServer.ListenAndServe(); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	default:

@@ -43,6 +43,7 @@ Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the
 
 Required: `SLACK_MCP_XOXC_TOKEN`, `SLACK_MCP_XOXD_TOKEN` (or config file at `~/.config/slack-mcp/config.json`)
 Optional: `SLACK_MCP_HOST`, `SLACK_MCP_PORT`, `SLACK_MCP_SSE_API_KEY`, `SLACK_MCP_DEBUG`
+SSE auth: when `SLACK_MCP_SSE_API_KEY` is set, every SSE/message request needs `Authorization: Bearer <key>` (else 401). A non-loopback `SLACK_MCP_HOST` without the key refuses to start.
 
 ## Key Design Decisions
 

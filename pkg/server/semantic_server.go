@@ -333,7 +333,6 @@ extracts both tokens and sends them to the local setup server.
 func (s *SemanticMCPServer) ServeSSE(addr string) *server.SSEServer {
 	return server.NewSSEServer(s.server,
 		server.WithBaseURL(fmt.Sprintf("http://%s", addr)),
-		server.WithSSEContextFunc(authFromRequest),
 	)
 }
 
