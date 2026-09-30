@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -336,7 +340,43 @@ func (s *SemanticMCPServer) ServeSSE(addr string) *server.SSEServer {
 	)
 }
 
-// ServeStdio starts the stdio server
-func (s *SemanticMCPServer) ServeStdio() error {
-	return server.ServeStdio(s.server)
+// NewSSEHTTPServer builds the authenticated HTTP server for the SSE transport.
+// It validates the host/key combination first. ReadHeaderTimeout is set but
+// ReadTimeout/WriteTimeout are not: they would kill the long-lived SSE stream.
+func (s *SemanticMCPServer) NewSSEHTTPServer(host, port, apiKey string) (*http.Server, *server.SSEServer, error) {
+	if err := ValidateSSEConfig(host, apiKey); err != nil {
+		return nil, nil, err
+	}
+	sseServer := s.ServeSSE(":" + port)
+	return &http.Server{
+		Addr:              net.JoinHostPort(strings.Trim(host, "[]"), port),
+		Handler:           RequireBearer(apiKey, sseServer),
+		ReadHeaderTimeout: 10 * time.Second,
+	}, sseServer, nil
+}
+
+// ServeStdio serves MCP over in and stdout until in reaches EOF or ctx ends.
+// The caller owns signals and the lifecycle watchers (pkg/lifecycle); tool
+// calls run under ctx, so cancelling it also reaches in-flight Slack calls.
+func (s *SemanticMCPServer) ServeStdio(ctx context.Context, in io.Reader) error {
+	return server.NewStdioServer(s.server).Listen(ctx, in, os.Stdout)
+}
+
+// Shutdown shuts down the current provider, if any, giving up after timeout.
+// The provider is read at call time because auth can hot-load one after boot.
+func (s *SemanticMCPServer) Shutdown(timeout time.Duration) {
+	p := s.provider.Load()
+	if p == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.Shutdown()
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		log.Printf("Provider shutdown still running after %s; abandoning it", timeout)
+	}
 }

@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/aaronsb/slack-mcp/pkg/lifecycle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/server"
 	"github.com/aaronsb/slack-mcp/pkg/setup"
@@ -49,6 +49,15 @@ func main() {
 		log.Println("No .env file found, using environment variables")
 	}
 
+	// Refuse a deployment and idle-timeout combination that cannot help
+	// before anything boots. Stderr, because stdio logging goes to a file.
+	idle, err := lifecycle.IdleTimeoutFromEnv(transport)
+	if err != nil {
+		log.Print(err)
+		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
+		os.Exit(1)
+	}
+
 	// Build provider: try config file, then env vars, then start without auth
 	p, authErr := loadProvider()
 
@@ -77,9 +86,7 @@ func main() {
 
 	switch transport {
 	case "stdio":
-		if err := s.ServeStdio(); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
+		os.Exit(runStdio(s, idle))
 	case "sse":
 		host := os.Getenv("SLACK_MCP_HOST")
 		if host == "" {
@@ -90,20 +97,11 @@ func main() {
 			port = strconv.Itoa(defaultSsePort)
 		}
 
-		apiKey := os.Getenv(server.SSEAPIKeyEnv)
-		if err := server.ValidateSSEConfig(host, apiKey); err != nil {
+		httpServer, sseServer, err := s.NewSSEHTTPServer(host, port, os.Getenv(server.SSEAPIKeyEnv))
+		if err != nil {
 			log.Fatalf("%v", err)
 		}
-
-		sseServer := s.ServeSSE(":" + port)
-		httpServer := &http.Server{
-			Addr:    host + ":" + port,
-			Handler: server.RequireBearer(apiKey, sseServer),
-		}
-		log.Printf("SSE server listening on %s:%s", host, port)
-		if err := httpServer.ListenAndServe(); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
+		os.Exit(runSSE(s, httpServer, sseServer))
 	default:
 		log.Fatalf("Invalid transport type: %s. Must be 'stdio' or 'sse'", transport)
 	}

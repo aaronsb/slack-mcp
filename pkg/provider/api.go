@@ -28,6 +28,12 @@ const (
 )
 
 type ApiProvider struct {
+	// ctx is the provider's lifetime: every background task boot starts
+	// runs under it, and Shutdown cancels it.
+	ctx          context.Context
+	cancel       context.CancelFunc
+	shutdownOnce sync.Once
+
 	bootOnce       sync.Once
 	boot           func() *slack.Client
 	client         *slack.Client
@@ -60,10 +66,12 @@ type ApiProvider struct {
 	estate *estate.Store
 	// attention is the operator-scoped encounter ledger (ADR-008 stage 2),
 	// under the same pointer guard.
-	attention           *estate.AttentionStore
-	estateMu            sync.RWMutex
+	attention *estate.AttentionStore
+	estateMu  sync.RWMutex
+	// closed is set by Shutdown under estateMu. A boot still running then
+	// closes the ledger it just opened instead of leaking it.
+	closed              bool
 	estateSweepInterval time.Duration
-	estateSweepStop     chan struct{}
 
 	// Live channel-walk progress, so coverage reporting can show the
 	// mapping advancing instead of a bare "not swept yet".
@@ -148,7 +156,10 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 		internal.baseURL = cfg.baseURL
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	ap := &ApiProvider{
+		ctx:    ctx,
+		cancel: cancel,
 		boot: func() *slack.Client {
 			if cfg.baseURL != "" {
 				return slack.New(token,
@@ -197,12 +208,42 @@ func (ap *ApiProvider) Provide() (*slack.Client, error) {
 	ap.bootOnce.Do(func() {
 		ap.client = ap.boot()
 		ap.captureIdentity()
-		bootErr = ap.bootstrapDependencies(context.Background())
+		bootErr = ap.bootstrapDependencies(ap.ctx)
 	})
 	if bootErr != nil {
 		return nil, bootErr
 	}
 	return ap.client, nil
+}
+
+// Shutdown stops the provider's background work and releases what it holds,
+// in dependency order: cancel the boot tasks and the estate sweep, flush the
+// caches one last time, then close the attention and estate ledgers, which
+// drops their writer flocks. The kernel would drop the flocks on exit anyway;
+// closing first means nothing is still appending when they go. Safe to call
+// more than once, and on a provider that never booted.
+func (ap *ApiProvider) Shutdown() {
+	ap.shutdownOnce.Do(func() {
+		if ap.cancel != nil {
+			ap.cancel()
+		}
+		if ap.store != nil {
+			ap.store.Stop()
+		}
+		ap.estateMu.Lock()
+		ap.closed = true
+		ap.estateMu.Unlock()
+		if st := ap.attn(); st != nil {
+			if err := st.Close(); err != nil {
+				log.Printf("Attention ledger close: %v", err)
+			}
+		}
+		if st := ap.est(); st != nil {
+			if err := st.Close(); err != nil {
+				log.Printf("Estate ledger close: %v", err)
+			}
+		}
+	})
 }
 
 func (ap *ApiProvider) captureIdentity() {
