@@ -76,9 +76,7 @@ func main() {
 
 	switch transport {
 	case "stdio":
-		if err := s.ServeStdio(); err != nil {
-			log.Fatalf("Server error: %v", err)
-		}
+		os.Exit(runStdio(s))
 	case "sse":
 		host := os.Getenv("SLACK_MCP_HOST")
 		if host == "" {

@@ -19,6 +19,8 @@ type Store struct {
 	mu        sync.RWMutex
 	dirty     bool
 	flushStop chan struct{}
+	flushDone chan struct{} // closed when the flusher exits; nil if never started
+	stopOnce  sync.Once
 }
 
 // NewStore creates a cache store using XDG data directory.
@@ -42,36 +44,56 @@ func (s *Store) Dir() string {
 }
 
 // StartPeriodicFlush begins flushing dirty data every interval.
-// Call Stop() to terminate the goroutine.
+// Call Stop() to terminate the goroutine; it flushes once more on the way out.
 func (s *Store) StartPeriodicFlush(interval time.Duration, flushFn func() error) {
+	done := make(chan struct{})
+	s.mu.Lock()
+	s.flushDone = done
+	s.mu.Unlock()
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				s.mu.RLock()
-				dirty := s.dirty
-				s.mu.RUnlock()
-				if dirty {
-					if err := flushFn(); err != nil {
-						log.Printf("cache: periodic flush failed: %v", err)
-					} else {
-						s.mu.Lock()
-						s.dirty = false
-						s.mu.Unlock()
-					}
-				}
+				s.flushIfDirty(flushFn)
 			case <-s.flushStop:
+				s.flushIfDirty(flushFn)
 				return
 			}
 		}
 	}()
 }
 
-// Stop terminates the periodic flush goroutine.
+// flushIfDirty runs flushFn only when something was marked dirty since the
+// last flush, so stopping a provider that never booted leaves the files alone.
+func (s *Store) flushIfDirty(flushFn func() error) {
+	s.mu.RLock()
+	dirty := s.dirty
+	s.mu.RUnlock()
+	if !dirty {
+		return
+	}
+	if err := flushFn(); err != nil {
+		log.Printf("cache: flush failed: %v", err)
+		return
+	}
+	s.mu.Lock()
+	s.dirty = false
+	s.mu.Unlock()
+}
+
+// Stop terminates the periodic flush goroutine after a final flush of dirty
+// data, and waits for it. Safe to call more than once, or without a flusher.
 func (s *Store) Stop() {
-	close(s.flushStop)
+	s.stopOnce.Do(func() { close(s.flushStop) })
+	s.mu.RLock()
+	done := s.flushDone
+	s.mu.RUnlock()
+	if done != nil {
+		<-done
+	}
 }
 
 // MarkDirty flags the cache as needing a flush.

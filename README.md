@@ -97,6 +97,12 @@ export SLACK_MCP_XOXD_TOKEN="xoxd-..."
 ./slack-mcp
 ```
 
+## Lifecycle
+
+Over stdio the server exits cleanly when its client is gone: stdin closes, a termination signal arrives (`SIGTERM`, `SIGINT`, `SIGHUP`), or its parent process exits. Each exit flushes the caches and releases the ledger locks, so the next instance is not left read-only.
+
+A wedged connection, such as a half-open SSH session, leaves the pipe open with nobody reading it. For hosts where that happens, set `SLACK_MCP_IDLE_TIMEOUT` to a duration (`90m`, `2h`) and the server exits after that long without client input. The timeout is off by default: a stdio client does not respawn a server that exits, so an idle-but-healthy session would find it disconnected. SSE mode ignores the setting.
+
 ## Tools
 
 | Tool | Kind | What it does |

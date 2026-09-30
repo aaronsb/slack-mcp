@@ -42,7 +42,7 @@ Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the
 ## Environment
 
 Required: `SLACK_MCP_XOXC_TOKEN`, `SLACK_MCP_XOXD_TOKEN` (or config file at `~/.config/slack-mcp/config.json`)
-Optional: `SLACK_MCP_HOST`, `SLACK_MCP_PORT`, `SLACK_MCP_SSE_API_KEY`, `SLACK_MCP_DEBUG`
+Optional: `SLACK_MCP_HOST`, `SLACK_MCP_PORT`, `SLACK_MCP_SSE_API_KEY`, `SLACK_MCP_DEBUG`, `SLACK_MCP_IDLE_TIMEOUT` (stdio only: exit after this long with no client input, e.g. `90m`; unset or `0`/`off` disables)
 
 ## Key Design Decisions
 
