@@ -150,8 +150,21 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 
 	switch {
 	case query != "":
-		echo := echoLine("messages", "query='"+query+"'", params, "cursor", "timeframe")
-		return delegate(ctx, FindDiscussion, params, echo)
+		// Echo what ran: the limit as Slack received it, not as passed.
+		shown := params
+		if lim, ok := explicitLimit(params); ok {
+			shown = make(map[string]interface{}, len(params))
+			for k, v := range params {
+				shown[k] = v
+			}
+			shown["limit"] = lim
+		}
+		echo := echoLine("messages", "query='"+query+"'", shown, "cursor", "limit", "timeframe")
+		res, err := delegate(ctx, FindDiscussion, params, echo)
+		if res != nil {
+			res.Echo += res.EchoSuffix
+		}
+		return res, err
 	case target != "" && around != "":
 		params["channel"] = conversationOf(target)
 		params["messageTs"] = around
