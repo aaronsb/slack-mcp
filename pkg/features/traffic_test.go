@@ -3,11 +3,13 @@ package features_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/slacktest"
@@ -18,13 +20,19 @@ import (
 // the attention ledger, no text, hour resolution for the session's own user
 // only.
 func TestGetContextObservesEncounters(t *testing.T) {
+	// Messages from an hour ago: the ledger drops encounters older than its
+	// retention window, so fixed timestamps age out of this test.
+	at := time.Now().Add(-time.Hour)
+	day := at.UTC().Format("2006-01-02")
+	ts := func(offset int64) string { return fmt.Sprintf("%d.000000", at.Unix()+offset) }
+
 	srv := slacktest.New(t)
 	srv.Handle("conversations.history", func(*http.Request) any {
 		return map[string]any{
 			"ok": true, "has_more": false,
 			"messages": []any{
-				slacktest.Message("U2", "rolling back the deploy", "1782246200.000000"),
-				slacktest.Message("U1", "what happened?", "1782246118.543969"),
+				slacktest.Message("U2", "rolling back the deploy", ts(82)),
+				slacktest.Message("U1", "what happened?", ts(0)),
 			},
 		}
 	})
@@ -48,7 +56,7 @@ func TestGetContextObservesEncounters(t *testing.T) {
 		if err := json.Unmarshal([]byte(ln), &e); err != nil {
 			t.Fatalf("bad encounter line %q: %v", ln, err)
 		}
-		if e["kind"] != "encounter" || e["conv"] != "C1" || e["day"] != "2026-06-23" {
+		if e["kind"] != "encounter" || e["conv"] != "C1" || e["day"] != day {
 			t.Fatalf("wrong encounter shape: %v", e)
 		}
 		if txt, ok := e["text"]; ok {
