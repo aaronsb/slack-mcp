@@ -44,6 +44,11 @@ func (ap *ApiProvider) openAttention() {
 		return
 	}
 	ap.estateMu.Lock()
+	if ap.closed {
+		ap.estateMu.Unlock()
+		att.Close()
+		return
+	}
 	ap.attention = att
 	ap.estateMu.Unlock()
 	if att.ReadOnly() {

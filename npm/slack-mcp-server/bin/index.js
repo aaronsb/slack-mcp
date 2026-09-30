@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const childProcess = require('child_process');
+const os = require('os');
 
 const BINARY_MAP = {
     darwin_x64: {name: '@aaronsb/slack-mcp-darwin-amd64', bin: 'slack-mcp-darwin-amd64'},
@@ -20,6 +21,34 @@ const resolveBinaryPath = () => {
     }
 };
 
-childProcess.execFileSync(resolveBinaryPath(), process.argv.slice(2), {
+// spawn, not execFileSync: a synchronous child never hears the signals sent
+// to this wrapper, so killing the wrapper orphaned the server with the pipe
+// still open (#82). Forward them, and exit the way the server did.
+const child = childProcess.spawn(resolveBinaryPath(), process.argv.slice(2), {
     stdio: 'inherit',
+});
+
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    process.on(signal, () => {
+        // On win32 only SIGINT/SIGTERM/SIGKILL/SIGQUIT are killable; kill()
+        // throws ENOSYS for SIGHUP (console close), so map it to SIGTERM.
+        const forward = process.platform === 'win32' && signal === 'SIGHUP' ? 'SIGTERM' : signal;
+        try {
+            child.kill(forward);
+        } catch (err) {
+            console.error(`slack-mcp: could not forward ${signal}: ${err.message}`);
+        }
+    });
+}
+
+child.on('error', (err) => {
+    console.error(`slack-mcp: ${err.message}`);
+    process.exit(1);
+});
+
+child.on('exit', (code, signal) => {
+    if (signal) {
+        process.exit(128 + (os.constants.signals[signal] || 0));
+    }
+    process.exit(code ?? 1);
 });

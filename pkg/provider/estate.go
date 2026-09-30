@@ -57,6 +57,11 @@ func (ap *ApiProvider) openEstate() {
 		return
 	}
 	ap.estateMu.Lock()
+	if ap.closed {
+		ap.estateMu.Unlock()
+		st.Close()
+		return
+	}
 	ap.estate = st
 	ap.estateMu.Unlock()
 	if st.ReadOnly() {
@@ -159,8 +164,7 @@ func (ap *ApiProvider) recordEstateSweep(rep estate.SweepReport) {
 
 // startEstateSweepScheduler self-schedules the sweep. There is no env var
 // and no CLI flag: the estate maintains itself or it is not agent-first.
-// The stop channel exists for a future lifecycle pass; like the cache
-// flusher's, nothing calls it today.
+// The scheduler, and any sweep it is running, ends with ctx.
 func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 	st := ap.est()
 	if st == nil || st.ReadOnly() {
@@ -170,13 +174,11 @@ func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 	if interval <= 0 {
 		interval = defaultEstateSweepInterval
 	}
-	stop := make(chan struct{})
-	ap.estateSweepStop = stop
 
 	go Guard("estate-sweep-scheduler", func() {
 		select {
 		case <-time.After(estateSweepBootDelay):
-		case <-stop:
+		case <-ctx.Done():
 			return
 		}
 		// The boot backfill is already walking conversations.list, and two
@@ -184,8 +186,8 @@ func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 		// requests/min) — observed live as paired 30s backoffs on a
 		// 3,000-conversation workspace. Wait for it, bounded so a backfill
 		// that dies never silences the sweep forever.
-		ap.waitForBackfill(stop, estateSweepBackfillWait)
-		for {
+		ap.waitForBackfill(ctx, estateSweepBackfillWait)
+		for ctx.Err() == nil {
 			if time.Since(st.LastFullSweep()) >= interval {
 				if err := ap.RunEstateSweep(ctx); err != nil {
 					log.Printf("Estate sweep: %v", err)
@@ -193,16 +195,15 @@ func (ap *ApiProvider) startEstateSweepScheduler(ctx context.Context) {
 			}
 			select {
 			case <-time.After(estateSweepCheckInterval):
-			case <-stop:
-				return
+			case <-ctx.Done():
 			}
 		}
 	})
 }
 
 // waitForBackfill blocks until the boot channel backfill has completed, the
-// bound elapses, or stop closes.
-func (ap *ApiProvider) waitForBackfill(stop chan struct{}, bound time.Duration) {
+// bound elapses, or ctx ends.
+func (ap *ApiProvider) waitForBackfill(ctx context.Context, bound time.Duration) {
 	deadline := time.Now().Add(bound)
 	for time.Now().Before(deadline) {
 		ap.backfillMutex.Lock()
@@ -213,7 +214,7 @@ func (ap *ApiProvider) waitForBackfill(stop chan struct{}, bound time.Duration) 
 		}
 		select {
 		case <-time.After(5 * time.Second):
-		case <-stop:
+		case <-ctx.Done():
 			return
 		}
 	}
