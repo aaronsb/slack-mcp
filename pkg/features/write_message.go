@@ -62,13 +62,9 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	}
 
 	// Resolve channel name to ID
-	channelID := resolveChannelForSending(apiProvider, api, channel)
-	if channelID == "" {
-		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("Could not find channel or user '%s'", channel),
-			Guidance: "💡 See available channels: estate view='channels' — or provide a username for DMs",
-		}, nil
+	channelID, terr := resolveChannelForSending(apiProvider, api, channel)
+	if terr != nil {
+		return terr.result(), nil
 	}
 
 	// Prepare message options
@@ -145,58 +141,99 @@ func isChannelID(s string) bool {
 	return true
 }
 
-func resolveChannelForSending(apiProvider *provider.ApiProvider, api *slack.Client, channel string) string {
+// targetError is why a send target did not resolve: a message for the caller
+// and a guidance line naming what to try instead. Candidates are people named
+// by handle and display name, never IDs.
+type targetError struct {
+	Message  string
+	Guidance string
+}
+
+func (e *targetError) Error() string { return e.Message }
+
+// result renders the failure as a FeatureResult. No Slack write has happened.
+func (e *targetError) result() *FeatureResult {
+	return &FeatureResult{Success: false, Message: e.Message, Guidance: e.Guidance}
+}
+
+// resolveChannelForSending maps a channel or person to a conversation ID.
+// Channels and IDs resolve as before. A person resolves only on an exact
+// handle, user ID, or exact real/display name (ADR-005, ADR-009): below that
+// the answer is a *targetError listing candidates, because a message sent to
+// the wrong person cannot be unsent, and a scheduled one fires unwatched.
+func resolveChannelForSending(apiProvider *provider.ApiProvider, api *slack.Client, channel string) (string, *targetError) {
 	// First try provider's resolver (includes on-demand display name resolution)
 	cleanName := strings.TrimPrefix(channel, "#")
 	if channelID := apiProvider.ResolveChannelID(cleanName); channelID != cleanName {
-		return channelID
+		return channelID, nil
 	}
 
 	// If it already looks like a channel ID, return it
 	if isChannelID(channel) {
-		return channel
+		return channel, nil
 	}
 
-	// Try to resolve as a username for DM
-	usersMap := apiProvider.ProvideUsersMap()
-
-	// Clean up username
 	cleanUser := strings.TrimPrefix(channel, "@")
+	res := apiProvider.ResolvePerson(channel)
 
-	// Look for user by name or real name
-	var userID string
-	for uid, user := range usersMap {
-		if user.Name == cleanUser || user.RealName == cleanUser ||
-			strings.EqualFold(user.Name, cleanUser) ||
-			strings.EqualFold(user.RealName, cleanUser) {
-			userID = uid
-			break
+	if !res.Resolved || !exactWriteTarget(res.Via) {
+		return "", unresolvedTarget(channel, res)
+	}
+
+	// Open DM conversation with user
+	dm, _, _, err := api.OpenConversation(&slack.OpenConversationParameters{
+		Users: []string{res.UserID},
+	})
+	if err != nil {
+		log.Printf("Failed to open DM with user %s: %v", cleanUser, err)
+		return "", &targetError{
+			Message:  fmt.Sprintf("Could not open a conversation with '%s'", channel),
+			Guidance: "Nothing was sent. Retry, or check the handle: estate view='people'",
+		}
+	}
+	return dm.ID, nil
+}
+
+// exactWriteTarget reports whether a ladder rung is exact enough to act on
+// without asking. Fragment matches ("unique-match") are a read convenience,
+// not a write target.
+func exactWriteTarget(via string) bool {
+	switch via {
+	case "user-id", "exact-handle", "unique-name":
+		return true
+	}
+	return false
+}
+
+func unresolvedTarget(input string, res provider.PersonResolution) *targetError {
+	cands := res.Candidates
+	if res.Resolved {
+		// A lone fragment match: surface it as the one candidate, unsent.
+		cands = []provider.PersonCandidate{{Handle: res.Handle, DisplayName: res.DisplayName}}
+	}
+	if len(cands) == 0 {
+		return &targetError{
+			Message:  fmt.Sprintf("Could not find channel or user '%s'", input),
+			Guidance: "Nothing was sent. See available channels: estate view='channels' — or provide an exact @handle for DMs",
 		}
 	}
 
-	if userID == "" {
-		// Try partial name match as last resort
-		lowerClean := strings.ToLower(cleanUser)
-		for uid, user := range usersMap {
-			if strings.Contains(strings.ToLower(user.Name), lowerClean) ||
-				strings.Contains(strings.ToLower(user.RealName), lowerClean) {
-				userID = uid
-				break
-			}
+	var b strings.Builder
+	fmt.Fprintf(&b, "'%s' is not an exact handle or name, so nothing was sent. Candidates:", input)
+	for _, c := range cands {
+		fmt.Fprintf(&b, "\n  @%s", c.Handle)
+		if c.DisplayName != "" && c.DisplayName != c.Handle {
+			fmt.Fprintf(&b, " (%s)", c.DisplayName)
+		}
+		if c.Title != "" {
+			fmt.Fprintf(&b, ", %s", c.Title)
+		}
+		if c.Deleted {
+			b.WriteString(" [deactivated]")
 		}
 	}
-
-	if userID != "" {
-		// Open DM conversation with user
-		channel, _, _, err := api.OpenConversation(&slack.OpenConversationParameters{
-			Users: []string{userID},
-		})
-		if err != nil {
-			log.Printf("Failed to open DM with user %s: %v", cleanUser, err)
-			return ""
-		}
-		return channel.ID
+	return &targetError{
+		Message:  b.String(),
+		Guidance: "Retry with the exact @handle of the person you mean, e.g. to='@" + cands[0].Handle + "'",
 	}
-
-	return ""
 }

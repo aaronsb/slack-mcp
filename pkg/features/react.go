@@ -72,13 +72,9 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 	}
 
 	// Resolve channel name to ID (also resolves usernames to DM channels)
-	channelID := resolveChannelForSending(apiProvider, api, channel)
-	if channelID == "" {
-		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("Could not find channel '%s'", channel),
-			Guidance: "See available channels: estate view='channels'",
-		}, nil
+	channelID, terr := resolveChannelForSending(apiProvider, api, channel)
+	if terr != nil {
+		return terr.result(), nil
 	}
 
 	// Normalize emoji name - strip colons if provided
