@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -334,8 +337,22 @@ extracts both tokens and sends them to the local setup server.
 func (s *SemanticMCPServer) ServeSSE(addr string) *server.SSEServer {
 	return server.NewSSEServer(s.server,
 		server.WithBaseURL(fmt.Sprintf("http://%s", addr)),
-		server.WithSSEContextFunc(authFromRequest),
 	)
+}
+
+// NewSSEHTTPServer builds the authenticated HTTP server for the SSE transport.
+// It validates the host/key combination first. ReadHeaderTimeout is set but
+// ReadTimeout/WriteTimeout are not: they would kill the long-lived SSE stream.
+func (s *SemanticMCPServer) NewSSEHTTPServer(host, port, apiKey string) (*http.Server, *server.SSEServer, error) {
+	if err := ValidateSSEConfig(host, apiKey); err != nil {
+		return nil, nil, err
+	}
+	sseServer := s.ServeSSE(":" + port)
+	return &http.Server{
+		Addr:              net.JoinHostPort(strings.Trim(host, "[]"), port),
+		Handler:           RequireBearer(apiKey, sseServer),
+		ReadHeaderTimeout: 10 * time.Second,
+	}, sseServer, nil
 }
 
 // ServeStdio serves MCP over in and stdout until in reaches EOF or ctx ends.

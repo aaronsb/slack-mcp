@@ -97,11 +97,11 @@ func main() {
 			port = strconv.Itoa(defaultSsePort)
 		}
 
-		sseServer := s.ServeSSE(":" + port)
-		log.Printf("SSE server listening on %s:%s", host, port)
-		if err := sseServer.Start(host + ":" + port); err != nil {
-			log.Fatalf("Server error: %v", err)
+		httpServer, sseServer, err := s.NewSSEHTTPServer(host, port, os.Getenv(server.SSEAPIKeyEnv))
+		if err != nil {
+			log.Fatalf("%v", err)
 		}
+		os.Exit(runSSE(s, httpServer, sseServer))
 	default:
 		log.Fatalf("Invalid transport type: %s. Must be 'stdio' or 'sse'", transport)
 	}
