@@ -44,10 +44,45 @@ type PersonResolution struct {
 
 const maxCandidates = 5
 
-// ResolvePerson runs the ladder for one person-shaped input. Reads may act
-// on a resolved answer directly; writes auto-resolve only when Via is
-// "user-id" or "exact-handle" (ADR-005: a wrong search costs a retry, a
-// wrong send messages a stranger).
+// Policy says which ladder rungs a caller may act on without asking.
+// ADR-005: reads may take the top candidate; writes auto-resolve only on an
+// exact handle, because a wrong search costs a retry and a wrong send
+// messages a stranger.
+type Policy int
+
+const (
+	// ReadPolicy acts on any resolved rung, a unique fragment included.
+	ReadPolicy Policy = iota
+	// WritePolicy acts only on an exact handle — or on an input that is
+	// exact by construction: the operator's own '@me', a literal user ID.
+	WritePolicy
+	// bareNamePolicy guards the legacy channel resolvers' person fallback
+	// (ResolveChannelID, GetChannelInfo): a bare string that named no
+	// channel reaches a person only when it names them exactly.
+	bareNamePolicy
+)
+
+// policyRungs is the one place that lists the rungs each policy accepts;
+// ReadPolicy is absent because it accepts every resolved rung. Admitting a
+// unique exact real/display name as a write target is adding "unique-name"
+// to the WritePolicy line — and amending ADR-005 to match.
+var policyRungs = map[Policy]map[string]bool{
+	WritePolicy:    {"self": true, "user-id": true, "exact-handle": true},
+	bareNamePolicy: {"self": true, "user-id": true, "exact-handle": true, "unique-name": true},
+}
+
+// Accepts reports whether the policy may act on res without asking.
+// Deactivated users never resolve, so no policy can accept one.
+func (p Policy) Accepts(res PersonResolution) bool {
+	if !res.Resolved {
+		return false
+	}
+	rungs, limited := policyRungs[p]
+	return !limited || rungs[res.Via]
+}
+
+// ResolvePerson runs the ladder for one person-shaped input. The answer
+// says how it resolved (Via); what a caller may do with it is its Policy.
 func (ap *ApiProvider) ResolvePerson(input string) PersonResolution {
 	res := PersonResolution{Input: input}
 	name := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(input), "@"))

@@ -69,8 +69,8 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 		}, nil
 	}
 
-	// Resolve channel name to ID (also resolves usernames to DM channels)
-	channelID, terr := resolveChannelForSending(apiProvider, api, channel)
+	// A read: a unique fragment may resolve a person (ADR-005 read policy)
+	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.ReadPolicy)
 	if terr != nil {
 		return terr.result(), nil
 	}

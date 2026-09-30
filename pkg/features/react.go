@@ -71,8 +71,8 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 		}, nil
 	}
 
-	// Resolve channel name to ID (also resolves usernames to DM channels)
-	channelID, terr := resolveChannelForSending(apiProvider, api, channel)
+	// A reaction is a write: route by prefix, a person only exactly (ADR-005)
+	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy)
 	if terr != nil {
 		return terr.result(), nil
 	}

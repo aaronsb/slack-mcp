@@ -24,7 +24,11 @@ func delegate(ctx context.Context, f *Feature, params map[string]interface{}, ec
 	if err != nil || res == nil {
 		return res, err
 	}
-	res.RenderAs = f.Name
+	if res.RenderAs == "" {
+		// A handler that chose its renderer (a person miss renders as
+		// estate) keeps it; everything else renders as the feature.
+		res.RenderAs = f.Name
+	}
 	res.Echo = echo
 	return res, nil
 }
@@ -164,26 +168,16 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 		channel := conversationOf(target)
 		if strings.HasPrefix(target, "@") {
 			// catch-up's resolver speaks channels; people resolve here,
-			// through the ladder, to their DM conversation.
+			// under the read policy, to their DM conversation.
 			ap, ok := params["_provider"].(*provider.ApiProvider)
 			if !ok {
 				return &FeatureResult{Success: false, Message: "Internal error: provider not available"}, nil
 			}
-			res := ap.ResolvePerson(target)
-			if !res.Resolved {
-				out := &FeatureResult{Success: true, Message: fmt.Sprintf("Could not resolve %q (%s)", target, res.Reason)}
-				out.Data = map[string]interface{}{"view": &personViewData{Miss: &res}}
-				out.RenderAs = "estate"
+			dm, terr := resolveTarget(ctx, ap, target, provider.ReadPolicy)
+			if terr != nil {
+				out := terr.result()
 				out.Echo = echoLine("messages", "target='"+target+"' since="+since, params, "limit", "cursor")
 				return out, nil
-			}
-			dm := dmChannelFor(ap, res.UserID)
-			if dm == "" {
-				return &FeatureResult{
-					Success:  false,
-					Message:  fmt.Sprintf("No DM conversation with %s is in the cache yet.", res.DisplayName),
-					Guidance: fmt.Sprintf("Read it directly: messages target='%s' — or search their traffic: messages query='from:@%s'", target, res.Handle),
-				}, nil
 			}
 			channel = dm
 		}
@@ -212,16 +206,6 @@ func conversationOf(target string) string {
 	return target
 }
 
-// dmChannelFor finds the cached IM conversation with a user.
-func dmChannelFor(ap *provider.ApiProvider, userID string) string {
-	for _, ch := range ap.GetCachedChannels() {
-		if ch.IsIM && ch.User == userID {
-			return ch.ID
-		}
-	}
-	return ""
-}
-
 // ---- say: contribute content (the one visible write besides mark-read) ----
 
 var Say = &Feature{
@@ -232,7 +216,7 @@ var Say = &Feature{
 		"properties": map[string]interface{}{
 			"to": map[string]interface{}{
 				"type":        "string",
-				"description": "Where: '#channel', '@person', or a channel ID",
+				"description": "Where: '#channel', '@handle' (a DM needs the exact handle, or '@me'), or a channel ID",
 			},
 			"text": map[string]interface{}{
 				"type":        "string",
