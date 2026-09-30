@@ -27,6 +27,10 @@ type FeatureResult struct {
 	// Echo is the effective-invocation line prepended to the rendered
 	// output, so the agent sees what actually ran. Never serialized.
 	Echo string `json:"-"`
+	// EchoSuffix is effective state the handler knows and the caller did not
+	// pass (for example the page a search landed on), appended to Echo. Never
+	// serialized.
+	EchoSuffix string `json:"-"`
 }
 
 // Pagination provides cursor-based pagination info

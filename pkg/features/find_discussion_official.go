@@ -83,6 +83,13 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	if raw, _ := params["cursor"].(string); strings.TrimSpace(raw) != "" {
 		cursorIn = raw
 		cur, err := decodeSearchCursor(raw)
+		if err == errCursorVersion {
+			return &FeatureResult{
+				Success:  false,
+				Message:  "That cursor came from an older version of search.",
+				Guidance: "Rerun the search without cursor= to get a current one.",
+			}, nil
+		}
 		if err != nil {
 			return &FeatureResult{
 				Success:  false,
@@ -90,11 +97,12 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 				Guidance: "Cursors come from the previous page of this same query; drop cursor= to start the search over.",
 			}, nil
 		}
-		if cur.Digest != digest || (limited && limit != cur.Count) {
+		if cur.Digest != digest || (limited && limit != cur.Count) ||
+			(pinned && strings.ToLower(strings.TrimSpace(timeframe)) != cur.Timeframe) {
 			return &FeatureResult{
 				Success: false,
-				Message: "That cursor belongs to a different search: the query, in:, from:, or limit changed since it was issued.",
-				Guidance: "Pass the cursor back with exactly the same query, in, from, and limit as the page that returned it, " +
+				Message: "That cursor belongs to a different search: the query, in:, from:, limit, or timeframe changed since it was issued.",
+				Guidance: "Pass the cursor back with exactly the same query, in, from, limit, and timeframe as the page that returned it, " +
 					"or drop cursor= to start this search over.",
 			}, nil
 		}
@@ -165,7 +173,14 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	if messages.Paging.Page > 0 {
 		shownPage = messages.Paging.Page
 	}
-	hasMore := shownPage < pages
+	// Slack stops paging at searchMaxPage however many pages it reports; a
+	// cursor past it would be refused, and the tail beyond it is unreachable.
+	reachable := pages
+	if reachable > searchMaxPage {
+		reachable = searchMaxPage
+	}
+	capped := pages > searchMaxPage
+	hasMore := shownPage < reachable
 
 	coverage := map[string]interface{}{
 		"page":          shownPage,
@@ -177,7 +192,14 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		"from":          people,
 		"totalMatches":  messages.Total,
 		"returned":      len(results),
-		"complete":      !hasMore && shownPage == 1,
+		// Same meaning as read: complete means this response ends the result
+		// set, so the last page of a paged search is complete. It is false when
+		// more pages follow, when Slack's page cap hides the tail, or when Slack
+		// omitted paging and reported more matches than it returned.
+		"complete": !hasMore && !capped && (pages > 1 || messages.Total <= len(results)),
+	}
+	if capped {
+		coverage["reachablePages"] = reachable
 	}
 	if len(fromResolutions) > 0 {
 		coverage["fromResolved"] = fromResolutions
@@ -193,8 +215,15 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		},
 	}
 
+	if pages > 1 {
+		result.EchoSuffix = fmt.Sprintf(" page=%d/%d", shownPage, reachable)
+	}
+
 	if hasMore {
 		next := searchCursor{Page: shownPage + 1, Count: count, Since: since.Format("2006-01-02"), Widened: widened, Digest: digest}
+		if pinned {
+			next.Timeframe = strings.ToLower(strings.TrimSpace(timeframe))
+		}
 		result.Pagination = &Pagination{
 			Cursor:     cursorIn,
 			NextCursor: next.encode(),
@@ -206,6 +235,12 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 
 	if len(results) == 0 {
 		result.Message = fmt.Sprintf("Nothing matching %q since %s.", query, since.Format("2006-01-02"))
+		if continuing {
+			result.Guidance = fmt.Sprintf("Page %d came back empty: the result set shrank since the cursor was issued (matches were deleted or edited). "+
+				"Rerun the search without cursor= to start over.", page)
+			result.NextActions = []string{"Start over: messages query='<same terms>'"}
+			return result, nil
+		}
 		result.Guidance = fmt.Sprintf(
 			"Searched %s. Slack search only covers channels you are in — a message in a channel you have not joined will not appear.",
 			coverage["window"])
@@ -221,7 +256,10 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		"Read one in full: messages target='<handle from a result>'",
 	}
 	if pages > 1 {
-		result.Guidance = fmt.Sprintf("Page %d of %d (%d matches in all), newest first.", shownPage, pages, messages.Total)
+		result.Guidance = fmt.Sprintf("Page %d of %d (%d matches in all); pages run newest to oldest.", shownPage, reachable, messages.Total)
+		if capped && !hasMore {
+			result.Guidance += fmt.Sprintf(" Slack stops search at page %d, so the older matches are unreachable: narrow the search with a shorter timeframe, in=, or from=.", searchMaxPage)
+		}
 	} else if messages.Total > len(results) {
 		result.Guidance = fmt.Sprintf("Showing the newest %d of %d matches.", len(results), messages.Total)
 	}
