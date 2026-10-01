@@ -3,6 +3,7 @@ package report_test
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/report"
 )
@@ -81,12 +83,36 @@ func TestPageIsSelfContainedUnderAStrictCSP(t *testing.T) {
 		t.Fatalf("Page: %v", err)
 	}
 	s := string(page)
-	csp := `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">`
-	if !strings.Contains(s, csp) {
+	m := regexp.MustCompile(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ([^;"]+); style-src 'unsafe-inline'; img-src data:">`).FindStringSubmatchIndex(s)
+	if m == nil {
 		t.Fatal("CSP meta missing or altered")
 	}
-	if strings.Index(s, csp) > strings.Index(s, "<script") {
+	if m[0] > strings.Index(s, "<script") {
 		t.Fatal("CSP must precede every script")
+	}
+	scriptSrc := strings.Fields(s[m[2]:m[3]])
+	if strings.Contains(s[m[2]:m[3]], "unsafe") {
+		t.Fatalf("script-src admits more than hashes: %v", scriptSrc)
+	}
+
+	// Every executable script in the page, as the browser will hash it:
+	// the exact bytes between <script> and </script>. The JSON data block
+	// is typed application/json and never executes.
+	var want []string
+	rest := s
+	for {
+		i := strings.Index(rest, "<script>")
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len("<script>"):]
+		j := strings.Index(rest, "</script>")
+		sum := sha256.Sum256([]byte(rest[:j]))
+		want = append(want, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
+		rest = rest[j:]
+	}
+	if len(want) != 2 || strings.Join(scriptSrc, " ") != strings.Join(want, " ") {
+		t.Fatalf("script-src %v does not pin the page's executable scripts %v", scriptSrc, want)
 	}
 	if regexp.MustCompile(`(?i)<(script|link|img|iframe)[^>]+(src|href)=`).MatchString(s) {
 		t.Fatal("page references an external resource")
@@ -122,7 +148,7 @@ func TestWriteIsPrivateAtomicAndOverwrites(t *testing.T) {
 	if filepath.Dir(path) != report.Dir() {
 		t.Fatalf("written to %s, want under %s", path, report.Dir())
 	}
-	if filepath.Base(path) != "person-schen.html" {
+	if !regexp.MustCompile(`^person-schen-[0-9a-f]{8}\.html$`).MatchString(filepath.Base(path)) {
 		t.Fatalf("file name %q", filepath.Base(path))
 	}
 	again, err := report.Write("person", "schen", []byte("two"))
@@ -181,6 +207,95 @@ func TestWriteNamesCannotEscapeTheDirectory(t *testing.T) {
 		if !regexp.MustCompile(`^about-[a-z0-9-]+\.html$`).MatchString(filepath.Base(path)) {
 			t.Fatalf("subject %q produced name %q", subject, filepath.Base(path))
 		}
+	}
+}
+
+func TestHandlesThatSlugAlikeGetTheirOwnFiles(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	seen := map[string]string{}
+	long := strings.Repeat("a", 80)
+	for _, h := range []string{"john.smith", "john_smith", "john-smith", "", "..", long, long + "b"} {
+		path, err := report.Write("person", h, []byte(h))
+		if err != nil {
+			t.Fatalf("Write(%q): %v", h, err)
+		}
+		if prev, dup := seen[path]; dup {
+			t.Fatalf("%q and %q share %s", prev, h, path)
+		}
+		seen[path] = h
+	}
+	if again, _ := report.Write("person", "john.smith", []byte("x")); seen[again] != "john.smith" {
+		t.Fatalf("the same handle moved to a new file: %s", again)
+	}
+}
+
+func TestWriteRefusesASymlinkedReportsDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	elsewhere := t.TempDir()
+	if err := os.Chmod(elsewhere, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(report.Dir()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, report.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := report.Write("person", "schen", []byte("p")); err == nil || !strings.Contains(err.Error(), "not a real directory") {
+		t.Fatalf("Write through a symlinked reports/ = %v, want a refusal", err)
+	}
+	entries, _ := os.ReadDir(elsewhere)
+	if len(entries) != 0 {
+		t.Fatalf("wrote through the symlink: %v", entries)
+	}
+	fi, _ := os.Stat(elsewhere)
+	if fi.Mode().Perm() != 0o755 {
+		t.Fatalf("chmod went through the symlink: target is now %v", fi.Mode().Perm())
+	}
+}
+
+func TestWriteRefusesAFileInPlaceOfTheDirectory(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(report.Dir()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(report.Dir(), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := report.Write("person", "schen", []byte("p")); err == nil {
+		t.Fatal("Write succeeded with a file where reports/ belongs")
+	}
+}
+
+func TestWriteSweepsStaleTempsOnly(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if _, err := report.Write("person", "first", []byte("p")); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(report.Dir(), ".report-111.tmp")
+	fresh := filepath.Join(report.Dir(), ".report-222.tmp")
+	for _, p := range []string{stale, fresh} {
+		if err := os.WriteFile(p, []byte("orphan"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := report.Write("person", "second", []byte("p")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale temp survived: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("a fresh temp (a write possibly in flight) was removed: %v", err)
 	}
 }
 

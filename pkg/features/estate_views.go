@@ -82,6 +82,8 @@ var EstateViews = &Feature{
 		"required": []string{"view"},
 	},
 	Handler: estateViewsHandler,
+	// render='graph' writes a report file.
+	EffectParams: []string{"render"},
 }
 
 // famPhaseTokens marks the engagement-phase suffixes the families motif

@@ -184,18 +184,21 @@ func parseCommands(raw interface{}) ([]playbook.Command, *FeatureResult) {
 // admit is the executor's admission rule, applied when a plan is validated
 // and again when a stored playbook runs (a hand-edited or version-skewed
 // playbooks.json bypasses validation). Only the read nouns are admitted,
-// and only as reads: a parameter that makes a read noun write — render=
-// writes a report file — stays out, so a batch never carries an effect.
-// Returns the refusal, or "" when the command is admitted.
+// and only as reads: a parameter the feature declares as an effect (its
+// EffectParams, such as estate's render=) stays out, so a batch never
+// carries one. Returns the refusal, or "" when the command is admitted.
 func admit(c playbook.Command) string {
 	if c.Tool == "batch" {
 		return "batch may not contain batch."
 	}
-	if _, ok := batchable[c.Tool]; !ok {
+	f, ok := batchable[c.Tool]
+	if !ok {
 		return fmt.Sprintf("%q is not batchable — the executor admits only reads: inbox, messages, estate.", c.Tool)
 	}
-	if _, ok := c.Params["render"]; ok {
-		return fmt.Sprintf("%s render= writes a report file, and batch admits reads only — run it as its own call.", c.Tool)
+	for _, p := range f.EffectParams {
+		if _, passed := c.Params[p]; passed {
+			return fmt.Sprintf("%s %s= is an effect (it writes), and batch admits reads only — run it as its own call.", c.Tool, p)
+		}
 	}
 	return ""
 }

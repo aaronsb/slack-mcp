@@ -17,16 +17,18 @@ import (
 // instead.
 
 type graphBuilder struct {
-	g    report.Graph
-	ids  map[string]string // join key -> page-local node ID
-	seen map[string]bool   // edge dedupe: source|target|kind
+	g       report.Graph
+	ids     map[string]string // join key -> page-local node ID
+	byLabel map[string]string // channel label -> first node drawn under it
+	seen    map[string]bool   // edge dedupe: source|target|kind
 }
 
 func newGraphBuilder(title, subtitle string) *graphBuilder {
 	return &graphBuilder{
-		g:    report.Graph{Title: title, Subtitle: subtitle},
-		ids:  map[string]string{},
-		seen: map[string]bool{},
+		g:       report.Graph{Title: title, Subtitle: subtitle},
+		ids:     map[string]string{},
+		byLabel: map[string]string{},
+		seen:    map[string]bool{},
 	}
 }
 
@@ -59,9 +61,10 @@ func (b *graphBuilder) edge(from, to, kind string, weight int, label string) {
 	b.g.Edges = append(b.g.Edges, report.Edge{Source: from, Target: to, Kind: kind, Weight: weight, Label: label})
 }
 
-// convNode adds a conversation by its rendered label, so the same channel
-// reached through the footprint, the created list, or a convergence cell
-// is one node.
+// convNode adds a conversation keyed by its ID, so the same conversation
+// reached through the footprint or a convergence cell is one node, while
+// two conversations that render alike (a live and a gone #eng) stay two
+// nodes and keep their own edge weights. Labels are for display only.
 func (b *graphBuilder) convNode(labels map[string]convInfo, conv string, detail ...string) string {
 	info, ok := labels[conv]
 	switch {
@@ -75,8 +78,29 @@ func (b *graphBuilder) convNode(labels map[string]convInfo, conv string, detail 
 		}
 		return b.node("conv:"+conv, label, report.KindDM, detail...)
 	default:
-		return b.node("chan:"+info.Label, info.Label, report.KindChannel, detail...)
+		id := b.node("conv:"+conv, info.Label, report.KindChannel, detail...)
+		if _, ok := b.byLabel[info.Label]; !ok {
+			b.byLabel[info.Label] = id
+		}
+		return id
 	}
+}
+
+// createdNode adds a channel from the created list, which carries names
+// only: it joins the first conversation already drawn under that label,
+// or becomes its own node.
+func (b *graphBuilder) createdNode(label string, detail ...string) string {
+	if id, ok := b.byLabel[label]; ok {
+		for i := range b.g.Nodes {
+			if b.g.Nodes[i].ID == id {
+				b.g.Nodes[i].Detail = append(b.g.Nodes[i].Detail, detail...)
+			}
+		}
+		return id
+	}
+	id := b.node("created:"+label, label, report.KindChannel, detail...)
+	b.byLabel[label] = id
+	return id
 }
 
 // personNode adds a person keyed by user ID, labelled as the view names them.
@@ -126,7 +150,7 @@ func personGraph(v *personViewData) report.Graph {
 
 	for _, name := range v.Created {
 		label := "#" + name
-		c := b.node("chan:"+label, label, report.KindChannel, "created by "+v.Label)
+		c := b.createdNode(label, "created by "+v.Label)
 		b.edge(seed, c, report.EdgeCreated, 1, "created")
 	}
 

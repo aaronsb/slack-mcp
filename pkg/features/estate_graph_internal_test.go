@@ -102,6 +102,40 @@ func TestPersonGraphIsTheEgoNetwork(t *testing.T) {
 	}
 }
 
+func TestConversationsSharingALabelKeepTheirOwnEdges(t *testing.T) {
+	v := samplePerson()
+	v.Footprint = []footprintRow{{Conv: "C0ENG", Days: 5}, {Conv: "C0ENG2", Days: 2}}
+	v.Labels["C0ENG2"] = convInfo{Label: "#eng"}
+	v.Counterparts = nil
+
+	g := personGraph(v)
+	var weights []int
+	engIDs := map[string]bool{}
+	for _, n := range g.Nodes {
+		if n.Label == "#eng" {
+			engIDs[n.ID] = true
+		}
+	}
+	for _, e := range g.Edges {
+		if engIDs[e.Target] && e.Kind == report.EdgeActive {
+			weights = append(weights, e.Weight)
+		}
+	}
+	if len(engIDs) != 2 || len(weights) != 2 || weights[0]+weights[1] != 7 {
+		t.Fatalf("two #eng conversations collapsed: nodes %v, active weights %v", engIDs, weights)
+	}
+	// The created list (names only) joins the first #eng, not a third node.
+	created := 0
+	for _, e := range g.Edges {
+		if e.Kind == report.EdgeCreated && engIDs[e.Target] {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("created #eng joined %d drawn conversations, want 1", created)
+	}
+}
+
 func TestPersonGraphNeverCarriesIDsOrHours(t *testing.T) {
 	g := personGraph(samplePerson())
 	assertNoSlackIDs(t, g)

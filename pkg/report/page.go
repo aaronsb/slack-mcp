@@ -2,16 +2,20 @@ package report
 
 // The page shell. Nothing in these constants is data: every view string
 // arrives through the JSON block and is drawn on the canvas by Cytoscape or
-// assigned with textContent. The CSP admits inline script and style only —
-// the page has no other source, so default-src 'none' costs nothing — and
-// data: images because Cytoscape's canvas renderer may hand them to itself.
-// No 'unsafe-eval': the vendored bundle uses neither eval nor Function.
+// assigned with textContent. The CSP admits exactly two scripts, by hash:
+// the vendored library and pageScript (Page fills in their hashes). The
+// JSON data block is never executed, so it needs no source. Inline style
+// stays allowed for the legend's style= attributes, and data: images
+// because Cytoscape's canvas renderer may hand them to itself. No
+// 'unsafe-eval': the bundle's one Function call is lodash's
+// Function("return this")() global fallback, which short-circuits in
+// browsers because self is defined.
 
 const pageHead = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{SCRIPT_HASHES}}; style-src 'unsafe-inline'; img-src data:">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>slack-mcp graph report</title>

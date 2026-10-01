@@ -179,7 +179,7 @@ func TestStoredPlaybookWithRenderRendersErrorInPlace(t *testing.T) {
 	}
 
 	out := batchOut(t, ap, map[string]any{"run": "skewed"})
-	errAt := strings.Index(out, "render= writes a report file")
+	errAt := strings.Index(out, "render= is an effect")
 	channelsAt := strings.Index(out, "## Channels")
 	if errAt < 0 || channelsAt < errAt {
 		t.Fatalf("render item not refused in place, or execution stopped:\n%s", out)

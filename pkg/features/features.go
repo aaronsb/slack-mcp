@@ -10,6 +10,10 @@ type Feature struct {
 	Description string
 	Schema      interface{}
 	Handler     func(context.Context, map[string]interface{}) (*FeatureResult, error)
+	// EffectParams names the parameters that turn a call to this feature
+	// into an effect (a write). The batch executor refuses any command
+	// passing one, so composition never carries an effect (ADR-010).
+	EffectParams []string
 }
 
 // FeatureResult provides structured responses with guidance

@@ -104,7 +104,7 @@ func TestPersonRenderGraphWritesAPrivatePageBesideTheView(t *testing.T) {
 		t.Fatalf("the markdown view is not returned with the report:\n%s", out)
 	}
 	path, page := readReport(t, out)
-	if filepath.Base(path) != "person-schen.html" {
+	if filepath.Base(path) != report.FileName("person", "schen") {
 		t.Fatalf("report named %s", filepath.Base(path))
 	}
 	if runtime.GOOS != "windows" {
@@ -166,7 +166,7 @@ func TestAboutRenderGraphWritesTheComposite(t *testing.T) {
 		t.Fatalf("the about markdown is not returned:\n%s", out)
 	}
 	path, page := readReport(t, out)
-	if filepath.Base(path) != "about-schen.html" {
+	if filepath.Base(path) != report.FileName("about", "schen") {
 		t.Fatalf("report named %s", filepath.Base(path))
 	}
 	if !strings.Contains(dataBlock(t, page), `"label":"Aaron Bockelie"`) {

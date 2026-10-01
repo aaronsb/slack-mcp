@@ -294,11 +294,20 @@ session.
 
 Reports are written to `<data dir>/reports/`
 (`$XDG_DATA_HOME/slack-mcp/reports/`), with the directory at 0700 and each
-file at 0600. A pre-existing directory is tightened to 0700. There is one
-file per view and subject handle, `<view>-<handle>.html`, with the name
-reduced to `[a-z0-9-]`. The write is atomic (temp file, then rename), so a
-reader never sees half a page, and the next render of the same view and
-person replaces it. Reports never go in a file-exchange directory such as
+file at 0600. A pre-existing directory is tightened to 0700. Those modes
+mean little on Windows, where chmod only toggles read-only; there the
+protection is the ACL on the user's profile directory. The server refuses
+a `reports/` that is a symlink, is not a directory, or (on Unix) belongs
+to another user, and it never chmods through a link. There is one file
+per view and subject handle, `<view>-<slug>-<digest>.html`. The slug is
+the handle reduced to `[a-z0-9-]` for readability. The digest is the
+first eight hex digits of the raw handle's SHA-256, so handles that slug
+alike (`john.smith`, `john_smith`) never share a file. Only the handle is
+hashed, never a user ID. The write is atomic (temp file, then rename), so
+a reader never sees half a page, and the next render of the same view and
+person replaces it. A crash between the two steps would leave a temp file
+of relationship data behind, so each write first removes temp files older
+than ten minutes. Reports never go in a file-exchange directory such as
 the one ADR-012 proposes. Relationship data stays out of reach of any file
 parameter.
 
@@ -333,11 +342,15 @@ the convergence cells joined to each person observed there.
   checks. It is embedded with `go:embed` and inlined into the page. Nothing
   is fetched from a CDN or anywhere else.
 - **A strict policy.** A `Content-Security-Policy` meta tag precedes every
-  script: `default-src 'none'; script-src 'unsafe-inline'; style-src
-  'unsafe-inline'; img-src data:`. Inline script and style are the page's
-  only sources. `data:` images are allowed for the canvas renderer. No
-  `unsafe-eval` is needed, because the bundle uses neither `eval` nor
-  `Function`.
+  script: `default-src 'none'; script-src 'sha256-…' 'sha256-…'; style-src
+  'unsafe-inline'; img-src data:`. The two hashes pin the page's only
+  executable scripts, the vendored library and the page's own code, both
+  constants. Nothing else can run, even if markup were somehow injected.
+  The JSON data block is never executed. Inline style stays allowed for the
+  legend's `style=` attributes, and `data:` images for the canvas
+  renderer. No `unsafe-eval` is needed. The bundle's one `Function` call is
+  lodash's `Function("return this")()` global fallback, which a browser
+  never reaches because `self` is defined.
 - **Data as data.** The graph travels in a `<script type="application/json">`
   block. Its JSON escapes `<`, `>`, `&`, U+2028 and U+2029, so no name can
   close the element or open a comment. Every label reaches the screen

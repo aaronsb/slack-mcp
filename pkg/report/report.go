@@ -11,13 +11,17 @@
 package report
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/paths"
 )
@@ -111,7 +115,7 @@ func Page(g Graph) ([]byte, error) {
 	}
 	var b strings.Builder
 	b.Grow(len(cytoscapeJS) + len(data) + len(pageHead) + len(pageBody) + len(pageScript) + 256)
-	b.WriteString(pageHead)
+	b.WriteString(strings.Replace(pageHead, "{{SCRIPT_HASHES}}", scriptHashes(), 1))
 	b.WriteString(pageBody)
 	b.WriteString("<script>")
 	b.Write(cytoscapeJS)
@@ -125,6 +129,18 @@ func Page(g Graph) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
+// ScriptHash is the CSP hash source for an inline script's exact bytes.
+func ScriptHash(script []byte) string {
+	sum := sha256.Sum256(script)
+	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+}
+
+// scriptHashes lists the hash sources of the page's two executable scripts.
+// Both are constants, so the CSP pins them exactly and admits nothing else.
+func scriptHashes() string {
+	return ScriptHash(cytoscapeJS) + " " + ScriptHash([]byte(pageScript))
+}
+
 // Dir is where reports live: <data dir>/reports. It is never the exchange
 // directory — reports hold relationship data and stay out of reach of the
 // file parameters.
@@ -132,26 +148,26 @@ func Dir() string {
 	return filepath.Join(paths.DataDir(), "reports")
 }
 
-// Write stores a page as <view>-<subject>.html in Dir, atomically (temp file
-// and rename) so a reader never sees half a page, and privately: the
-// directory is 0700 and the file 0600. A later render of the same view and
-// subject replaces the file. Returns the absolute path.
+// staleTempAge is how old an orphaned temp file must be before Write sweeps
+// it: a crash between create and rename leaves relationship data behind,
+// and a live write finishes in well under this.
+const staleTempAge = 10 * time.Minute
+
+const tempPattern = ".report-*.tmp"
+
+// Write stores a page as <view>-<subject>-<digest>.html in Dir, atomically
+// (temp file and rename) so a reader never sees half a page, and privately:
+// the directory is 0700 and the file 0600. A later render of the same view
+// and subject replaces the file. Returns the absolute path.
 func Write(view, subject string, page []byte) (string, error) {
-	dir, err := filepath.Abs(Dir())
+	dir, err := reportsDir()
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create %s: %w", dir, err)
-	}
-	// MkdirAll leaves an existing directory's mode alone; the reports
-	// directory is ours, so tighten it.
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return "", fmt.Errorf("restrict %s: %w", dir, err)
-	}
+	sweepStaleTemps(dir, time.Now())
 
-	final := filepath.Join(dir, slug(view, "view")+"-"+slug(subject, "subject")+".html")
-	tmp, err := os.CreateTemp(dir, ".report-*.tmp")
+	final := filepath.Join(dir, FileName(view, subject))
+	tmp, err := os.CreateTemp(dir, tempPattern)
 	if err != nil {
 		return "", fmt.Errorf("create temp report: %w", err)
 	}
@@ -182,6 +198,57 @@ func Write(view, subject string, page []byte) (string, error) {
 		return "", fmt.Errorf("place report: %w", err)
 	}
 	return final, nil
+}
+
+// reportsDir creates Dir if needed and returns its absolute path, refusing
+// anything but a real directory owned by the current user: a symlink
+// planted at reports/ would otherwise redirect relationship data, and a
+// chmod through it would loosen or tighten someone else's directory.
+func reportsDir() (string, error) {
+	dir, err := filepath.Abs(Dir())
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", dir, err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return "", fmt.Errorf("refusing %s: not a real directory (a symlink or file is in its place)", dir)
+	}
+	if !ownedByCurrentUser(fi) {
+		return "", fmt.Errorf("refusing %s: owned by another user", dir)
+	}
+	// MkdirAll leaves an existing directory's mode alone; the reports
+	// directory is ours, so tighten it.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", fmt.Errorf("restrict %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+// sweepStaleTemps removes orphaned temp files older than staleTempAge.
+// Best effort: a failure here never blocks the write.
+func sweepStaleTemps(dir string, now time.Time) {
+	matches, _ := filepath.Glob(filepath.Join(dir, tempPattern))
+	for _, m := range matches {
+		fi, err := os.Lstat(m)
+		if err != nil || !fi.Mode().IsRegular() || now.Sub(fi.ModTime()) < staleTempAge {
+			continue
+		}
+		_ = os.Remove(m)
+	}
+}
+
+// FileName is a report's name: the view and a readable slug of the subject
+// handle, plus a short digest of the raw handle so handles that slug alike
+// (john.smith, john_smith) never share a file.
+func FileName(view, subject string) string {
+	sum := sha256.Sum256([]byte(subject))
+	return slug(view, "view") + "-" + slug(subject, "subject") + "-" + hex.EncodeToString(sum[:])[:8] + ".html"
 }
 
 // slug reduces a name to [a-z0-9-] so it can never carry a separator, a
