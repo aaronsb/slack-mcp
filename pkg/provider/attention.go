@@ -38,17 +38,17 @@ func (ap *ApiProvider) openAttention() {
 		log.Printf("Attention ledger disabled: no identity captured")
 		return
 	}
+	ap.ledgerOpenMu.Lock()
+	defer ap.ledgerOpenMu.Unlock()
+	if ap.isClosed() {
+		return
+	}
 	att, err := estate.OpenAttention(ap.selfTeamID, ap.selfUserID, time.Now())
 	if err != nil {
 		log.Printf("Attention ledger unavailable: %v", err)
 		return
 	}
 	ap.estateMu.Lock()
-	if ap.closed {
-		ap.estateMu.Unlock()
-		att.Close()
-		return
-	}
 	ap.attention = att
 	ap.estateMu.Unlock()
 	if att.ReadOnly() {

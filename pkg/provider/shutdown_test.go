@@ -73,3 +73,37 @@ func TestShutdownOnAnUnbootedProvider(t *testing.T) {
 	(&ApiProvider{}).Shutdown()
 	NewWithTokens("xoxc-test", "xoxd-test").Shutdown()
 }
+
+// A boot still opening ledgers when Shutdown runs must not end up holding
+// them: the open sees closed and never takes the flock, so the provider that
+// replaces this one on an auth hot-swap wins the writer election (#108).
+func TestLedgerOpenAfterShutdownTakesNoFlock(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	const team, self = "T0LATE", "U0SELF"
+
+	ap := NewWithTokens("xoxc-test", "xoxd-test")
+	ap.selfTeamID, ap.selfUserID = team, self
+	ap.Shutdown()
+	ap.openEstate()
+	ap.openAttention()
+	if ap.est() != nil || ap.attn() != nil {
+		t.Fatalf("a ledger opened after Shutdown was kept")
+	}
+
+	st, err := estate.Open(team)
+	if err != nil {
+		t.Fatalf("open estate: %v", err)
+	}
+	defer st.Close()
+	attn, err := estate.OpenAttention(team, self, time.Now())
+	if err != nil {
+		t.Fatalf("open attention: %v", err)
+	}
+	defer attn.Close()
+	if st.ReadOnly() {
+		t.Errorf("estate ledger read-only: the shut-down provider still holds the flock")
+	}
+	if attn.ReadOnly() {
+		t.Errorf("attention ledger read-only: the shut-down provider still holds the flock")
+	}
+}

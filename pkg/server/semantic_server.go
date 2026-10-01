@@ -153,16 +153,19 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 // swapProvider installs p as the live provider after auth and boots it in the
 // background. The old provider is shut down first: flock is per open file, so
 // while it still holds the estate and attention ledgers the new provider's
-// Open loses the writer election and boots read-only (#108). The new provider
-// opens its ledgers only when it boots, which happens after the shutdown.
+// Open loses the writer election and boots read-only (#108). Swap makes each
+// replaced provider shut down exactly once, by the call that replaced it.
+//
+// Invariant: the new provider opens its ledgers only inside Provide(), and
+// the goroutine that calls it starts after old.Shutdown() returns. Shutdown
+// also waits out a ledger open still in flight on the old provider's boot.
 //
 // Residual race: a tool call that loaded the old provider before the swap may
 // still be running on it and will see a shut-down provider.
 func (s *SemanticMCPServer) swapProvider(p *provider.ApiProvider) {
-	if old := s.provider.Load(); old != nil && old != p {
+	if old := s.provider.Swap(p); old != nil && old != p {
 		old.Shutdown()
 	}
-	s.provider.Store(p)
 	log.Println("Provider hot-loaded after successful auth setup")
 	go provider.Guard("post-auth-boot", func() {
 		log.Println("Booting provider in background after auth...")
