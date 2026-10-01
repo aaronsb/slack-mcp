@@ -737,9 +737,13 @@ left over from before a restart still clears strikes when approved,
 unless strikes were cleared after it was issued (by the page, the CLI,
 or another approval). Then the approval writes no clear: the strikes
 recorded since that clear belong to later blocks the request never
-named. The same holds for a lifted person or conversation, and the
-`approve` output names each key it skipped and why, saying "lifted"
-only when it lifted something.
+named. The same holds for a lifted person or conversation. The check
+and the clears run on a fresh read under one hold of the quarantine
+file's lock, so a clear and a new block landing while the approval is
+under way are either seen or wait for it. The `approve` output names
+each key it skipped and why, saying "lifted" only when it lifted
+something. Approving a strikes lift releases the in-memory hold above
+even when it lifted no recorded strike, and the output says so.
 
 A lift request records its place in the quarantine file: the count of
 lines when it was issued and the SHA-256 of the file's bytes through
@@ -755,8 +759,9 @@ which the operator then clears directly.
 A pending lift is handed back for a repeated refusal only while none of
 its keys was cleared after its place. Otherwise the block now holding
 the key is one the request never saw, and approving it would lift
-nothing: the server marks the old request superseded, its ID never
-issued again, and issues a new one at the current place.
+nothing: the server marks the old request superseded, its ID not
+reissued while an operator may still hold it (Pending requests), and
+issues a new one at the current place.
 
 ### Layer 4: the tool result
 

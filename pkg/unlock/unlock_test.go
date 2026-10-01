@@ -452,6 +452,29 @@ func TestRowIDsFollowKeysNotOrder(t *testing.T) {
 	}
 }
 
+// failingAfterOne applies the first clear for real, then fails, as an
+// append that runs out of disk partway would.
+type failingAfterOne struct{ *safety.QuarantineStore }
+
+func (f failingAfterOne) ClearKeysAt(ks []safety.Key, by string, at safety.Place, now time.Time) (bool, []bool, error) {
+	moved, cleared, err := f.QuarantineStore.ClearKeysAt(ks[:1], by, at, now)
+	if err != nil || moved {
+		return moved, cleared, err
+	}
+	return false, cleared, errors.New("no space left on device")
+}
+
+// A clear that fails partway reports what it did clear.
+func TestPartialClearReportsWhatWasCleared(t *testing.T) {
+	ws := locked(t)
+	in := start(t, failingAfterOne{ws.Quarantine})
+	_, page := get(t, in.URL())
+	code, body := post(t, in, self(in), form(page, "clear", "@dana", "#a"))
+	if code != http.StatusOK || !strings.Contains(body, "Cleared 1;") || !strings.Contains(body, "the rest could not be cleared") {
+		t.Fatalf("POST %d: %s", code, body)
+	}
+}
+
 type unreadable struct{}
 
 func (unreadable) State() safety.QuarantineState {

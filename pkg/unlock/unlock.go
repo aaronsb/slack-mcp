@@ -328,25 +328,32 @@ func (in *Instance) answer(form map[string][]string, cur view) (result string, m
 		return "Nothing was checked, so nothing was cleared. This page is closed; you can close this tab.", false
 	}
 	moved, ok, err := in.store.ClearKeysAt(keys, safety.ByWeb, cur.place, in.opts.Now())
-	if err != nil {
-		log.Printf("outbound-safety: CLEAR by=web failed: %v", err)
-		return "Nothing could be cleared; running slack-mcp quarantine list in a terminal shows why. This page is closed; you can close this tab.", false
-	}
 	if moved {
 		return "", true
 	}
+	// ok covers the keys applied, in order: all of them, or those before
+	// the one that failed.
 	cleared := 0
-	for i, k := range keys {
-		if ok[i] || k.Kind == safety.KeyStrikes {
+	for i := range ok {
+		if k := keys[i]; ok[i] || k.Kind == safety.KeyStrikes {
 			cleared++
 			log.Printf("outbound-safety: CLEARED %s %s (%s) by=web", k.Kind, k.Name, k.ID)
 		}
+	}
+	closed := " This page is closed; you can close this tab."
+	if err != nil {
+		log.Printf("outbound-safety: CLEAR by=web failed after %d of %d: %v", len(ok), len(keys), err)
+		why := "running slack-mcp quarantine list in a terminal shows why."
+		if len(ok) == 0 {
+			return "Nothing could be cleared; " + why + closed, false
+		}
+		return fmt.Sprintf("Cleared %d; the rest could not be cleared; %s", cleared, why) + closed, false
 	}
 	msg := fmt.Sprintf("Cleared %d.", cleared)
 	if cleared == 0 {
 		msg = "Nothing needed clearing: what you checked was already clear."
 	}
-	return msg + " This page is closed; you can close this tab.", false
+	return msg + closed, false
 }
 
 func first(v []string) string {
