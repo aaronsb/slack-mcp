@@ -41,6 +41,8 @@ func formatResultBody(toolName string, result *FeatureResult) string {
 		return formatSearch(result)
 	case "say":
 		return formatSendMessage(result)
+	case "say-files":
+		return formatSayFiles(result)
 	case "mark-read":
 		return formatMarkRead(result)
 	case "react":
@@ -661,6 +663,65 @@ func formatSendMessage(result *FeatureResult) string {
 	}
 	s += footer(result)
 	return s
+}
+
+// --- say files= ---
+
+func formatSayFiles(result *FeatureResult) string {
+	data := dataMap(result)
+	if data == nil {
+		return result.Message + footer(result)
+	}
+	var files []map[string]interface{}
+	switch list := data["files"].(type) {
+	case []map[string]interface{}:
+		files = list
+	case []interface{}:
+		for _, item := range list {
+			if m, ok := item.(map[string]interface{}); ok {
+				files = append(files, m)
+			}
+		}
+	}
+
+	var b strings.Builder
+	noun := "files"
+	if len(files) == 1 {
+		noun = "file"
+	}
+	where := str(data, "destination")
+	if str(data, "thread") != "" {
+		where = "a thread in " + where
+	}
+	fmt.Fprintf(&b, "Shared %d %s to %s", len(files), noun, where)
+	if c, _ := data["comment"].(bool); c {
+		b.WriteString(" with your comment")
+	}
+	b.WriteString(":\n")
+	for _, f := range files {
+		fmt.Fprintf(&b, "- %s (%s, %s) — fileId %s\n", str(f, "name"), humanSize(int64(num(f, "size"))), str(f, "type"), str(f, "fileId"))
+	}
+	if ts := str(data, "ts"); ts != "" {
+		fmt.Fprintf(&b, "Message ts %s.", ts)
+	} else {
+		b.WriteString("Shared; Slack has not yet reported the message timestamp.")
+	}
+	b.WriteString(footer(result))
+	return b.String()
+}
+
+// humanSize renders a byte count in binary units with one decimal.
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit && exp < 3; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 // --- mark-read ---

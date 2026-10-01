@@ -47,6 +47,10 @@ var MarkAsRead = &Feature{
 }
 
 func markAsReadHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
+	if refusal := preWriteLocal(ctx); refusal != nil {
+		return refusal, nil
+	}
+
 	// Get the API provider
 	apiProvider, ok := params["_provider"].(*provider.ApiProvider)
 	if !ok {

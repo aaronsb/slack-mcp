@@ -138,7 +138,7 @@ The deployment is `local` unless you declare it. The server does not detect it: 
 | `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` raw Slack search syntax (passed as written) plus resolved filters `in`, `from`, `after`, `before`, `has` (link, pin, :emoji:), `thread` |
 | `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'`; `about`/`person` take `render='graph'` to also write a static HTML graph page (not in `batch`) |
 | `batch` | executor | Run a held plan of reads in one call: `commands=[{tool, params}...]`; playbooks via `save=`/`run=`/`list=`/`delete=` |
-| `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), or an emoji reaction |
+| `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), files from the exchange directory (`files=['report.pdf']`, bare names, at most 10, shared as one message with `text` as the comment), or an emoji reaction |
 | `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
 | `mark-read` | verb | Fire read receipts — the one visibly-public read signal |
 | `auth` | verb | Interactive token setup (localhost only) |
@@ -155,8 +155,8 @@ Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the
 - **Ledgers hold no message content** — the durable estate ledger stores entity facts (names, lifecycle, tombstones); the attention ledger stores `{user, conversation, day}` encounters with a 90-day window; both live under XDG with `0600`, and deleting them deletes the graph
 - **Hour-level activity is recorded only for you** — colleagues bucket by day, by design
 - **Graph reports are local, private files** — `estate render='graph'` writes a self-contained HTML page to `$XDG_DATA_HOME/slack-mcp/reports/` (default `~/.local/share/slack-mcp/reports/`), directory `0700`, file `0600`, one per view and person, replaced on each render. A report holds relationship data — the same names and counts the view shows, never IDs or colleagues' hours — so treat it like the ledgers; delete the directory to remove them. The page loads nothing from the network (bundled Cytoscape.js, strict Content-Security-Policy), and nothing is served or opened for you
-- **Files move only through the exchange directory** — `download` writes only into `$XDG_DATA_HOME/slack-mcp/exchange/` (default `~/.local/share/slack-mcp/exchange/`, or `SLACK_MCP_EXCHANGE_DIR` set in the MCP client config), directory `0700`, files `0600`, never overwriting. File parameters take bare names, never paths, so injected text cannot point a tool at `~/.ssh` or an autostart folder; copy files in and out with your own tools (ADR-012)
-- **No network traffic except Slack** — the binary connects only to Slack: `slack.com/api/*`, plus `files.slack.com` when `download` fetches a shared file
+- **Files move only through the exchange directory** — `say files=` reads only from it and `download` writes only into `$XDG_DATA_HOME/slack-mcp/exchange/` (default `~/.local/share/slack-mcp/exchange/`, or `SLACK_MCP_EXCHANGE_DIR` set in the MCP client config), directory `0700`, files `0600`, never overwriting. File parameters take bare names, never paths, so injected text cannot point a tool at `~/.ssh` or an autostart folder; copy a file in to attach it, and out after downloading it, with your own tools (ADR-012)
+- **No network traffic except Slack** — the binary connects only to Slack hosts (`slack.com` and `*.slack.com`); an upload address or redirect to any other host is refused before a byte is sent
 - **No browser downloads** — uses your installed browser, never fetches binaries from CDNs
 
 ## Development

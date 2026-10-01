@@ -67,7 +67,7 @@ func TestTeamDiscoveryNeverLogsCredentials(t *testing.T) {
 	log.SetOutput(&out)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	api := discoverTeamClient("xoxc-FAKEtoken", "xoxd-FAKEcookie", slack.OptionAPIURL(srv.URL+"/api/"))
+	api := discoverTeamClient("xoxc-FAKEtoken", "xoxd-FAKEcookie", "", slack.OptionAPIURL(srv.URL+"/api/"))
 
 	mu.Lock()
 	if authCalls != 1 {
@@ -118,7 +118,7 @@ func TestTeamDiscoveryFailureNeverLogsCredentials(t *testing.T) {
 	log.SetOutput(&out)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	api := discoverTeamClient("xoxc-FAKEtoken", "xoxd-FAKEcookie", slack.OptionAPIURL(srv.URL+"/api/"))
+	api := discoverTeamClient("xoxc-FAKEtoken", "xoxd-FAKEcookie", "", slack.OptionAPIURL(srv.URL+"/api/"))
 	if api == nil {
 		t.Fatal("discovery returned no client on failure")
 	}
