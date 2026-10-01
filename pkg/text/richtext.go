@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/slack-go/slack"
@@ -652,9 +653,43 @@ func mrkdwnInline(elements []slack.RichTextSectionElement) string {
 			b.WriteString("<!subteam^" + e.UsergroupID + ">")
 		case *slack.RichTextSectionEmojiElement:
 			b.WriteString(":" + e.Name + ":")
+		case *slack.RichTextSectionDateElement:
+			// The fallback is the text Slack shows a client that cannot
+			// render the date; without one, the instant in UTC.
+			if e.Fallback != nil && *e.Fallback != "" {
+				b.WriteString(slackEscape(*e.Fallback))
+			} else {
+				b.WriteString(time.Unix(int64(e.Timestamp), 0).UTC().Format("2006-01-02 15:04 UTC"))
+			}
+		case *slack.RichTextSectionColorElement:
+			b.WriteString(slackEscape(e.Value))
+		case *slack.RichTextSectionTeamElement:
+			b.WriteString("a workspace")
 		}
 	}
 	return b.String()
+}
+
+// LabelGroups gives each bare <!subteam^ID> in body the label the same
+// group carries in source, a message's text field. A rich_text usergroup
+// element has no label, while the text field's <!subteam^ID|@name> does.
+func LabelGroups(body, source string) string {
+	labels := map[string]string{}
+	for _, m := range groupTag.FindAllStringSubmatch(source, -1) {
+		if m[2] != "" {
+			labels[m[1]] = m[2]
+		}
+	}
+	if len(labels) == 0 {
+		return body
+	}
+	return groupTag.ReplaceAllStringFunc(body, func(m string) string {
+		parts := groupTag.FindStringSubmatch(m)
+		if label, ok := labels[parts[1]]; ok && parts[2] == "" {
+			return "<!subteam^" + parts[1] + "|@" + label + ">"
+		}
+		return m
+	})
 }
 
 // styled wraps s in the mrkdwn markers for st, keeping any edge

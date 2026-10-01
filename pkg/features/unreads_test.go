@@ -59,3 +59,25 @@ func TestUnreadsCountFromLastReadAndSkipJoins(t *testing.T) {
 		t.Errorf("mentions = %v, want only the real ask", mentions)
 	}
 }
+
+// A DM never read (no last_read) counts every message, and a window that
+// is all unread with more behind it says "at least".
+func TestUnreadsCountANeverReadDMAsAtLeast(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(dmWith("D1", "U2"))
+	srv.Handle("conversations.history", func(r *http.Request) any {
+		return map[string]any{"ok": true, "has_more": true, "messages": []any{
+			slacktest.Message("U2", "two", "1782246200.000000"),
+			slacktest.Message("U2", "one", "1782246100.000000"),
+		}}
+	})
+	srv.Handle("client.counts", func(*http.Request) any {
+		return slacktest.Counts(nil, []any{slacktest.Conversation("D1", "", "1782246200.000000", true, 0)})
+	})
+
+	res := run(t, srv, features.CheckUnreads, map[string]any{})
+	dm := res.Data.(map[string]any)["unreads"].(map[string]any)["dms"].([]map[string]any)[0]
+	if dm["unreadCount"] != 2 || dm["unreadAtLeast"] != true {
+		t.Errorf("unreadCount=%v unreadAtLeast=%v, want 2 and true", dm["unreadCount"], dm["unreadAtLeast"])
+	}
+}

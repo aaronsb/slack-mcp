@@ -172,6 +172,19 @@ func TestBodiesKeepStructureAndNeverRenderBlank(t *testing.T) {
 	escaped := slacktest.Message("U2", "a &gt; b &amp;&amp; c &lt; d", "1782246200.000000")
 	placeholder := slacktest.Message("U2", "[no preview available]", "1782246300.000000")
 	placeholder["attachments"] = []any{map[string]any{"fallback": "PROJ-12 moved to Done"}}
+	dated := map[string]any{
+		"type": "message", "user": "U2", "ts": "1782246500.000000",
+		"text": "Standup <!date^1782246000^{time}|10:00> with <!subteam^S0ONCALL1|@oncall>",
+		"blocks": []any{map[string]any{"type": "rich_text", "elements": []any{
+			map[string]any{"type": "rich_text_section", "elements": []any{
+				map[string]any{"type": "text", "text": "Standup "},
+				map[string]any{"type": "date", "timestamp": 1782246000, "format": "{time}", "fallback": "10:00"},
+				map[string]any{"type": "text", "text": " with "},
+				map[string]any{"type": "usergroup", "usergroup_id": "S0ONCALL1"},
+			}},
+		}}},
+	}
+	placeholderOnly := slacktest.Message("U2", "[no preview available]", "1782246600.000000")
 	fileOnly := slacktest.Message("U2", "", "1782246400.000000")
 	fileOnly["files"] = []any{map[string]any{"id": "F1", "name": "chart.png", "mimetype": "image/png"}}
 
@@ -179,7 +192,7 @@ func TestBodiesKeepStructureAndNeverRenderBlank(t *testing.T) {
 	srv.SeedChannels(channel("C1", "engineering"))
 	srv.Handle("conversations.history", func(*http.Request) any {
 		return map[string]any{"ok": true, "has_more": false,
-			"messages": []any{fileOnly, placeholder, escaped, richText}}
+			"messages": []any{placeholderOnly, dated, fileOnly, placeholder, escaped, richText}}
 	})
 
 	res := read(t, srv, map[string]any{"handle": "engineering"})
@@ -189,6 +202,8 @@ func TestBodiesKeepStructureAndNeverRenderBlank(t *testing.T) {
 		"a > b && c < d",
 		"PROJ-12 moved to Done",
 		"[file: chart.png]",
+		"Standup 10:00 with @oncall",
+		"[no preview available]",
 	}
 	if len(msgs) != len(want) {
 		t.Fatalf("got %d messages, want %d", len(msgs), len(want))

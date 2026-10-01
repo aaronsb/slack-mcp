@@ -61,7 +61,7 @@ func (r *messageRenderer) Render(m slack.Message) RenderedMessage {
 	var body string
 	switch {
 	case blocks != "" && text.RichTextToMrkdwn(m.Blocks.BlockSet) != "":
-		body = blocks
+		body = text.LabelGroups(blocks, m.Text)
 	case strings.TrimSpace(m.Text) != "" && m.Text != noPreview:
 		body = m.Text
 	case blocks != "":
@@ -71,6 +71,9 @@ func (r *messageRenderer) Render(m slack.Message) RenderedMessage {
 	}
 	if strings.TrimSpace(body) == "" {
 		body = fileLabel(m.Files)
+	}
+	if strings.TrimSpace(body) == "" {
+		body = m.Text
 	}
 	resolved, unresolved := text.ResolveTagsReport(body, r.resolve)
 	return RenderedMessage{
