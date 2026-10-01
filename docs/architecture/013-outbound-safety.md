@@ -647,8 +647,11 @@ pending. The hold lifts when:
   writable again: if approval fails because it is not, the operator
   fixes the file (permissions, disk) and approves again;
 - the operator runs `slack-mcp quarantine clear strikes`, which always
-  writes a clear, and the server sees a clear written after the hold
-  engaged;
+  writes a clear, and the server reads it at a later place in the file
+  than where the hold engaged. Place, not time, orders them, so no clock
+  releases the hold early; if the file was replaced or edited since the
+  hold engaged, places no longer compare and only approval or a restart
+  releases it;
 - the server restarts, for any reason, the host's included. The
   unrecorded strike is then lost. While no request has been issued, a
   restart is the only release besides a clear of strikes.
@@ -755,7 +758,9 @@ record that cannot be written fails the download and deletes the file,
 and when the deletion fails too the download says the file is still there
 without a record. A provenance file that cannot be opened or read, or
 that has a malformed line, counts every attachment without a record as
-moved.
+moved; the `PENDING` line carries `provenance=unreadable` or
+`provenance=malformed`, and the request the operator reads names the file
+to repair.
 
 #### Pending requests
 
