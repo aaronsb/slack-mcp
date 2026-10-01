@@ -135,7 +135,7 @@ The deployment is `local` unless you declare it. The server does not detect it: 
 | Tool | Kind | What it does |
 |------|------|-------------|
 | `inbox` | noun | What needs you: `view='new'` (since your last dismiss), `'unreads'`, `'mentions'` |
-| `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` full Slack search syntax |
+| `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` raw Slack search syntax (passed as written) plus resolved filters `in`, `from`, `after`, `before`, `has` (link, pin, :emoji:), `thread` |
 | `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'`; `about`/`person` take `render='graph'` to also write a static HTML graph page (not in `batch`) |
 | `batch` | executor | Run a held plan of reads in one call: `commands=[{tool, params}...]`; playbooks via `save=`/`run=`/`list=`/`delete=` |
 | `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), or an emoji reaction |

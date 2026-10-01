@@ -22,7 +22,7 @@ const (
 	// searchCursorVersion is bumped whenever the cursor's fields or the digest's
 	// inputs change, so an older cursor gets a clear message instead of
 	// "belongs to a different search".
-	searchCursorVersion = 1
+	searchCursorVersion = 2
 )
 
 // errCursorVersion marks a well-formed cursor issued by a different version.
@@ -52,17 +52,10 @@ type searchCursor struct {
 // searchDigest identifies a search independent of its window: the window
 // travels in the cursor, so the digest covers what a caller means by "the same
 // query" — the terms and the filters; the page size is pinned separately.
-func searchDigest(query string, channels, people []string) string {
-	// Channels are normalized the way the query renders them, so "#eng" and
-	// "eng" are the same search.
-	norm := make([]string, 0, len(channels))
-	for _, ch := range channels {
-		if name := strings.TrimPrefix(strings.TrimSpace(ch), "#"); name != "" {
-			norm = append(norm, name)
-		}
-	}
-	channels = norm
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%q|%q|%q", query, channels, people)))
+func searchDigest(query string, f *searchFilters, people []string) string {
+	// Places are the resolved names the query renders, so "#eng" and
+	// "engineering" are the same search.
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%q|%q|%s", query, people, f.digestParts())))
 	return hex.EncodeToString(sum[:8])
 }
 

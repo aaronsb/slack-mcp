@@ -180,7 +180,7 @@ func cursorOf(t *testing.T, v map[string]any) string {
 // overrides applied.
 func validCursor(t *testing.T, over map[string]any) string {
 	t.Helper()
-	c := map[string]any{"v": 1, "p": 2, "c": 100, "s": "2026-01-02", "d": features.SearchDigestForTest("deploy", nil, nil)}
+	c := map[string]any{"v": 2, "p": 2, "c": 100, "s": "2026-01-02", "d": features.SearchDigestForTest("deploy", nil, nil)}
 	for k, v := range over {
 		if v == nil {
 			delete(c, k)

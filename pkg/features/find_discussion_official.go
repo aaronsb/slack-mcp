@@ -32,8 +32,12 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		timeframe = "1w"
 	}
 
-	channels := stringList(params["in"])
 	people := stringList(params["from"])
+	filters, refusal := parseSearchFilters(ctx, p, query, params)
+	if refusal != nil {
+		return refusal, nil
+	}
+	channels := filters.channels
 
 	// Resolve every person before rendering the query: a guessed handle in
 	// from: makes Slack return an empty result indistinguishable from "this
@@ -72,7 +76,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	if limited {
 		count = limit
 	}
-	digest := searchDigest(query, channels, people)
+	digest := searchDigest(query, filters, people)
 	page := 1
 	widened := false
 	continuing := false
@@ -110,9 +114,10 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		// that widened stays in the widened window, and nothing re-widens.
 		since, _ = time.Parse("2006-01-02", cur.Since)
 		page, count, widened, continuing = cur.Page, cur.Count, cur.Widened, true
-		built, _ = buildQueryFrom(p, query, since, channels, people)
+		built = buildQueryFrom(query, since, filters, people)
 	} else {
-		built, since = buildQuery(p, query, timeframe, channels, people)
+		since = searchStart(timeframe, filters)
+		built = buildQueryFrom(query, since, filters, people)
 	}
 
 	messages, err := runSearch(ctx, api, built, page, count)
@@ -123,12 +128,12 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		}, nil
 	}
 
-	if !continuing && len(messages.Matches) == 0 && !pinned {
+	if !continuing && len(messages.Matches) == 0 && !pinned && !filters.explicitWindow() {
 		// Nothing in the default window. Widen once rather than handing back an
 		// empty result the caller cannot distinguish from a wrong window.
 		widened = true
 		since = time.Now().Add(-widenTo)
-		built, _ = buildQueryFrom(p, query, since, channels, people)
+		built = buildQueryFrom(query, since, filters, people)
 		messages, err = runSearch(ctx, api, built, page, count)
 		if err != nil {
 			return &FeatureResult{
@@ -189,7 +194,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		"searchedSince": since.Format("2006-01-02"),
 		"window":        describeSearchWindow(since, widened, pinned),
 		"widened":       widened,
-		"channels":      channels,
+		"channels":      channelNames(channels),
 		"from":          people,
 		"totalMatches":  messages.Total,
 		"returned":      len(results),
@@ -205,14 +210,18 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	if len(fromResolutions) > 0 {
 		coverage["fromResolved"] = fromResolutions
 	}
+	if len(filters.inResolved) > 0 {
+		coverage["inResolved"] = filters.inResolved
+	}
 
 	result := &FeatureResult{
 		Success:     true,
 		ResultCount: len(results),
 		Data: map[string]interface{}{
-			"query":    query,
-			"results":  results,
-			"coverage": coverage,
+			"query":          query,
+			"effectiveQuery": built,
+			"results":        results,
+			"coverage":       coverage,
 		},
 	}
 
@@ -235,7 +244,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	}
 
 	if len(results) == 0 {
-		result.Message = fmt.Sprintf("Nothing matching %q since %s.", query, since.Format("2006-01-02"))
+		result.Message = fmt.Sprintf("Nothing matching %q (%s).", query, coverage["window"])
 		if continuing {
 			result.Guidance = fmt.Sprintf("Page %d came back empty: the result set shrank since the cursor was issued (matches were deleted or edited). "+
 				"Rerun the search without cursor= to start over.", page)
@@ -283,27 +292,34 @@ func runSearch(ctx context.Context, api *slack.Client, query string, page, count
 	return api.SearchMessagesContext(ctx, query, searchParams)
 }
 
-// buildQuery renders a search, returning the query and the point it searches
-// back to.
-func buildQuery(p *provider.ApiProvider, query, timeframe string, channels, people []string) (string, time.Time) {
-	return buildQueryFrom(p, query, timeframeStart(timeframe), channels, people)
+// searchStart is where the window begins: an explicit after=, the zero time
+// when only before= or raw date text bounds it, else the timeframe.
+func searchStart(timeframe string, f *searchFilters) time.Time {
+	switch {
+	case f.after != "":
+		t, _ := time.Parse("2006-01-02", f.after)
+		return t
+	case f.before != "" || f.rawDatesSet:
+		return time.Time{}
+	}
+	return timeframeStart(timeframe)
 }
 
-func buildQueryFrom(p *provider.ApiProvider, query string, since time.Time, channels, people []string) (string, time.Time) {
+// buildQueryFrom composes the query Slack receives: the raw text verbatim,
+// then the structured filters, names only. The zero time means no after:.
+func buildQueryFrom(query string, since time.Time, f *searchFilters, people []string) string {
 	parts := []string{query}
 
-	// An absolute date, because Slack's search grammar takes one. The previous
-	// form rendered "after:-30d", which Slack does not parse as a relative
-	// offset — so the filter was quietly ignored and results came back from
-	// outside the window the caller asked for.
-	parts = append(parts, "after:"+since.Format("2006-01-02"))
-
-	for _, ch := range channels {
-		name := strings.TrimPrefix(strings.TrimSpace(ch), "#")
-		if name == "" {
-			continue
-		}
-		parts = append(parts, "in:#"+name)
+	// An absolute date, because Slack's search grammar takes one; "after:-30d"
+	// is not parsed as a relative offset and was quietly ignored.
+	if !since.IsZero() {
+		parts = append(parts, "after:"+since.Format("2006-01-02"))
+	}
+	if f.before != "" {
+		parts = append(parts, "before:"+f.before)
+	}
+	for _, ch := range f.channels {
+		parts = append(parts, "in:"+ch)
 	}
 	for _, person := range people {
 		name := strings.TrimPrefix(strings.TrimSpace(person), "@")
@@ -312,8 +328,13 @@ func buildQueryFrom(p *provider.ApiProvider, query string, since time.Time, chan
 		}
 		parts = append(parts, "from:@"+name)
 	}
-
-	return strings.Join(parts, " "), since
+	for _, h := range f.has {
+		parts = append(parts, "has:"+h)
+	}
+	if f.thread {
+		parts = append(parts, "is:thread")
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
 // timeframeStart turns "3d", "2w", "1m", "1y" into the point to search back to.
@@ -346,6 +367,9 @@ func timeframeStart(timeframe string) time.Time {
 }
 
 func describeSearchWindow(since time.Time, widened, pinned bool) string {
+	if since.IsZero() {
+		return "all dates, bounded only by the date filters in the query"
+	}
 	days := int(time.Since(since).Hours() / 24)
 	switch {
 	case widened:
@@ -390,4 +414,13 @@ func stringList(v interface{}) []string {
 func searchLabel(p *provider.ApiProvider, channelID string) string {
 	label, _ := conversationLabel(p, channelID)
 	return label
+}
+
+// channelNames drops the # from channel tokens, keeping @handle for DMs.
+func channelNames(tokens []string) []string {
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		out = append(out, strings.TrimPrefix(t, "#"))
+	}
+	return out
 }

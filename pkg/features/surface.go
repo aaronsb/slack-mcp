@@ -107,7 +107,7 @@ func inboxHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 
 var Messages = &Feature{
 	Name:        "messages",
-	Description: "Conversation content, addressed four ways (precedence: query beats target; around beats since): target alone reads it in full (a handle, '#channel', '@person', or a description); target+around fetches context around a timestamp; target+since renders a time window with triage; query searches with full Slack syntax (from:, in:, before:...). Read-only; never marks anything read.",
+	Description: "Conversation content, addressed four ways (precedence: query beats target; around beats since): target alone reads it in full (a handle, '#channel', '@person', or a description); target+around fetches context around a timestamp; target+since renders a time window with triage; query searches (raw Slack syntax passes through as written; in=, from=, after=, before=, has=, thread= are resolved filters composed onto it). Read-only; never marks anything read.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -125,7 +125,34 @@ var Messages = &Feature{
 			},
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "Search instead of fetch: full Slack search syntax; the server resolves from:@name through the ladder",
+				"description": "Search instead of fetch: raw Slack search text, passed to Slack as written (a from:@name typed here is NOT resolved or checked; use from= for resolution)",
+			},
+			"in": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "query only: narrow to a '#channel' or '@person' (DM); resolved by name, a miss returns candidates and does not search",
+			},
+			"from": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "query only: messages by these people; resolved through the person ladder, a miss returns candidates and does not search",
+			},
+			"after": map[string]interface{}{
+				"type":        "string",
+				"description": "query only: YYYY-MM-DD (or 3d, 2w). Replaces the default window; not with timeframe",
+			},
+			"before": map[string]interface{}{
+				"type":        "string",
+				"description": "query only: YYYY-MM-DD (or 3d, 2w)",
+			},
+			"has": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "query only: 'link', 'pin', or a reaction as ':emoji:' (Slack's has::emoji:). Other values (file, star, bare reaction) are unverified and rejected",
+			},
+			"thread": map[string]interface{}{
+				"type":        "boolean",
+				"description": "query only: only messages in threads (is:thread)",
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
@@ -137,7 +164,7 @@ var Messages = &Feature{
 			},
 			"timeframe": map[string]interface{}{
 				"type":        "string",
-				"description": "query only: how far back to search (default 1w)",
+				"description": "query only: how far back to search (default 1w); not with after=",
 			},
 		},
 		"required": []string{},
@@ -162,7 +189,7 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 			}
 			shown["limit"] = lim
 		}
-		echo := echoLine("messages", "query='"+query+"'", shown, "cursor", "limit", "timeframe")
+		echo := echoLine("messages", "query='"+query+"'", shown, "cursor", "limit", "timeframe", "in", "from", "after", "before", "has", "thread")
 		res, err := delegate(ctx, FindDiscussion, params, echo)
 		if res != nil {
 			res.Echo += res.EchoSuffix
