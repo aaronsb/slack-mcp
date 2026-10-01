@@ -93,7 +93,6 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 
 	usersMap := provider.ProvideUsersMap()
 	renderer := newMessageRenderer(provider)
-	mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 
 	// The scan stops once the page is full, so completeness is stated in
 	// the result rather than implied (#24: a mention in an unscanned
@@ -130,13 +129,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 
 		// Look for mentions in messages
 		for _, msg := range resp.Messages {
-			// Check if message mentions the user
-			if !strings.Contains(msg.Text, mentionPattern) {
-				continue
-			}
-
-			// Skip if message is from current user (self-mention)
-			if msg.User == currentUserID {
+			if !mentionsUser(msg, currentUserID) {
 				continue
 			}
 

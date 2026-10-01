@@ -3,6 +3,9 @@ package features
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"github.com/slack-go/slack"
 )
 
 // CheckMyMentions finds all unread mentions requiring attention
@@ -131,4 +134,21 @@ func checkMentionsHandler(ctx context.Context, params map[string]interface{}) (*
 		Guidance:    "🚨 You have 1 urgent mention about a blocking PR review that needs immediate attention",
 		ResultCount: len(filteredMentions),
 	}, nil
+}
+
+// membershipSubtypes are the join and leave events. Slack writes them as
+// "<@U…> has joined the channel", so they carry the tag a mention does.
+var membershipSubtypes = map[string]bool{
+	"channel_join": true, "channel_leave": true,
+	"group_join": true, "group_leave": true,
+}
+
+// mentionsUser reports whether msg is a mention of userID: it names them,
+// someone else wrote it, and it is a message rather than a membership
+// event. Every view that counts mentions decides with it, so they agree.
+func mentionsUser(msg slack.Message, userID string) bool {
+	if userID == "" || msg.User == userID || membershipSubtypes[msg.SubType] {
+		return false
+	}
+	return strings.Contains(msg.Text, "<@"+userID+">")
 }

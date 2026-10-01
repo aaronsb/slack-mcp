@@ -2,12 +2,15 @@ package features
 
 // renderMessage is ADR-004's seam (issue #63): one normalizer turning every
 // slack.Message into an author and a body, so no formatter assembles
-// message content by hand. The body comes from the text field, or — when
-// that is empty — from Block Kit blocks or attachments flattened to text
-// (issue #45: the highest-signal announcement posts carried no top-level
-// text and rendered blank). Tags resolve through the same resolver the
-// body renderer uses; tags that do not resolve stay raw in the body and
-// are also reported in Unresolved, ADR-005's repair queue.
+// message content by hand. The body comes from a rich_text block when the
+// message has one (Slack regenerates the text field from it with every
+// newline replaced by a space), else from the text field, else from other
+// Block Kit blocks or attachments flattened to text (issue #45: the
+// highest-signal announcement posts carried no top-level text and rendered
+// blank), else from the names of its files. Tags resolve through the same
+// resolver the body renderer uses; tags that do not resolve stay raw in the
+// body and are also reported in Unresolved, ADR-005's repair queue. The
+// three entities Slack escapes are decoded last.
 
 import (
 	"strings"
@@ -54,18 +57,29 @@ func newMessageRenderer(ap *provider.ApiProvider) *messageRenderer {
 
 // Render normalizes one message.
 func (r *messageRenderer) Render(m slack.Message) RenderedMessage {
-	body := m.Text
-	if strings.TrimSpace(body) == "" {
-		body = flattenBlocks(m.Blocks)
+	blocks := flattenBlocks(m.Blocks)
+	var body string
+	switch {
+	case blocks != "" && text.RichTextToMrkdwn(m.Blocks.BlockSet) != "":
+		body = text.LabelGroups(blocks, m.Text)
+	case strings.TrimSpace(m.Text) != "" && m.Text != noPreview:
+		body = m.Text
+	case blocks != "":
+		body = blocks
+	default:
+		body = flattenAttachments(m.Attachments)
 	}
 	if strings.TrimSpace(body) == "" {
-		body = flattenAttachments(m.Attachments)
+		body = fileLabel(m.Files)
+	}
+	if strings.TrimSpace(body) == "" {
+		body = m.Text
 	}
 	resolved, unresolved := text.ResolveTagsReport(body, r.resolve)
 	return RenderedMessage{
 		AuthorID:   m.User,
 		Author:     r.authorName(m),
-		Body:       resolved,
+		Body:       text.Unescape(resolved),
 		Unresolved: unresolved,
 		TS:         m.Timestamp,
 	}
@@ -75,7 +89,25 @@ func (r *messageRenderer) Render(m slack.Message) RenderedMessage {
 // without a full message (topics, purposes, thread previews).
 func (r *messageRenderer) RenderText(s string) string {
 	out, _ := text.ResolveTagsReport(s, r.resolve)
-	return out
+	return text.Unescape(out)
+}
+
+// noPreview is the text Slack stores for a blocks-only app message.
+const noPreview = "[no preview available]"
+
+// fileLabel names a file-only message's files, so it never renders blank.
+func fileLabel(files []slack.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.Name
+		if names[i] == "" {
+			names[i] = f.Title
+		}
+	}
+	return "[file: " + strings.Join(names, ", ") + "]"
 }
 
 // authorName is the one attribution chain: users map (with the self
@@ -176,64 +208,9 @@ func flattenBlock(b slack.Block) string {
 			return "[image: " + blk.AltText + "]"
 		}
 	case *slack.RichTextBlock:
-		var parts []string
-		for _, el := range blk.Elements {
-			if s := flattenRichTextElement(el); s != "" {
-				parts = append(parts, s)
-			}
-		}
-		return strings.Join(parts, "\n")
+		return text.RichTextToMrkdwn([]slack.Block{blk})
 	}
 	return ""
-}
-
-func flattenRichTextElement(el slack.RichTextElement) string {
-	switch e := el.(type) {
-	case *slack.RichTextSection:
-		return flattenRichTextSection(e)
-	case *slack.RichTextList:
-		var items []string
-		for _, sub := range e.Elements {
-			if s := flattenRichTextElement(sub); s != "" {
-				items = append(items, "- "+s)
-			}
-		}
-		return strings.Join(items, "\n")
-	case *slack.RichTextQuote:
-		return "> " + flattenSectionElements(e.Elements)
-	case *slack.RichTextPreformatted:
-		return flattenSectionElements(e.Elements)
-	}
-	return ""
-}
-
-func flattenRichTextSection(sec *slack.RichTextSection) string {
-	return flattenSectionElements(sec.Elements)
-}
-
-func flattenSectionElements(elements []slack.RichTextSectionElement) string {
-	var b strings.Builder
-	for _, el := range elements {
-		switch e := el.(type) {
-		case *slack.RichTextSectionTextElement:
-			b.WriteString(e.Text)
-		case *slack.RichTextSectionLinkElement:
-			if e.Text != "" {
-				b.WriteString(e.Text)
-			} else {
-				b.WriteString(e.URL)
-			}
-		case *slack.RichTextSectionUserElement:
-			b.WriteString("<@" + e.UserID + ">")
-		case *slack.RichTextSectionChannelElement:
-			b.WriteString("<#" + e.ChannelID + ">")
-		case *slack.RichTextSectionEmojiElement:
-			b.WriteString(":" + e.Name + ":")
-		case *slack.RichTextSectionBroadcastElement:
-			b.WriteString("@" + e.Range)
-		}
-	}
-	return b.String()
 }
 
 // flattenAttachments falls back to legacy attachments: the fallback line,

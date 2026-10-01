@@ -25,7 +25,7 @@ func newBodyRenderer(ap *provider.ApiProvider) func(string) string {
 	}
 	resolve := newTagResolver(ap, users, selfID)
 	return func(s string) string {
-		return text.ResolveTags(s, resolve)
+		return text.Unescape(text.ResolveTags(s, resolve))
 	}
 }
 

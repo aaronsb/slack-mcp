@@ -7,8 +7,11 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 	"log"
-	"strings"
 )
+
+// dmUnreadWindow is how many of a DM's newest messages the unreads view
+// reads to find the ones after last_read.
+const dmUnreadWindow = 20
 
 // checkUnreadsReal uses internal Slack endpoints to get accurate unread counts
 func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
@@ -101,30 +104,10 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 		dmCount := 0
 		for _, im := range counts.IMs {
 			if im.HasUnreads && dmCount < limit {
-				// Implement count-based windowing for DMs
-				var fetchCount int
-				shouldMarkAsRead := false
-
-				// Use mention count as proxy for unread count, default to 1 if no mentions
-				unreadCount := im.MentionCount
-				if unreadCount == 0 {
-					unreadCount = 1 // Assume at least 1 unread if HasUnreads is true
-				}
-
-				if unreadCount <= 3 {
-					fetchCount = 5 // Get context
-					shouldMarkAsRead = true
-				} else if unreadCount <= 15 {
-					fetchCount = 20 // Get full context
-					shouldMarkAsRead = true
-				} else if unreadCount <= 50 {
-					fetchCount = 25 // Sample only
-					shouldMarkAsRead = false
-				} else {
-					fetchCount = 15 // Surface level
-					shouldMarkAsRead = false
-				}
-
+				// Slack gives a DM's read position, not its unread count:
+				// the window's messages after last_read are the unreads, and
+				// a window that is all unread says "at least" this many.
+				fetchCount := dmUnreadWindow
 				// Get channel info for user details
 				info, err := api.GetConversationInfo(&slack.GetConversationInfoInput{
 					ChannelID: im.ID,
@@ -159,10 +142,14 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					var messages []map[string]interface{}
 					var isUrgent bool
 
+					unreadCount := 0
 					for _, msg := range resp.Messages {
-						msgUrgent := categorizeUrgencyForUser(msg.Text, authorIsBot) == "high"
-						if msgUrgent {
-							isUrgent = true
+						unread := tsLess(im.LastRead, msg.Timestamp)
+						if unread {
+							unreadCount++
+							if categorizeUrgencyForUser(msg.Text, authorIsBot) == "high" {
+								isUrgent = true
+							}
 						}
 
 						rm := renderer.Render(msg)
@@ -170,8 +157,13 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 							"text":      rm.Body,
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
 							"user":      rm.Author,
+							"unread":    unread,
 						})
 					}
+					// HasUnreads with nothing after last_read in the window
+					// still means one unread Slack has not shown us.
+					unreadCount = max(unreadCount, 1)
+					atLeast := unreadCount == len(resp.Messages) && resp.HasMore
 
 					if isUrgent {
 						stats["urgent"] = stats["urgent"].(int) + 1
@@ -179,18 +171,13 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 					reverseItems(messages)
 
 					dm := map[string]interface{}{
-						"type":        "dm",
-						"author":      authorName,
-						"messages":    messages,
-						"unreadCount": unreadCount,
-						"urgent":      isUrgent,
-						"windowSize":  len(messages),
-						"readPolicy":  shouldMarkAsRead,
-					}
-
-					// Add summary for large message counts
-					if len(messages) > 15 {
-						dm["summary"] = fmt.Sprintf("Conversation with %d unread messages, showing recent %d", unreadCount, len(messages))
+						"type":          "dm",
+						"author":        authorName,
+						"messages":      messages,
+						"unreadCount":   unreadCount,
+						"unreadAtLeast": atLeast,
+						"urgent":        isUrgent,
+						"windowSize":    len(messages),
 					}
 
 					unreads["dms"] = append(unreads["dms"].([]map[string]interface{}), dm)
@@ -232,9 +219,8 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				}
 				observeTraffic(apiProvider, mpim.ID, resp.Messages)
 
-				mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 				for _, msg := range resp.Messages {
-					if strings.Contains(msg.Text, mentionPattern) {
+					if mentionsUser(msg, currentUserID) {
 						rm := renderer.Render(msg)
 						authorName := rm.Author
 						msgIsBot := false
@@ -291,11 +277,10 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				}
 				observeTraffic(apiProvider, ch.ID, resp.Messages)
 
-				mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 				foundMentions := 0
 
 				for _, msg := range resp.Messages {
-					if strings.Contains(msg.Text, mentionPattern) {
+					if mentionsUser(msg, currentUserID) {
 						rm := renderer.Render(msg)
 						authorName := rm.Author
 						msgIsBot := false

@@ -274,30 +274,43 @@ func formatUnreads(result *FeatureResult) string {
 		b.WriteString(fmt.Sprintf("### DMs (%d)\n\n", len(dms)))
 		for _, dm := range dms {
 			author := str(dm, "author")
-			count := num(dm, "unreadCount")
+			count := fmt.Sprintf("%d", num(dm, "unreadCount"))
+			if v, ok := dm["unreadAtLeast"].(bool); ok && v {
+				count += "+"
+			}
 			urgent := ""
 			if v, ok := dm["urgent"].(bool); ok && v {
 				urgent = " [URGENT]"
 			}
-			b.WriteString(fmt.Sprintf("**%s** (%d unread)%s\n", author, count, urgent))
+			b.WriteString(fmt.Sprintf("**%s** (%s unread)%s\n", author, count, urgent))
 
-			// messages run oldest first over a fixed history window that
-			// can hold read messages too; show the newest five and count
-			// the rest as earlier, never as more unreads.
+			// messages run oldest first over a window that holds read
+			// messages too. Show every unread (up to ten) and at least the
+			// newest five, mark the unread lines, and count the rest as
+			// earlier.
 			messages := asList(dm["messages"])
-			shown := messages
-			if len(shown) > 5 {
-				b.WriteString(fmt.Sprintf("  (%d earlier messages not shown)\n", len(shown)-5))
-				shown = shown[len(shown)-5:]
+			unread := 0
+			for _, msg := range messages {
+				if v, ok := msg["unread"].(bool); ok && v {
+					unread++
+				}
 			}
-			for _, msg := range shown {
+			keep := min(max(5, unread), 10, len(messages))
+			if earlier := len(messages) - keep; earlier > 0 {
+				b.WriteString(fmt.Sprintf("  (%d earlier messages not shown)\n", earlier))
+			}
+			for _, msg := range messages[len(messages)-keep:] {
+				mark := "  "
+				if v, ok := msg["unread"].(bool); ok && v {
+					mark = "● "
+				}
 				user := str(msg, "user")
 				text := truncate(str(msg, "text"), 120)
 				ts := str(msg, "timestamp")
 				if text == "" {
 					text = "(attachment/empty)"
 				}
-				b.WriteString(fmt.Sprintf("  %s | %s: %s\n", ts, user, text))
+				b.WriteString(fmt.Sprintf("%s%s | %s: %s\n", mark, ts, user, text))
 			}
 			b.WriteString("\n")
 		}
@@ -516,6 +529,9 @@ func formatCatchUp(result *FeatureResult) string {
 			id := str(f, "id")
 			mime := str(f, "mimetype")
 			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download fileId='%s'\n", name, mime, id, id))
+		}
+		if h := str(item, "handle"); h != "" {
+			b.WriteString(fmt.Sprintf("read: messages target='%s'\n", h))
 		}
 		b.WriteString("\n")
 	}

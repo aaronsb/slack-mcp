@@ -3,6 +3,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"github.com/aaronsb/slack-mcp/pkg/handle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/slack-go/slack"
 	"strings"
@@ -114,7 +115,7 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 			allMessages = append(allMessages, msg)
 
 			// Analyze each message
-			item := analyzeMessage(msg, renderer)
+			item := analyzeMessage(channelID, msg, renderer)
 			if item != nil {
 				importantItems = append(importantItems, item)
 			}
@@ -160,15 +161,16 @@ func catchUpHandlerImpl(ctx context.Context, params map[string]interface{}) (*Fe
 	reverseItems(importantItems)
 
 	// Build response
+	where, _ := conversationLabel(ap, channelID)
 	result := &FeatureResult{
 		Success: true,
 		Data: map[string]interface{}{
-			"channel":        channel,
+			"channel":        where,
 			"period":         since,
 			"importantItems": importantItems,
 			"statistics":     stats,
 		},
-		Message:     fmt.Sprintf("Found %d messages in #%s from the last %s", len(allMessages), channel, since),
+		Message:     fmt.Sprintf("Found %d messages in %s from the last %s", len(allMessages), where, since),
 		ResultCount: len(importantItems),
 		Pagination: &Pagination{
 			Cursor:     cursor,
@@ -297,7 +299,7 @@ func isRecentTimeframe(timeframe string) bool {
 	return false
 }
 
-func analyzeMessage(msg slack.Message, renderer *messageRenderer) map[string]interface{} {
+func analyzeMessage(channelID string, msg slack.Message, renderer *messageRenderer) map[string]interface{} {
 	// Skip if not important
 	if !isImportantMessage(msg) {
 		return nil
@@ -307,7 +309,8 @@ func analyzeMessage(msg slack.Message, renderer *messageRenderer) map[string]int
 	item := map[string]interface{}{
 		"author":    rm.Author,
 		"message":   rm.Body,
-		"timestamp": msg.Timestamp,
+		"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
+		"handle":    handle.Message(channelID, msg.Timestamp),
 		"type":      "message",
 	}
 	if len(rm.Unresolved) > 0 {
