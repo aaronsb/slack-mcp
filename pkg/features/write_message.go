@@ -165,7 +165,7 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 			fmt.Sprintf("Monitor for responses: messages target='%s' since='30m'", channel),
 			fmt.Sprintf("Reply to your message: say to='%s' thread='%s'", channel, timestamp),
 		}
-		result.Guidance = "💡 Your message was sent."
+		result.Guidance = fmt.Sprintf("💡 Your message was %s.", sentPhrase(apiProvider))
 	} else {
 		// Thread reply - focus on thread context
 		result.NextActions = []string{
@@ -173,7 +173,7 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 			fmt.Sprintf("Continue thread: say to='%s' thread='%s'", channel, threadTs),
 			fmt.Sprintf("See channel context: messages target='%s' since='4h'", channel),
 		}
-		result.Guidance = "💬 Reply sent to thread. Check the full discussion for context."
+		result.Guidance = fmt.Sprintf("💬 Reply %s, into the thread. Check the full discussion for context.", sentPhrase(apiProvider))
 	}
 
 	return result, nil

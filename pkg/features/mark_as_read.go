@@ -47,17 +47,20 @@ var MarkAsRead = &Feature{
 }
 
 func markAsReadHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
-	if refusal := preWriteLocal(ctx); refusal != nil {
+	apiProvider, ok := params["_provider"].(*provider.ApiProvider)
+	if refusal := preWriteLocal(ctx, apiProvider, "mark-read"); refusal != nil {
 		return refusal, nil
 	}
-
-	// Get the API provider
-	apiProvider, ok := params["_provider"].(*provider.ApiProvider)
 	if !ok {
 		return &FeatureResult{
 			Success: false,
 			Message: "Internal error: provider not available",
 		}, nil
+	}
+	// mark-read has no local checks to keep ahead of Slack calls, so it
+	// boots here, and the safety steps below know the workspace.
+	if _, err := apiProvider.Provide(); err != nil {
+		return &FeatureResult{Success: false, Message: fmt.Sprintf("Failed to connect to Slack: %v", err)}, nil
 	}
 
 	// Parse parameters
@@ -138,9 +141,9 @@ func handleTargetMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, channel, timestamp string, scope string) (*FeatureResult, error) {
 	// Receipts are public, so mark-read routes like any write: '#name' is a
 	// channel only, a person only by exact handle (ADR-005, issue #94).
-	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy, "channel")
-	if terr != nil {
-		return terr.result(), nil
+	channelID, refusal := markReadDestination(ctx, apiProvider, channel)
+	if refusal != nil {
+		return refusal, nil
 	}
 
 	channelInfo, err := apiProvider.GetChannelInfo(ctx, channelID)
@@ -233,6 +236,13 @@ func handleThreadMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 
 	channelId := parts[0]
 	threadTs := parts[1]
+	dest := &resolvedDestination{Typed: threadId, ConvID: channelId, Name: "the thread's conversation"}
+	if ch, ok := apiProvider.LookupChannel(channelId); ok && ch.ID == channelId {
+		dest = channelDestination(apiProvider, threadId, ch)
+	}
+	if refusal := preMarkRead(ctx, apiProvider, dest); refusal != nil {
+		return refusal, nil
+	}
 
 	// Mark thread as read using internal client if available
 	internalClient := apiProvider.ProvideInternalClient()
@@ -278,9 +288,9 @@ func handleDMMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, 
 	// 'dm:' names a person: the same write-policy ladder as say, so a shared
 	// real name or a deactivated user never gets a receipt (issue #94).
 	person := "@" + strings.TrimPrefix(strings.TrimSpace(user), "@")
-	dmID, terr := resolveTarget(ctx, apiProvider, person, provider.WritePolicy, "channel")
-	if terr != nil {
-		return terr.result(), nil
+	dmID, refusal := markReadDestination(ctx, apiProvider, person)
+	if refusal != nil {
+		return refusal, nil
 	}
 
 	client, err := apiProvider.Provide()
@@ -346,10 +356,16 @@ func handleAllDMsMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 	markedCount := 0
 	skippedCount := 0
 	errors := []string{}
+	refused := markReadFilter(ctx, apiProvider)
+	var withheld []string
 
 	// Process IMs
 	for _, im := range counts.IMs {
 		if !im.HasUnreads {
+			continue
+		}
+		if skip, name := refused(im.ID); skip {
+			withheld = append(withheld, name)
 			continue
 		}
 
@@ -388,6 +404,7 @@ func handleAllDMsMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 		},
 		Message: fmt.Sprintf("Marked %d DMs as read", markedCount),
 	}
+	withholdFrom(result, withheld)
 
 	if skippedCount > 0 {
 		result.Guidance = fmt.Sprintf("✅ Marked %d DMs as read, skipped %d based on filter '%s'",
@@ -445,8 +462,14 @@ func handleAllChannelsMarkAsRead(ctx context.Context, apiProvider *provider.ApiP
 	}
 
 	// Process channels
+	refused := markReadFilter(ctx, apiProvider)
+	var withheld []string
 	for _, ch := range counts.Channels {
 		if !ch.HasUnreads {
+			continue
+		}
+		if skip, name := refused(ch.ID); skip {
+			withheld = append(withheld, name)
 			continue
 		}
 
@@ -481,6 +504,7 @@ func handleAllChannelsMarkAsRead(ctx context.Context, apiProvider *provider.ApiP
 		},
 		Message: fmt.Sprintf("Marked %d channels as read", markedCount),
 	}
+	withholdFrom(result, withheld)
 
 	if skippedCount > 0 {
 		result.Guidance = fmt.Sprintf("✅ Marked %d channels as read, skipped %d based on filter '%s'",
@@ -497,6 +521,36 @@ func handleAllChannelsMarkAsRead(ctx context.Context, apiProvider *provider.ApiP
 	return result, nil
 }
 
+// markReadDestination resolves a mark-read target without opening
+// anything, refuses a person with no DM, and runs the quarantine step.
+// mark-read never opens a conversation (ADR-013).
+func markReadDestination(ctx context.Context, ap *provider.ApiProvider, target string) (string, *FeatureResult) {
+	dest, terr := locateTarget(ctx, ap, target, provider.WritePolicy, "channel")
+	if terr != nil {
+		return "", terr.result()
+	}
+	if dest.ConvID == "" {
+		return "", &FeatureResult{
+			Success: false,
+			Message: fmt.Sprintf("There is no DM with %s, so there is nothing to mark read. Nothing was done.", dest.Name),
+		}
+	}
+	if refusal := preMarkRead(ctx, ap, dest); refusal != nil {
+		return "", refusal
+	}
+	return dest.ConvID, nil
+}
+
+// withholdFrom lists the conversations a bulk mark-read skipped for
+// outbound safety.
+func withholdFrom(result *FeatureResult, withheld []string) {
+	if len(withheld) == 0 {
+		return
+	}
+	result.Data.(map[string]interface{})["skippedForSafety"] = withheld
+	result.Message += fmt.Sprintf(". Skipped, not marked: %s", strings.Join(withheld, ", "))
+}
+
 func handleEverythingMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, filter string) (*FeatureResult, error) {
 	// Mark both DMs and channels
 	dmResult, _ := handleAllDMsMarkAsRead(ctx, apiProvider, filter)
@@ -504,22 +558,27 @@ func handleEverythingMarkAsRead(ctx context.Context, apiProvider *provider.ApiPr
 
 	dmMarked := 0
 	channelMarked := 0
+	var withheld []string
 
 	if dmData, ok := dmResult.Data.(map[string]interface{}); ok {
 		if count, ok := dmData["markedCount"].(int); ok {
 			dmMarked = count
 		}
+		w, _ := dmData["skippedForSafety"].([]string)
+		withheld = append(withheld, w...)
 	}
 
 	if chData, ok := channelResult.Data.(map[string]interface{}); ok {
 		if count, ok := chData["markedCount"].(int); ok {
 			channelMarked = count
 		}
+		w, _ := chData["skippedForSafety"].([]string)
+		withheld = append(withheld, w...)
 	}
 
 	totalMarked := dmMarked + channelMarked
 
-	return &FeatureResult{
+	result := &FeatureResult{
 		Success: true,
 		Data: map[string]interface{}{
 			"totalMarked":    totalMarked,
@@ -533,7 +592,9 @@ func handleEverythingMarkAsRead(ctx context.Context, apiProvider *provider.ApiPr
 			"See what's new: inbox view='unreads'",
 			"Catch up on important stuff: messages target='general'",
 		},
-	}, nil
+	}
+	withholdFrom(result, withheld)
+	return result, nil
 }
 
 func showMarkAsReadOptions(ctx context.Context, apiProvider *provider.ApiProvider) (*FeatureResult, error) {

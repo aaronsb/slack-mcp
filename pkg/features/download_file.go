@@ -2,12 +2,16 @@ package features
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 
 	"github.com/aaronsb/slack-mcp/pkg/exchange"
 	"github.com/aaronsb/slack-mcp/pkg/lifecycle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/slack-go/slack"
 )
 
 // DownloadFile retrieves a file attachment from a Slack message and saves it
@@ -110,13 +114,37 @@ func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*F
 	if err != nil {
 		return fail(err.Error(), "")
 	}
-	n, err := fetchFile(ctx, apiProvider, downloadURL, created.File)
+	sum := sha256.New()
+	n, err := fetchFile(ctx, apiProvider, downloadURL, io.MultiWriter(created.File, sum))
 	if closeErr := created.File.Close(); err == nil && closeErr != nil {
 		err = fmt.Errorf("finalizing file: %w", closeErr)
 	}
 	if err != nil {
 		_ = dir.Remove(created.Name)
 		return fail(fmt.Sprintf("Download failed: %v", err), "")
+	}
+
+	// Provenance for ADR-013's gate case 2: where Slack reports the file
+	// shared, keyed by the bytes written.
+	convs := append(append(append([]string(nil), file.Channels...), file.Groups...), file.IMs...)
+	for _, shares := range []map[string][]slack.ShareFileInfo{file.Shares.Public, file.Shares.Private} {
+		for conv := range shares {
+			convs = append(convs, conv)
+		}
+	}
+	// The file is written under its final name before its record: ADR-012
+	// excludes no bare name from say files=, so a temporary name would be
+	// as reachable, and renaming into place would give up Create's
+	// no-overwrite guarantee. Until the record lands, an attachment of these
+	// bytes gets the scanner only, as any unrecorded file does.
+	if err := recordProvenance(apiProvider, created.Name, fileID, hex.EncodeToString(sum.Sum(nil)), convs); err != nil {
+		if rmErr := dir.Remove(created.Name); rmErr != nil {
+			log.Printf("download: unrecorded %s not removed: %v", created.Name, rmErr)
+			return fail(fmt.Sprintf("Downloaded as %s, but where it came from could not be recorded, and removing it failed too, so it is still in the exchange directory without a record.", created.Name),
+				"Tell the operator; do not attach this file. The outbound-safety state needs attention.")
+		}
+		return fail("Downloaded, but where the file came from could not be recorded, so it was deleted rather than kept unchecked. Nothing was saved.",
+			"Tell the operator; the outbound-safety state may need attention.")
 	}
 
 	path := dir.DisplayPath(created.Name)

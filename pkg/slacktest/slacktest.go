@@ -281,7 +281,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body == nil {
-		body = defaultFixture(method, s.URL, channels, users)
+		body = defaultFixture(r, method, s.URL, channels, users)
 	}
 
 	for k, vs := range header {
@@ -295,7 +295,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 
 // defaultFixture returns the canned response for an endpoint. Unknown endpoints
 // return a bare ok so a test fails on its assertion rather than on transport.
-func defaultFixture(method, selfURL string, channels []slack.Channel, users []slack.User) any {
+func defaultFixture(r *http.Request, method, selfURL string, channels []slack.Channel, users []slack.User) any {
 	switch method {
 	case "auth.test":
 		return map[string]any{
@@ -318,10 +318,30 @@ func defaultFixture(method, selfURL string, channels []slack.Channel, users []sl
 		}
 
 	case "conversations.info":
+		_ = r.ParseForm()
+		for _, ch := range channels {
+			if ch.ID == r.Form.Get("channel") {
+				return map[string]any{"ok": true, "channel": ch}
+			}
+		}
 		if len(channels) > 0 {
 			return map[string]any{"ok": true, "channel": channels[0]}
 		}
 		return map[string]any{"ok": false, "error": "channel_not_found"}
+
+	case "users.info":
+		// A seeded user is on the fake's own team (T1) unless seeded with
+		// another, so the outbound-safety gate finds them internal.
+		_ = r.ParseForm()
+		for _, u := range users {
+			if u.ID == r.Form.Get("user") {
+				if u.TeamID == "" {
+					u.TeamID = "T1"
+				}
+				return map[string]any{"ok": true, "user": u}
+			}
+		}
+		return map[string]any{"ok": true}
 
 	case "conversations.history":
 		return map[string]any{

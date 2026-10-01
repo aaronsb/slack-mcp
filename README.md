@@ -138,13 +138,51 @@ The deployment is `local` unless you declare it. The server does not detect it: 
 | `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` raw Slack search syntax (passed as written) plus resolved filters `in`, `from`, `after`, `before`, `has` (link, pin, :emoji:), `thread` |
 | `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'`; `about`/`person` take `render='graph'` to also write a static HTML graph page (not in `batch`) |
 | `batch` | executor | Run a held plan of reads in one call: `commands=[{tool, params}...]`; playbooks via `save=`/`run=`/`list=`/`delete=` |
-| `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), files from the exchange directory (`files=['report.pdf']`, bare names, at most 10, shared as one message with `text` as the comment), or an emoji reaction |
+| `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), files from the exchange directory (`files=['report.pdf']`, bare names, at most 10, shared as one message with `text` as the comment), or an emoji reaction; scanned for secrets and gated before anything is sent (ADR-013) |
 | `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
-| `mark-read` | verb | Fire read receipts — the one visibly-public read signal |
+| `mark-read` | verb | Fire read receipts — the one visibly-public read signal; refused at a quarantined destination, and never opens a DM |
 | `auth` | verb | Interactive token setup (localhost only) |
 | `download` | verb | Download a shared file into the exchange directory (`filename=` is a bare name, not a path; a taken name is saved as `name (n).ext` and the result says so) |
 
 Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the batch executor encodes composition, never effect, and admits only the read nouns (ADR-010). Every noun echoes its effective parameters and pages every capped list.
+
+## Outbound safety
+
+Everything this server posts is attributed to your account, and the agent reads text anyone in the workspace can write. So every `say` passes a fixed order before any content reaches Slack or any DM is opened (ADR-013):
+
+1. **Strike lock** — after too many blocks, every `say` and `mark-read` is refused until you clear it.
+2. **Exchange directory** — file names are bare names inside it (ADR-012).
+3. **Quarantine** — a destination a block closed refuses `say` and `mark-read`; reads keep working.
+4. **Secret scanner** — the text as sent, a reaction's emoji, and each file's name and bytes, including base64, hex, URL-encoded, gzip, and zlib content. A match is a block: nothing is sent, and the agent is told the class and the field, never the value.
+5. **Approval gate** — a destination outside your organization, or (in `strict`) a file `download` took from another conversation, waits for you as a pending request. Nothing is sent until you approve it.
+
+Two settings in your MCP client config shape this (ADR-014); `.env` cannot set them:
+
+| Setting | Values | Default | Effect |
+|---|---|---|---|
+| `SLACK_MCP_IDENTITY` | `human`, `agent` | `human` | Whose account this is: the agent writes on your behalf, or as itself. Sets the `say` description, the server instructions, and the notice a block posts: "[automated] A message from this account was blocked by a safety filter." or "I can't share that." |
+| `SLACK_MCP_SAFETY` | `strict`, `soft` | `strict` | `strict` quarantines on the first block and locks at two strikes. `soft` warns on the first, quarantines from the second, locks at three, and lets a downloaded file move between conversations with a warning. |
+
+A block posts the notice into the quarantined conversation, never to a destination outside your organization and never to a person with no DM. Blocks, pending requests, and sends trust let through are logged as `outbound-safety: BLOCKED`, `PENDING`, and `TRUSTED` lines (destination, IDs, class, counts; never content). When state needs you, `inbox`, `messages`, `estate`, and `batch` results open with a banner.
+
+A block that cannot be written to the quarantine file holds every `say` and `mark-read` in that server process (in memory) and issues a lift request (`lift=strikes`). Fix the file, then approve the request or run `slack-mcp quarantine clear strikes`; either clears every recorded strike. The clear releases the hold only when the file was readable as the hold engaged and has not been replaced or edited since; otherwise approve the request. A restart also releases the hold, and the unrecorded strike is lost. A download whose provenance cannot be recorded fails and its file is deleted (the result says so if the deletion fails too); provenance that cannot be read, or has a malformed line, makes attachments with no record need approval in `strict`, and the request (and its `PENDING` log line, `provenance=…`) says to repair `provenance.jsonl`. Reaction names must be emoji names (`[a-z0-9_+'-]`, optionally `::skin-tone-2`…`6`).
+
+You answer from a terminal:
+
+```bash
+slack-mcp approve            # list pending requests
+slack-mcp approve p7k2       # let the next matching call through once
+slack-mcp deny p7k2
+slack-mcp quarantine list
+slack-mcp quarantine clear '#general'   # or @handle, or strikes
+slack-mcp trust add '#partner' --case external --for 30d
+slack-mcp trust list
+slack-mcp trust remove '#partner'
+```
+
+A client on MCP protocol 2026-07-28 or later that declares elicitation on the call is also asked in-band to approve once, deny, or (in `soft`) approve and trust; every other client, and every SSE session, uses the CLI. Lifting a quarantine or the lock is CLI-only.
+
+The state lives beside the estate ledger, in `$XDG_DATA_HOME/slack-mcp/ledger/<team>/` (`quarantine.jsonl`, `pending.jsonl`, `trust.jsonl`, `provenance.jsonl`, each `0600`). They are append-only JSON lines, and a running server rereads them on every gated call, so editing or deleting a line takes effect at once; prefer the CLI, which keeps the history.
 
 ## Privacy
 

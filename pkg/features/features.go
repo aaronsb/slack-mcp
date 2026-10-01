@@ -35,6 +35,10 @@ type FeatureResult struct {
 	// pass (for example the page a search landed on), appended to Echo. Never
 	// serialized.
 	EchoSuffix string `json:"-"`
+	// InputRequest asks the client for the operator's answer to a pending
+	// request (ADR-013, Elicitation); set only when the client can be
+	// asked. Never serialized.
+	InputRequest *InputRequest `json:"-"`
 }
 
 // Pagination provides cursor-based pagination info

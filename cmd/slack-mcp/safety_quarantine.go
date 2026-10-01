@@ -41,11 +41,10 @@ func (c *safetyCLI) quarantineClear(arg string) int {
 	}
 	var k safety.Key
 	if arg == "strikes" {
-		if !st.LockEngaged() && st.Strikes == 0 {
-			fmt.Fprintln(c.stdout, "No strikes to clear.")
-			return 0
-		}
 		k = safety.StrikesKey
+		if !st.LockEngaged() && st.Strikes == 0 {
+			fmt.Fprintln(c.stdout, "No strikes are recorded. Clearing anyway releases a server holding writes after a block it could not record.")
+		}
 		fmt.Fprintf(c.stdout, "Clearing %d strike(s)", st.Strikes)
 		if st.LockEngaged() {
 			fmt.Fprint(c.stdout, " and the strike lock")
@@ -73,7 +72,11 @@ func (c *safetyCLI) quarantineClear(arg string) int {
 		return c.fail("%v", err)
 	}
 	if !ok {
-		fmt.Fprintln(c.stdout, "Already clear.")
+		if k.Kind == safety.KeyStrikes {
+			fmt.Fprintln(c.stdout, "Recorded the clear.")
+		} else {
+			fmt.Fprintln(c.stdout, "Already clear.")
+		}
 		return 0
 	}
 	fmt.Fprintln(c.stdout, "Cleared.")

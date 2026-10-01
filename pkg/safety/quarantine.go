@@ -53,6 +53,15 @@ type QuarantineStore struct {
 	convs        map[string]Key
 	strikes      int
 	lockRecorded bool
+	// epoch counts rebuilds of a fold that had read a line (a replaced,
+	// shrunk, or edited file read again from offset 0); a line number means
+	// something only within one epoch. A fold that had read nothing (no
+	// file yet) keeps its epoch: every line is after position 0 in either
+	// file. strikesClearLine is the line of the latest clear of strikes,
+	// or 0.
+	epoch            int
+	readLine         bool
+	strikesClearLine int
 }
 
 func newQuarantineStore(path string, p Posture, self string) *QuarantineStore {
@@ -66,9 +75,15 @@ func (s *QuarantineStore) reset() {
 	s.convs = map[string]Key{}
 	s.strikes = 0
 	s.lockRecorded = false
+	if s.readLine {
+		s.epoch++
+	}
+	s.readLine = false
+	s.strikesClearLine = 0
 }
 
 func (s *QuarantineStore) apply(raw []byte) error {
+	s.readLine = true
 	var l quarantineLine
 	if err := json.Unmarshal(raw, &l); err != nil {
 		return err
@@ -100,6 +115,7 @@ func (s *QuarantineStore) apply(raw []byte) error {
 		case KeyStrikes:
 			s.strikes = 0
 			s.lockRecorded = false
+			s.strikesClearLine = s.j.lines
 		case KeyPerson:
 			delete(s.people, l.Target.ID)
 		case KeyConversation:
@@ -132,10 +148,29 @@ type QuarantineState struct {
 	Err error
 	// Malformed lists the 1-based line numbers skipped as unparseable.
 	Malformed []int
+	// Position is where this read ended; StrikesClearLine is the line of
+	// the latest clear of strikes in the same epoch, or 0.
+	Position         Position
+	StrikesClearLine int
 
 	people       map[string]Key
 	convs        map[string]Key
 	lockRecorded bool
+}
+
+// Position is a place in the quarantine file: the number of complete lines
+// read, within one epoch of the fold. Comparing positions orders writes by
+// where they landed in the file, not by any clock.
+type Position struct {
+	Epoch int
+	Line  int
+}
+
+// ClearedStrikesAfter reports whether a clear of strikes was appended after
+// p. A rebuild since p (the file replaced, shrunk, or edited) makes p
+// meaningless, so the answer is then false.
+func (q QuarantineState) ClearedStrikesAfter(p Position) bool {
+	return q.Err == nil && q.Position.Epoch == p.Epoch && q.StrikesClearLine > p.Line
 }
 
 // State reads the file on from its last offset and returns the state.
@@ -148,14 +183,16 @@ func (s *QuarantineStore) State() QuarantineState {
 
 func (s *QuarantineStore) snapshot() QuarantineState {
 	st := QuarantineState{
-		Posture:      s.posture,
-		Strikes:      s.strikes,
-		Limit:        StrikeLimit(s.posture),
-		Err:          s.j.err,
-		Malformed:    s.j.malformedLines(),
-		people:       make(map[string]Key, len(s.people)),
-		convs:        make(map[string]Key, len(s.convs)),
-		lockRecorded: s.lockRecorded,
+		Posture:          s.posture,
+		Strikes:          s.strikes,
+		Limit:            StrikeLimit(s.posture),
+		Err:              s.j.err,
+		Malformed:        s.j.malformedLines(),
+		Position:         Position{Epoch: s.epoch, Line: s.j.lines},
+		StrikesClearLine: s.strikesClearLine,
+		people:           make(map[string]Key, len(s.people)),
+		convs:            make(map[string]Key, len(s.convs)),
+		lockRecorded:     s.lockRecorded,
 	}
 	for id, k := range s.people {
 		st.people[id] = k
@@ -321,9 +358,11 @@ func decideBlock(p Posture, strike int, d Destination, self string) BlockOutcome
 }
 
 // Clear appends a clear of target: a person, a conversation, or
-// StrikesKey. It reports false, writing nothing, when the target is not in
-// force. by is ByCLI or ByApproval; pendingID names the lift request an
-// approval answered.
+// StrikesKey, and reports whether anything was in force. A person or
+// conversation not in force writes nothing. A clear of strikes is always
+// written: a server holding writes after a block it could not record
+// releases on seeing one. by is ByCLI or ByApproval; pendingID names the
+// lift request an approval answered.
 func (s *QuarantineStore) Clear(target Key, by, pendingID string, now time.Time) (bool, error) {
 	switch target.Kind {
 	case KeyPerson, KeyConversation:
@@ -350,7 +389,7 @@ func (s *QuarantineStore) Clear(target Key, by, pendingID string, now time.Time)
 		case KeyConversation:
 			_, cleared = s.convs[target.ID]
 		}
-		if !cleared {
+		if !cleared && target.Kind != KeyStrikes {
 			return nil
 		}
 		t := target

@@ -55,6 +55,10 @@ func personMissResult(res *provider.PersonResolution) *FeatureResult {
 	}
 }
 
+// namedByCaller is how output names a conversation the cache does not
+// name, never by its ID.
+const namedByCaller = "the conversation you named"
+
 // resolvedDestination is where a conversation reference points, found from
 // held state alone: no Slack call has been made to find it, and no DM has
 // been opened for it. ConvID is empty when the target is a person with no
@@ -132,7 +136,7 @@ func locateTarget(ctx context.Context, ap *provider.ApiProvider, input string, p
 		if ch, ok := ap.LookupChannel(in); ok && ch.ID == in {
 			return channelDestination(ap, input, ch), nil
 		}
-		return &resolvedDestination{Typed: input, ConvID: in, Name: "the conversation you named"}, nil
+		return &resolvedDestination{Typed: input, ConvID: in, Name: namedByCaller}, nil
 	case strings.HasPrefix(in, "@"):
 		return personDestination(ap, input, in, policy, param)
 	}
@@ -176,7 +180,7 @@ func channelDestination(ap *provider.ApiProvider, typed string, ch slack.Channel
 	case ch.Name != "":
 		d.Name = "#" + ch.Name
 	default:
-		d.Name = "the conversation you named"
+		d.Name = namedByCaller
 	}
 	return d
 }

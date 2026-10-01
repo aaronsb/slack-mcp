@@ -54,7 +54,8 @@ func (ap *ApiProvider) isClosed() bool {
 }
 
 func (ap *ApiProvider) openEstate() {
-	if ap.selfTeamID == "" {
+	team := ap.me().teamID
+	if team == "" {
 		log.Printf("Estate ledger disabled: no team identity captured")
 		return
 	}
@@ -63,7 +64,7 @@ func (ap *ApiProvider) openEstate() {
 	if ap.isClosed() {
 		return
 	}
-	st, err := estate.Open(ap.selfTeamID)
+	st, err := estate.Open(team)
 	if err != nil {
 		log.Printf("Estate ledger unavailable: %v", err)
 		return

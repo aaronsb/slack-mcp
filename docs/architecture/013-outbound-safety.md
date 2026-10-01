@@ -82,6 +82,13 @@ sections below carry the rules.
 - Accepted limits: the false positives the patterns imply by design,
   and a small crafted PDF whose image stream exempts its zlib data.
 
+Amendment (2026-10-01, wiring, #131): settles two failures the text left
+open. A block the quarantine file cannot record leaves an in-memory hold
+on writes, lifted by the operator or a restart. Provenance that cannot be
+written fails the download; provenance that cannot be read, or has a
+malformed line, gates unrecorded attachments. Under The strike lock and
+The approval gate.
+
 ## Context
 
 The agent this server serves can run for hours, and reading other
@@ -630,6 +637,30 @@ lock engages: every `say` and `mark-read` is refused, to anyone, until
 the operator clears it. The count comes from the file, so a restart does
 not reset it. Reads keep working.
 
+A block the file cannot record (a lock timeout, a failed append) is still
+refused, but its strike is not in the file, so the server holds every
+`say` and `mark-read` in memory instead and issues a lift request
+(`lift=strikes`). Each later refusal retries issuing it if none is
+pending. The hold lifts when:
+
+- the operator approves that request, which needs the quarantine file
+  writable again: if approval fails because it is not, the operator
+  fixes the file (permissions, disk) and approves again;
+- the operator runs `slack-mcp quarantine clear strikes`, which always
+  writes a clear, and the server reads it at a later place in the file
+  than where the hold engaged. Place, not time, orders them, so no clock
+  releases the hold early; if the file was replaced or edited since the
+  hold engaged, or could not be read when it engaged, places no longer
+  compare and only approval or a restart releases it;
+- the server restarts, for any reason, the host's included. The
+  unrecorded strike is then lost. While no request has been issued, a
+  restart is the only release besides a clear of strikes.
+
+Approving the request clears strikes like any strike lift: it wipes every
+recorded strike and releases a real strike lock. It is the same request
+as a pending strike-lock lift, so one approval lifts both, and a request
+left over from before a restart still clears strikes when approved.
+
 ### Layer 4: the tool result
 
 A block returns a result that says, in this order:
@@ -721,7 +752,15 @@ server hashes each file and looks it up by hash, so a rename or copy
 inside the exchange directory keeps its provenance. Attaching it to any
 conversation it was already shared in is not a move. A file with no
 record, one the operator placed or one edited after download, gets the
-scanner only.
+scanner only. `download` writes the file under its final name, then its
+record; until the record lands, the bytes are an unrecorded file. A
+record that cannot be written fails the download and deletes the file,
+and when the deletion fails too the download says the file is still there
+without a record. A provenance file that cannot be opened or read, or
+that has a malformed line, counts every attachment without a record as
+moved; the `PENDING` line carries `provenance=unreadable` or
+`provenance=malformed`, and the request the operator reads names the file
+to repair.
 
 #### Pending requests
 
