@@ -96,9 +96,13 @@ func main() {
 	}
 
 	// Build provider: try config file, then env vars, then start without auth
-	p, authErr := loadProvider()
+	p, account, authErr := loadProvider()
 
-	s := server.NewSemanticMCPServer(p)
+	// The account's handle and organization, from the startup auth.test,
+	// shape the identity wording and the server instructions (ADR-014).
+	s := server.NewSemanticMCPServer(p, server.WithAccount(account.User, safety.Org{
+		TeamID: account.TeamID, EnterpriseID: account.EnterpriseID, UserID: account.UserID,
+	}))
 
 	if authErr != nil {
 		// Register the server but log that auth is needed
@@ -157,10 +161,11 @@ func looksLikeToken(v, prefix string) bool {
 //  2. Env vars matching token format (xoxc-/xoxd-) — manual override
 //  3. Nothing → return error (server starts, tools prompt for auth-setup)
 //
-// All token sources are validated against auth.test before use.
-// Invalid tokens are rejected so the server starts in no-auth mode
-// with clear guidance, rather than silently failing on every tool call.
-func loadProvider() (*provider.ApiProvider, error) {
+// All token sources are validated against auth.test before use, which also
+// names the account. Invalid tokens are rejected so the server starts in
+// no-auth mode with clear guidance, rather than silently failing on every
+// tool call.
+func loadProvider() (*provider.ApiProvider, setup.Account, error) {
 	// Config file is the source of truth — shared across all MCP hosts
 	cfg, err := setup.LoadConfig()
 	if err == nil && len(cfg.Workspaces) > 0 {
@@ -174,9 +179,10 @@ func loadProvider() (*provider.ApiProvider, error) {
 
 		if ws, ok := cfg.Workspaces[wsName]; ok {
 			log.Printf("Validating workspace %q from config file...", wsName)
-			if _, _, _, err := setup.ValidateTokens(ws.XoxcToken, ws.XoxdToken); err != nil {
+			account, err := setup.AuthTest(ws.XoxcToken, ws.XoxdToken)
+			if err != nil {
 				log.Printf("Config tokens for %q failed validation: %v", wsName, err)
-				return nil, fmt.Errorf("stored tokens for workspace %q are invalid (%v) — run auth-setup to re-authenticate", wsName, err)
+				return nil, setup.Account{}, fmt.Errorf("stored tokens for workspace %q are invalid (%v) — run auth-setup to re-authenticate", wsName, err)
 			}
 			log.Printf("Workspace %q authenticated successfully", wsName)
 			// Clear any stale setup flow state — tokens are valid
@@ -184,7 +190,7 @@ func loadProvider() (*provider.ApiProvider, error) {
 				log.Println("Clearing stale setup flow state")
 				cfg.ClearFlow()
 			}
-			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken), nil
+			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken), account, nil
 		}
 	}
 
@@ -194,12 +200,13 @@ func loadProvider() (*provider.ApiProvider, error) {
 
 	if looksLikeToken(token, "xoxc-") && looksLikeToken(cookie, "xoxd-") {
 		log.Println("Validating tokens from environment variables...")
-		if _, _, _, err := setup.ValidateTokens(token, cookie); err != nil {
+		account, err := setup.AuthTest(token, cookie)
+		if err != nil {
 			log.Printf("Env var tokens failed validation: %v", err)
-			return nil, fmt.Errorf("environment tokens are invalid (%v) — run auth-setup to configure", err)
+			return nil, setup.Account{}, fmt.Errorf("environment tokens are invalid (%v) — run auth-setup to configure", err)
 		}
 		log.Println("Environment tokens authenticated successfully")
-		return provider.NewWithTokens(token, cookie), nil
+		return provider.NewWithTokens(token, cookie), account, nil
 	}
 
 	if token != "" || cookie != "" {
@@ -207,5 +214,5 @@ func loadProvider() (*provider.ApiProvider, error) {
 	}
 
 	// No credentials found anywhere
-	return nil, fmt.Errorf("no Slack credentials found in config (%s) or environment", setup.ConfigPath())
+	return nil, setup.Account{}, fmt.Errorf("no Slack credentials found in config (%s) or environment", setup.ConfigPath())
 }

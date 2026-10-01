@@ -15,6 +15,7 @@ import (
 
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/safety"
 	"github.com/aaronsb/slack-mcp/pkg/version"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -27,10 +28,38 @@ type SemanticMCPServer struct {
 	provider atomic.Pointer[provider.ApiProvider]
 	// pacer watches read-call timing for ADR-010's frequency hint.
 	pacer features.ReadPacer
+	// sse is set once the server serves SSE, whose sessions are never
+	// asked for an approval in-band (ADR-013, Elicitation).
+	sse atomic.Bool
 }
 
+// Option configures the server at construction.
+type Option func(*options)
+
+type options struct {
+	handle string
+	org    safety.Org
+}
+
+// WithAccount names the account auth.test reported at startup: its handle
+// for ADR-014's identity wording, and its organization, whose quarantines
+// the server instructions list.
+func WithAccount(handle string, org safety.Org) Option {
+	return func(o *options) { o.handle, o.org = handle, org }
+}
+
+// bannered are the read nouns whose results open with ADR-013's banner.
+var bannered = map[string]bool{"inbox": true, "messages": true, "estate": true, "batch": true}
+
+// approvalKey names the approval form in an input-required result.
+const approvalKey = "operator-approval"
+
 // NewSemanticMCPServer creates a new semantic MCP server
-func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
+func NewSemanticMCPServer(provider *provider.ApiProvider, opts ...Option) *SemanticMCPServer {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	personality := sanitizePersonality(os.Getenv("SLACK_MCP_PERSONALITY"))
 
 	serverName := fmt.Sprintf("Slack MCP Server (%s)", personality)
@@ -42,6 +71,8 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 		version.Version,
 		server.WithLogging(),
 		server.WithRecovery(),
+		server.WithElicitation(),
+		server.WithInstructions(features.Instructions(o.org, o.handle)),
 	)
 
 	// Create feature registry
@@ -72,7 +103,7 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	// For now, register all features regardless of personality
 	// In future, we'll filter based on personality config
 	for _, feature := range registry.All() {
-		semanticServer.registerFeature(feature)
+		semanticServer.registerFeature(feature, o.handle)
 	}
 
 	// Register help resources
@@ -83,11 +114,15 @@ func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
 	return semanticServer
 }
 
-// registerFeature adds a semantic feature as an MCP tool
-func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
-	// Convert feature schema to MCP tool options
+// registerFeature adds a semantic feature as an MCP tool. say's
+// description carries the identity wording for handle (ADR-014).
+func (s *SemanticMCPServer) registerFeature(feature *features.Feature, handle string) {
+	description := feature.Description
+	if feature == features.Say {
+		description = features.SayDescription(safety.Current().Identity, features.AccountName(handle))
+	}
 	toolOptions := []mcp.ToolOption{
-		mcp.WithDescription(feature.Description),
+		mcp.WithDescription(description),
 	}
 
 	// Add schema properties
@@ -129,13 +164,21 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 		params["_provider"] = p
 
 		// Execute feature
-		result, err := feature.Handler(ctx, params)
+		result, err := feature.Handler(features.WithElicitation(ctx, s.elicitation(ctx, request)), params)
 		if err != nil {
 			return nil, err
+		}
+		if in := result.InputRequest; in != nil {
+			return approvalForm(in), nil
 		}
 
 		// Format as markdown for AI consumption
 		text := features.FormatResult(feature.Name, result)
+		if bannered[feature.Name] {
+			if banner := features.SafetyBanner(p); banner != "" {
+				text = banner + "\n\n" + text
+			}
+		}
 		if hint := s.pacer.Observe(feature.Name, time.Now()); hint != "" {
 			text += "\n\n" + hint
 		}
@@ -144,6 +187,61 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 
 	// Register the tool
 	s.server.AddTool(mcp.NewTool(feature.Name, toolOptions...), handler)
+}
+
+// elicitation reports whether the current request's client can be asked
+// for an approval in-band, and its answer on a retry: only a client on
+// protocol 2026-07-28 or later whose current request declares elicitation
+// in its own capabilities, and never on SSE. An earlier client would have
+// mcp-go wait on an elicitation nobody may answer, so it gets the CLI path.
+func (s *SemanticMCPServer) elicitation(ctx context.Context, request mcp.CallToolRequest) features.Elicitation {
+	if s.sse.Load() {
+		return features.Elicitation{}
+	}
+	info := server.RequestProtocolInfoFromContext(ctx)
+	if info == nil || !info.Modern || info.ProtocolVersion < mcp.ProtocolVersion20260728 {
+		return features.Elicitation{}
+	}
+	caps := info.ClientCapabilities
+	if caps == nil {
+		caps = request.Params.Meta.ClientCapabilities()
+	}
+	if caps == nil || caps.Elicitation == nil {
+		return features.Elicitation{}
+	}
+	e := features.Elicitation{Offer: true}
+	if ans := server.ElicitationResponse(request.Params.InputResponses, approvalKey); ans != nil {
+		e.Answered = true
+		e.Action = string(ans.Action)
+		e.State = request.Params.RequestState
+		if content, ok := ans.Content.(map[string]any); ok {
+			e.Choice, _ = content["choice"].(string)
+		}
+	}
+	return e
+}
+
+// approvalForm is the input-required result asking the operator to answer
+// a pending request. The request state is signed; the server holds nothing
+// open until the retry.
+func approvalForm(in *features.InputRequest) *mcp.CallToolResult {
+	return server.NewInputRequestBuilder(in.State).
+		Elicit(approvalKey, mcp.ElicitationParams{
+			Mode:    mcp.ElicitationModeForm,
+			Message: in.Message,
+			RequestedSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"choice": map[string]any{
+						"type":        "string",
+						"enum":        in.Choices,
+						"description": "approve-once sends this call once; approve-and-trust also skips this check for the destination from now on; deny refuses it",
+					},
+				},
+				"required": []string{"choice"},
+			},
+		}).
+		ToolResult()
 }
 
 // swapProvider installs p as the live provider after auth and boots it in the
@@ -169,6 +267,9 @@ func (s *SemanticMCPServer) swapProvider(p *provider.ApiProvider) {
 			log.Printf("Warning: post-auth provider boot failed: %v", err)
 		} else {
 			log.Println("Provider booted successfully after auth")
+			if id := p.ProvideIdentity(); id != nil {
+				s.registerFeature(features.Say, id.Username)
+			}
 		}
 	})
 }
@@ -347,6 +448,7 @@ extracts both tokens and sends them to the local setup server.
 
 // ServeSSE starts the SSE server
 func (s *SemanticMCPServer) ServeSSE(addr string) *server.SSEServer {
+	s.sse.Store(true)
 	return server.NewSSEServer(s.server,
 		server.WithBaseURL(fmt.Sprintf("http://%s", addr)),
 	)
