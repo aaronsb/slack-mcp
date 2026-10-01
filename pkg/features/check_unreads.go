@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 	"strings"
 )
@@ -190,7 +191,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 
 					mention := map[string]interface{}{
 						"type":      "mention",
-						"channel":   channel.Name,
+						"channel":   text.ChannelLabel(channel.Name, channel.IsMpIM),
 						"author":    authorName,
 						"message":   rm.Body,
 						"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
@@ -214,7 +215,7 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 			if channel.UnreadCount > 0 {
 				channelInfo := map[string]interface{}{
 					"type":        "channel",
-					"channel":     channel.Name,
+					"channel":     text.ChannelLabel(channel.Name, channel.IsMpIM),
 					"channelId":   channel.ID,
 					"unreadCount": channel.UnreadCount,
 					"lastMessage": "Multiple unread messages",

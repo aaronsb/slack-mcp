@@ -24,7 +24,7 @@ var ListChannels = &Feature{
 			},
 			"search": map[string]interface{}{
 				"type":        "string",
-				"description": "Search for channels by name or purpose (partial match). When provided, searches all channels regardless of filter.",
+				"description": "Search for channels by name or purpose (partial match). When provided without a filter, searches all channels.",
 			},
 			"forceRefresh": map[string]interface{}{
 				"type":        "boolean",
@@ -63,19 +63,18 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 	}
 
 	// Parse parameters
-	filter := "member"
-	if f, ok := params["filter"].(string); ok {
-		filter = f
-	}
-
 	search := ""
 	if s, ok := params["search"].(string); ok {
 		search = strings.ToLower(strings.TrimSpace(s))
 	}
 
-	// When searching, look across all channels unless explicitly filtered
-	if search != "" && filter == "member" {
+	// A search looks across every channel unless a filter was given.
+	filter := "member"
+	if search != "" {
 		filter = "all"
+	}
+	if f, ok := params["filter"].(string); ok && f != "" {
+		filter = f
 	}
 
 	forceRefresh := false

@@ -16,6 +16,7 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/safety"
 	"github.com/aaronsb/slack-mcp/pkg/scanner"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 )
 
@@ -281,8 +282,8 @@ func keyName(ap *provider.ApiProvider, k safety.Key) string {
 		}
 	case safety.KeyConversation:
 		if ap != nil {
-			if n := ap.ResolveChannelNameCached(k.ID); n != "" {
-				return "#" + n
+			if ch, ok := ap.LookupChannel(k.ID); ok && ch.ID == k.ID && ch.Name != "" {
+				return text.ChannelLabel(ch.Name, ch.IsMpIM)
 			}
 		}
 	}

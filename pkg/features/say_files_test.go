@@ -567,6 +567,7 @@ func TestPreWriteLocalRefusesEveryWriteFirst(t *testing.T) {
 }
 
 func TestCheckUploadURLAcceptsOnlySlackHosts(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	ap := provider.NewWithTokens("xoxc-test", "xoxd-test")
 	for _, ok := range []string{
 		"https://files.slack.com/upload/v1/abc",

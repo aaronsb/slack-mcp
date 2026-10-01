@@ -275,3 +275,32 @@ func TestTargetWithQueryIsRefused(t *testing.T) {
 		t.Errorf("searched")
 	}
 }
+
+// A bare '@' target names a person, so it reads that person's DM through
+// the read-policy ladder, as since= does. '@me' is the self-DM, not every
+// conversation whose name contains "me".
+func TestBareAtMeReadsTheSelfDM(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedUsers(slack.User{ID: "U1", Name: "bockeliea", RealName: "Aaron Bockelie"})
+	var self slack.Channel
+	self.ID, self.IsIM, self.User = "D1", true, "U1"
+	srv.SeedChannels(self, channel("C1", "meetings"), channel("C2", "memes"))
+	var read []string
+	srv.Handle("conversations.history", func(r *http.Request) any {
+		_ = r.ParseForm()
+		read = append(read, r.Form.Get("channel"))
+		return map[string]any{
+			"ok": true, "has_more": false,
+			"messages": []any{slacktest.Message("U1", "note to self", "1782246200.000000")},
+		}
+	})
+	ap := bootedProvider(t, srv)
+
+	out := runTool(t, features.Messages, ap, map[string]any{"target": "@me"})
+	if strings.Contains(out, "matches") || !strings.Contains(out, "note to self") {
+		t.Fatalf("@me did not read the self-DM:\n%s", out)
+	}
+	if len(read) != 1 || read[0] != "D1" {
+		t.Errorf("read %v, want only the self-DM", read)
+	}
+}

@@ -141,25 +141,26 @@ func handleTargetMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, channel, timestamp string, scope string) (*FeatureResult, error) {
 	// Receipts are public, so mark-read routes like any write: '#name' is a
 	// channel only, a person only by exact handle (ADR-005, issue #94).
-	channelID, refusal := markReadDestination(ctx, apiProvider, channel)
+	dest, refusal := markReadDestination(ctx, apiProvider, channel)
 	if refusal != nil {
 		return refusal, nil
 	}
+	channelID := dest.ConvID
 
-	channelInfo, err := apiProvider.GetChannelInfo(ctx, channelID)
-	if err != nil {
+	if _, err := apiProvider.GetChannelInfo(ctx, channelID); err != nil {
 		return &FeatureResult{
 			Success:  false,
 			Message:  fmt.Sprintf("Channel '%s' not found. Use estate view='channels' to see available channels.", channel),
 			Guidance: "💡 See available channels: estate view='channels'",
 		}, nil
 	}
-	label := "#" + channelInfo.Name
-	if channelInfo.Name == "" || channelInfo.IsIM {
+	label := dest.Name
+	if label == "" || label == namedByCaller {
 		label = channel
 	}
 
 	var client *slack.Client
+	var err error
 
 	// Get latest message timestamp if not provided
 	if timestamp == "" {
@@ -195,12 +196,8 @@ func handleChannelMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvi
 			}, nil
 		}
 	}
-	err = client.MarkConversation(channelID, timestamp)
-	if err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to mark channel as read: %v", err),
-		}, nil
+	if err := client.MarkConversation(channelID, timestamp); err != nil {
+		return &FeatureResult{Success: false, Message: markFailure(label, err)}, nil
 	}
 
 	result := &FeatureResult{
@@ -260,12 +257,8 @@ func handleThreadMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 			Message: fmt.Sprintf("Could not get client: %v", err),
 		}, nil
 	}
-	err = client.MarkConversation(channelId, threadTs)
-	if err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to mark thread as read: %v", err),
-		}, nil
+	if err := client.MarkConversation(channelId, threadTs); err != nil {
+		return &FeatureResult{Success: false, Message: markFailure(dest.Name, err)}, nil
 	}
 
 	return &FeatureResult{
@@ -288,10 +281,11 @@ func handleDMMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, 
 	// 'dm:' names a person: the same write-policy ladder as say, so a shared
 	// real name or a deactivated user never gets a receipt (issue #94).
 	person := "@" + strings.TrimPrefix(strings.TrimSpace(user), "@")
-	dmID, refusal := markReadDestination(ctx, apiProvider, person)
+	dmDest, refusal := markReadDestination(ctx, apiProvider, person)
 	if refusal != nil {
 		return refusal, nil
 	}
+	dmID := dmDest.ConvID
 
 	client, err := apiProvider.Provide()
 	if err != nil {
@@ -313,10 +307,7 @@ func handleDMMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvider, 
 	}
 
 	if err := client.MarkConversationContext(ctx, dmID, history.Messages[0].Timestamp); err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to mark DM as read: %v", err),
-		}, nil
+		return &FeatureResult{Success: false, Message: markFailure(dmDest.Name, err)}, nil
 	}
 
 	return &FeatureResult{
@@ -388,7 +379,7 @@ func handleAllDMsMarkAsRead(ctx context.Context, apiProvider *provider.ApiProvid
 		client, _ := apiProvider.Provide()
 		err := client.MarkConversation(im.ID, im.Latest)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", im.ID, err))
+			errors = append(errors, markFailure(conversationName(apiProvider, im.ID), err))
 		} else {
 			markedCount++
 		}
@@ -488,7 +479,7 @@ func handleAllChannelsMarkAsRead(ctx context.Context, apiProvider *provider.ApiP
 		client, _ := apiProvider.Provide()
 		err := client.MarkConversation(ch.ID, ch.Latest)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", ch.ID, err))
+			errors = append(errors, markFailure(conversationName(apiProvider, ch.ID), err))
 		} else {
 			markedCount++
 		}
@@ -524,21 +515,43 @@ func handleAllChannelsMarkAsRead(ctx context.Context, apiProvider *provider.ApiP
 // markReadDestination resolves a mark-read target without opening
 // anything, refuses a person with no DM, and runs the quarantine step.
 // mark-read never opens a conversation (ADR-013).
-func markReadDestination(ctx context.Context, ap *provider.ApiProvider, target string) (string, *FeatureResult) {
+func markReadDestination(ctx context.Context, ap *provider.ApiProvider, target string) (*resolvedDestination, *FeatureResult) {
 	dest, terr := locateTarget(ctx, ap, target, provider.WritePolicy, "channel")
 	if terr != nil {
-		return "", terr.result()
+		return nil, terr.result()
 	}
 	if dest.ConvID == "" {
-		return "", &FeatureResult{
+		return nil, &FeatureResult{
 			Success: false,
 			Message: fmt.Sprintf("There is no DM with %s, so there is nothing to mark read. Nothing was done.", dest.Name),
 		}
 	}
 	if refusal := preMarkRead(ctx, ap, dest); refusal != nil {
-		return "", refusal
+		return nil, refusal
 	}
-	return dest.ConvID, nil
+	return dest, nil
+}
+
+// markFailure says why Slack refused a read marker, naming the
+// conversation and never its ID. Slack answers channel_not_found or
+// not_in_channel when the account is not a member.
+func markFailure(name string, err error) string {
+	switch err.Error() {
+	case "channel_not_found", "not_in_channel":
+		return fmt.Sprintf("You are not a member of %s, so there is nothing to mark read. Nothing was done.", name)
+	}
+	return fmt.Sprintf("Could not mark %s as read: %v", name, err)
+}
+
+// conversationName names a conversation ID from the cache for a message,
+// or "a conversation" when the cache does not have it.
+func conversationName(ap *provider.ApiProvider, convID string) string {
+	if ch, ok := ap.LookupChannel(convID); ok && ch.ID == convID {
+		if d := channelDestination(ap, convID, ch); d.Name != namedByCaller {
+			return d.Name
+		}
+	}
+	return "a conversation"
 }
 
 // withholdFrom lists the conversations a bulk mark-read skipped for

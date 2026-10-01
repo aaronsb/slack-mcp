@@ -281,12 +281,16 @@ func formatUnreads(result *FeatureResult) string {
 			}
 			b.WriteString(fmt.Sprintf("**%s** (%d unread)%s\n", author, count, urgent))
 
+			// messages run oldest first over a fixed history window that
+			// can hold read messages too; show the newest five and count
+			// the rest as earlier, never as more unreads.
 			messages := asList(dm["messages"])
-			limit := 5
-			if len(messages) < limit {
-				limit = len(messages)
+			shown := messages
+			if len(shown) > 5 {
+				b.WriteString(fmt.Sprintf("  (%d earlier messages not shown)\n", len(shown)-5))
+				shown = shown[len(shown)-5:]
 			}
-			for _, msg := range messages[:limit] {
+			for _, msg := range shown {
 				user := str(msg, "user")
 				text := truncate(str(msg, "text"), 120)
 				ts := str(msg, "timestamp")
@@ -294,9 +298,6 @@ func formatUnreads(result *FeatureResult) string {
 					text = "(attachment/empty)"
 				}
 				b.WriteString(fmt.Sprintf("  %s | %s: %s\n", ts, user, text))
-			}
-			if len(messages) > 5 {
-				b.WriteString(fmt.Sprintf("  +%d more messages\n", len(messages)-5))
 			}
 			b.WriteString("\n")
 		}
@@ -315,7 +316,7 @@ func formatUnreads(result *FeatureResult) string {
 			if v, ok := m["urgent"].(bool); ok && v {
 				urgent = " [URGENT]"
 			}
-			b.WriteString(fmt.Sprintf("#%s | %s | %s%s\n  %s\n\n", channel, author, ts, urgent, text))
+			b.WriteString(fmt.Sprintf("%s | %s | %s%s\n  %s\n\n", channel, author, ts, urgent, text))
 		}
 	}
 
@@ -328,9 +329,9 @@ func formatUnreads(result *FeatureResult) string {
 			lastMsg := truncate(str(ch, "lastMessage"), 100)
 			ts := str(ch, "timestamp")
 			if ts != "" {
-				b.WriteString(fmt.Sprintf("#%s | %s\n  %s\n\n", name, ts, lastMsg))
+				b.WriteString(fmt.Sprintf("%s | %s\n  %s\n\n", name, ts, lastMsg))
 			} else {
-				b.WriteString(fmt.Sprintf("#%s\n  %s\n\n", name, lastMsg))
+				b.WriteString(fmt.Sprintf("%s\n  %s\n\n", name, lastMsg))
 			}
 		}
 	}

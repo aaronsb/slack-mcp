@@ -310,7 +310,21 @@ func defaultFixture(r *http.Request, method, selfURL string, channels []slack.Ch
 			"response_metadata": map[string]any{"next_cursor": ""},
 		}
 
-	case "users.conversations", "conversations.list":
+	case "users.conversations":
+		// Only the caller's own conversations, as Slack returns them.
+		var member []slack.Channel
+		for _, ch := range channels {
+			if ch.IsMember || ch.IsIM || ch.IsMpIM {
+				member = append(member, ch)
+			}
+		}
+		return map[string]any{
+			"ok":                true,
+			"channels":          member,
+			"response_metadata": map[string]any{"next_cursor": ""},
+		}
+
+	case "conversations.list":
 		return map[string]any{
 			"ok":                true,
 			"channels":          channels,
@@ -368,7 +382,17 @@ func defaultFixture(r *http.Request, method, selfURL string, channels []slack.Ch
 		// that wants threads passes ThreadView(Thread(...)) explicitly.
 		return ThreadView()
 
-	case "conversations.mark", "chat.postMessage", "reactions.add", "reactions.remove":
+	case "conversations.mark":
+		// Slack refuses a read marker in a channel the caller is not in.
+		_ = r.ParseForm()
+		for _, ch := range channels {
+			if ch.ID == r.Form.Get("channel") && ch.IsChannel && !ch.IsMember {
+				return map[string]any{"ok": false, "error": "channel_not_found"}
+			}
+		}
+		return map[string]any{"ok": true}
+
+	case "chat.postMessage", "reactions.add", "reactions.remove":
 		return map[string]any{"ok": true, "ts": "1786752114.508819", "channel": "C1"}
 
 	default:
@@ -425,10 +449,18 @@ func Thread(channel, threadTs, latestReply string, replyCount, unread int) map[s
 	root["latest_reply"] = latestReply
 	root["subscribed"] = true
 
+	// unread_replies is the unread reply messages themselves, not a count.
+	replies := make([]any, unread)
+	for i := range replies {
+		r := Message("U1", "on it", latestReply)
+		r["thread_ts"] = threadTs
+		r["parent_user_id"] = "U2"
+		replies[i] = r
+	}
 	return map[string]any{
 		"root_msg":       root,
 		"latest_replies": []any{Message("U1", "on it", latestReply)},
-		"unread_replies": unread,
+		"unread_replies": replies,
 	}
 }
 
@@ -439,8 +471,8 @@ func ThreadView(threads ...any) map[string]any {
 	total := 0
 	for _, t := range threads {
 		if m, ok := t.(map[string]any); ok {
-			if n, ok := m["unread_replies"].(int); ok {
-				total += n
+			if r, ok := m["unread_replies"].([]any); ok {
+				total += len(r)
 			}
 		}
 	}
