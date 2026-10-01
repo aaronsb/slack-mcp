@@ -117,9 +117,10 @@ func findPrivateKey(b []byte) int {
 		end := min(start+512, len(b))
 		return bodyChars(unescapeLineBreaks(b[start:end]), true) >= 64
 	})
-	// The next `Private-Lines:` at or after the current header, found once
-	// and reused, so a run of PuTTY headers is not searched quadratically.
-	privateLines := -1
+	// The next `Private-Lines:` at or after the current header, and whether
+	// its body holds a key, found once and reused, so a run of PuTTY headers
+	// is neither searched nor its body read quadratically.
+	privateLines, body, bodyRead := -1, false, false
 	putty := indexAll(b, "PuTTY-User-Key-File-", func(i int) bool {
 		if privateLines < i {
 			if j := bytes.Index(b[i:], []byte("Private-Lines:")); j >= 0 {
@@ -127,11 +128,15 @@ func findPrivateKey(b []byte) int {
 			} else {
 				privateLines = len(b)
 			}
+			bodyRead = false
 		}
 		if privateLines >= len(b) || privateLines-i > 4096 {
 			return false
 		}
-		return puttyBody(b, privateLines+len("Private-Lines:"))
+		if !bodyRead {
+			body, bodyRead = puttyBody(b, privateLines+len("Private-Lines:")), true
+		}
+		return body
 	})
 	return minOffset(pem, putty)
 }
@@ -340,7 +345,8 @@ func findModelKey(b []byte) int {
 // run of [A-Za-z0-9_-] a left boundary falls only at the run's start and
 // after each `-` or `_`, and only a start that can begin a JSON object's
 // base64 is tried; the cap keeps a crafted run of `-e-e-e…` from making the
-// scan quadratic.
+// scan quadratic. Starts are tried nearest the `.` first, so a crafted
+// prefix of starts spends the cap only after the real header's start.
 const maxJWTHeaderTries = 16
 
 // findJWT matches three `.`-separated segments of [A-Za-z0-9_-] at a left
@@ -370,7 +376,7 @@ func findJWT(b []byte) int {
 			continue
 		}
 		tries := 0
-		for s := hs; dot-s >= 10 && tries < maxJWTHeaderTries; s++ {
+		for s := dot - 10; s >= hs && tries < maxJWTHeaderTries; s-- {
 			// A JSON object's base64 starts `e` (`{`), or `I`, `C`, or `D`
 			// (a leading space, tab or newline, or carriage return). Only
 			// those starts count toward the cap.
@@ -441,10 +447,10 @@ func findCredentialURL(b []byte) int {
 		if colon < 0 {
 			continue
 		}
-		// A user part holding `?`, `#`, `&`, or `=` is a query or fragment
-		// that happens to hold `:` and `@`, not userinfo. The password may
-		// hold `#`.
-		if bytes.ContainsAny(auth[:colon], "?#&=") {
+		// A user part holding `?` or `#` is a query or fragment that
+		// happens to hold `:` and `@`, not userinfo. `&` and `=` are legal
+		// in userinfo (RFC 3986 sub-delims). The password may hold `#`.
+		if bytes.ContainsAny(auth[:colon], "?#") {
 			continue
 		}
 		if credentialPassword(string(auth[colon+1 : at])) {

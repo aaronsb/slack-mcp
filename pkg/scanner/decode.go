@@ -70,19 +70,18 @@ const (
 type cursors struct {
 	b       []byte
 	inflate bool
-	exempt  [][2]int
+	exempt  *exempt
 
 	pos  [spanKinds]int  // where each decoder resumes its search
 	off  [spanKinds]int  // offset of each decoder's pending span
 	have [spanKinds]bool // whether a span is pending
 	done [spanKinds]bool // whether the decoder has no more spans
 
-	b64      b64Run
-	hex      [2]int
-	url      [2]int
-	urlEnd   int // end of the previous URL span
-	infl     inflateAt
-	exemptIx int
+	b64    b64Run
+	hex    [2]int
+	url    [2]int
+	urlEnd int // end of the previous URL span
+	infl   inflateAt
 }
 
 // fill makes sure decoder k has a pending span, unless it is done.
@@ -104,7 +103,7 @@ func (c *cursors) fill(k int) {
 		c.off[k] = c.url[0]
 	case spanInflate:
 		if c.inflate {
-			c.infl, c.pos[k], ok = nextInflate(c.b, c.pos[k], c.exempt, &c.exemptIx)
+			c.infl, c.pos[k], ok = nextInflate(c.b, c.pos[k], c.exempt)
 			c.off[k] = c.infl.off
 		}
 	}
@@ -135,7 +134,7 @@ func (s *scan) decode(n *node, inflate bool, emit emitFunc) (exhausted bool) {
 	b := n.data
 	c := &cursors{b: b, inflate: inflate}
 	if inflate {
-		c.exempt = exemptSpans(b)
+		c.exempt = newExempt(b)
 	}
 
 	// out emits a (possibly partial) output and says whether to go on.
@@ -478,19 +477,16 @@ func validZlib(cmf, flg byte) bool {
 }
 
 // nextInflate finds the next gzip (`1f 8b 08`) or valid zlib header offset
-// at or after i, skipping offsets inside exempt pixel-data spans; ex is the
-// caller's index into exempt. It returns the offset and where to resume.
-func nextInflate(b []byte, i int, exempt [][2]int, ex *int) (inflateAt, int, bool) {
+// at or after i, skipping offsets inside the exempt pixel-data spans ex yields. It
+// returns the offset and where to resume.
+func nextInflate(b []byte, i int, ex *exempt) (inflateAt, int, bool) {
 	for ; i+1 < len(b); i++ {
 		c := b[i]
 		if c != 0x1f && c&0x0f != 8 {
 			continue
 		}
-		for *ex < len(exempt) && exempt[*ex][1] <= i {
-			*ex++
-		}
-		if *ex < len(exempt) && exempt[*ex][0] <= i {
-			i = exempt[*ex][1] - 1
+		if end, ok := ex.covers(i); ok {
+			i = end - 1
 			continue
 		}
 		if c == 0x1f {

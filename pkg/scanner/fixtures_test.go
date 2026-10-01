@@ -185,3 +185,35 @@ func pdfStream(dict, sep string, data []byte) []byte {
 	b.WriteString("\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n")
 	return b.Bytes()
 }
+
+// exemptSpans drains newExempt over b: nil when no container parsed, else
+// every exempt span in order.
+func exemptSpans(b []byte) [][2]int {
+	e := newExempt(b)
+	if e.kind == exemptNone {
+		return nil
+	}
+	spans := [][2]int{}
+	for i := 0; i < len(b); i++ {
+		if end, ok := e.covers(i); ok {
+			spans = append(spans, [2]int{i, end})
+			i = end - 1
+		}
+	}
+	return spans
+}
+
+// tinyIDATPNG is a well-formed PNG of at least n bytes made of one-byte IDAT
+// chunks, each a zlib header candidate.
+func tinyIDATPNG(n int) []byte {
+	idat := pngChunk("IDAT", []byte{0x78})
+	var b bytes.Buffer
+	b.Grow(n + 64)
+	b.Write(pngFile())
+	b.Truncate(b.Len() - 12) // IEND
+	for b.Len() < n {
+		b.Write(idat)
+	}
+	b.Write(pngChunk("IEND", nil))
+	return b.Bytes()
+}

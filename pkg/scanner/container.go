@@ -6,60 +6,113 @@ import (
 	"hash/crc32"
 )
 
-// exemptSpans returns the pixel data the scanner has parsed in a well-formed
+// exempt yields the pixel data the scanner has parsed in a well-formed
 // container, which is exempt from inflate attempts (ADR-013, Pixel data).
 // Nothing else is exempt: a magic number alone exempts nothing. Matching and
-// the base64, hex, and URL decoders still read every byte.
-func exemptSpans(b []byte) [][2]int {
-	if s := pngExempt(b); s != nil {
-		return s
+// the base64, hex, and URL decoders still read every byte. Spans are found as
+// the inflate cursor reaches them, one ahead, never listed up front.
+type exempt struct {
+	b    []byte
+	kind int
+	p    int // where the container walk resumes
+	// floor is the end of the previous PDF stream's data. A dictionary is
+	// never looked for behind it, so each byte is walked back over at most
+	// once.
+	floor int
+	cur   [2]int
+	have  bool
+}
+
+const (
+	exemptNone = iota
+	exemptPNG
+	exemptPDF
+)
+
+func newExempt(b []byte) *exempt {
+	e := &exempt{b: b}
+	switch {
+	case pngValid(b):
+		e.kind, e.p = exemptPNG, len(pngSignature)
+	case pdfHeader(b):
+		e.kind = exemptPDF
 	}
-	return pdfExempt(b)
+	return e
+}
+
+// covers reports whether offset i lies in an exempt span and, if so, where
+// that span ends. Offsets must not decrease from one call to the next.
+func (e *exempt) covers(i int) (int, bool) {
+	for e.kind != exemptNone && (!e.have || e.cur[1] <= i) {
+		switch e.kind {
+		case exemptPNG:
+			e.cur, e.have = e.nextPNG()
+		case exemptPDF:
+			e.cur, e.have = e.nextPDF()
+		}
+		if !e.have {
+			e.kind = exemptNone
+		}
+	}
+	if e.have && e.cur[0] <= i && i < e.cur[1] {
+		return e.cur[1], true
+	}
+	return 0, false
 }
 
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 
-// pngExempt walks a PNG chunk by chunk. When every chunk up to and including
-// IEND has a length inside the buffer, an ASCII-letter type, and a CRC-32
-// that verifies, the data of each IDAT and fdAT chunk is exempt. A walk that
-// fails anywhere exempts nothing. Bytes after IEND are not part of the walk.
-func pngExempt(b []byte) [][2]int {
+// pngValid walks a PNG chunk by chunk and reports whether every chunk up to
+// and including IEND has a length inside the buffer, an ASCII-letter type,
+// and a CRC-32 that verifies. Only then is the data of each IDAT and fdAT
+// chunk exempt; a walk that fails anywhere exempts nothing. Bytes after IEND
+// are not part of the walk. The walk records nothing.
+func pngValid(b []byte) bool {
 	if !bytes.HasPrefix(b, pngSignature) {
-		return nil
+		return false
 	}
-	var spans [][2]int
 	p := len(pngSignature)
 	for {
 		if len(b)-p < 12 {
-			return nil
+			return false
 		}
 		n := int64(binary.BigEndian.Uint32(b[p:]))
 		if n > int64(len(b)-p-12) {
-			return nil
+			return false
 		}
-		ln := int(n)
 		typ := b[p+4 : p+8]
 		for _, c := range typ {
 			if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z') {
-				return nil
+				return false
 			}
 		}
-		end := p + 8 + ln
+		end := p + 8 + int(n)
 		if crc32.ChecksumIEEE(b[p+4:end]) != binary.BigEndian.Uint32(b[end:]) {
-			return nil
+			return false
 		}
-		switch string(typ) {
-		case "IDAT", "fdAT":
-			if ln > 0 {
-				spans = append(spans, [2]int{p + 8, end})
-			}
-		case "IEND":
-			if spans == nil {
-				spans = [][2]int{}
-			}
-			return spans
+		if string(typ) == "IEND" {
+			return true
 		}
 		p = end + 4
+	}
+}
+
+// nextPNG returns the data of the next non-empty IDAT or fdAT chunk of a PNG
+// pngValid has accepted.
+func (e *exempt) nextPNG() ([2]int, bool) {
+	b := e.b
+	for {
+		p := e.p
+		end := p + 8 + int(binary.BigEndian.Uint32(b[p:]))
+		e.p = end + 4
+		switch string(b[p+4 : p+8]) {
+		case "IDAT", "fdAT":
+			if end > p+8 {
+				return [2]int{p + 8, end}, true
+			}
+		case "IEND":
+			return [2]int{}, false
+		}
 	}
 }
 
@@ -75,8 +128,17 @@ func isPDFDelim(c byte) bool {
 	return isPDFSpace(c)
 }
 
-// pdfExempt reads a buffer with `%PDF-` in its first 1024 bytes for streams
-// and returns the data of each stream whose dictionary marks it as an image.
+// pdfHeader reports whether `%PDF-` is in the buffer's first 1024 bytes.
+func pdfHeader(b []byte) bool {
+	head := b
+	if len(head) > 1024 {
+		head = head[:1024]
+	}
+	return bytes.Contains(head, []byte("%PDF-"))
+}
+
+// nextPDF reads a PDF on from where the last call stopped for the next
+// stream whose dictionary marks it as an image, and returns its data.
 //
 // A `stream` keyword is a token when it starts a line or follows `>>`, with
 // or without whitespace between, outside a literal string and outside a
@@ -84,19 +146,9 @@ func isPDFDelim(c byte) bool {
 // after it, at the keyword, found within 4 KiB before it, nesting counted.
 // The data runs from the end of the keyword's line to the next `endstream`
 // at a line start or after whitespace.
-func pdfExempt(b []byte) [][2]int {
-	head := b
-	if len(head) > 1024 {
-		head = head[:1024]
-	}
-	if !bytes.Contains(head, []byte("%PDF-")) {
-		return nil
-	}
-	var spans [][2]int
-	// floor is the end of the previous stream's data. A dictionary is never
-	// looked for behind it, so each byte is walked back over at most once.
-	floor := 0
-	for i := 0; i < len(b); {
+func (e *exempt) nextPDF() ([2]int, bool) {
+	b := e.b
+	for i := e.p; i < len(b); {
 		switch c := b[i]; {
 		case c == '%':
 			i = skipLine(b, i)
@@ -112,18 +164,20 @@ func pdfExempt(b []byte) [][2]int {
 			if end < 0 {
 				// No endstream follows anywhere, so no later stream has
 				// data either.
-				return spans
+				return [2]int{}, false
 			}
-			if dict, ok := dictBefore(b, i, floor); ok && imageDict(dict) {
-				spans = append(spans, [2]int{data, end})
+			dict, ok := dictBefore(b, i, e.floor)
+			e.p = end + len("endstream")
+			e.floor = e.p
+			if ok && imageDict(dict) {
+				return [2]int{data, end}, true
 			}
-			i = end + len("endstream")
-			floor = i
+			i = e.p
 		default:
 			i++
 		}
 	}
-	return spans
+	return [2]int{}, false
 }
 
 // skipLine returns the index after the line ending that ends the line at i.

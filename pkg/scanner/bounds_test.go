@@ -100,6 +100,23 @@ func TestMemoryFollowsBudget(t *testing.T) {
 	}
 }
 
+// A PNG of one-byte IDAT chunks exempts every chunk, yet the spans are
+// found as the inflate cursor reaches them, so the scan allocates nothing
+// in proportion to the chunk count (#127 re-review).
+func TestPNGTinyIDATChunksBounded(t *testing.T) {
+	png := tinyIDATPNG(16 << 20)
+	var r Result
+	alloc := allocated(func() { r = Scan(file(png), Options{}) })
+	t.Logf("allocated %d KiB, used %d", alloc>>10, r.BudgetUsedForLog())
+	mustClean(t, r)
+	if r.BudgetUsedForLog() != 0 {
+		t.Fatalf("pixel data was inflated: used %d", r.BudgetUsedForLog())
+	}
+	if alloc > 1<<20 {
+		t.Fatalf("allocated %d KiB", alloc>>10)
+	}
+}
+
 // Each child costs at least childOverhead, so a flood of tiny outputs is
 // refused rather than held.
 func TestTinyChildrenExhaustBudget(t *testing.T) {
@@ -209,6 +226,23 @@ func TestPuTTYHeadersLinear(t *testing.T) {
 	within(t, 100*time.Millisecond, func() { findPrivateKey(in) })
 }
 
+// Headers sharing one `Private-Lines:` read its body once, however many
+// lines it declares (#127 re-review).
+func TestPuTTYBodyReadOnce(t *testing.T) {
+	var b bytes.Buffer
+	for b.Len() < 4000 {
+		b.WriteString("PuTTY-User-Key-File-")
+	}
+	b.WriteString("Private-Lines: 999999\n")
+	b.Write(bytes.Repeat([]byte("\n"), 1<<20))
+	in := b.Bytes()
+	within(t, 20*time.Millisecond, func() {
+		if findPrivateKey(in) >= 0 {
+			t.Fatal("matched")
+		}
+	})
+}
+
 // ---- W3: credential URLs in queries and fragments ----
 
 func TestCredentialURLQueryAndFragment(t *testing.T) {
@@ -221,12 +255,19 @@ func TestCredentialURLQueryAndFragment(t *testing.T) {
 	}
 	// A password may hold `#`.
 	mustBlock(t, Scan(text("postgres://app:Fa#ke0@db/app"), Options{}), ClassCredentialURL)
+	// `&` and `=` are legal in userinfo, also behind an env name, which
+	// leaves URLs to this class.
+	mustBlock(t, Scan(text("postgres://svc=ro:Fa8ke0Pw@db/app"), Options{}), ClassCredentialURL)
+	mustBlock(t, Scan(text("DATABASE_URL=postgres://a&b:Fa8ke0Pw@db/app"), Options{}), ClassCredentialURL)
 }
 
 // ---- W4: JWT starts ----
 
 func TestJWTStarts(t *testing.T) {
 	mustBlock(t, Scan(text(strings.Repeat("x-", 17)+fakeJWT), Options{}), ClassJWT)
+	// Prefixed starts that could begin a header do not spend the cap.
+	mustBlock(t, Scan(text(strings.Repeat("e-", 17)+fakeJWT), Options{}), ClassJWT)
+	mustBlock(t, Scan(text(strings.Repeat("ew-", 40)+fakeJWT), Options{}), ClassJWT)
 	// Not at a left boundary.
 	mustClean(t, Scan(text("x"+fakeJWT), Options{}))
 	mustClean(t, Scan(text("9"+fakeJWT), Options{}))

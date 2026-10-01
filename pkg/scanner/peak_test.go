@@ -35,7 +35,9 @@ var peakInputs = map[string]func() []Field{
 		}
 		return []Field{{Kind: FieldText, Data: data, ElementStarts: starts}}
 	},
-	"jpeg-50mib": func() []Field { return file(jpegLike(50<<20, 8)) },
+	// A well-formed PNG of one-byte IDAT chunks.
+	"png-tiny-idat": func() []Field { return file(tinyIDATPNG(50 << 20)) },
+	"jpeg-50mib":    func() []Field { return file(jpegLike(50<<20, 8)) },
 }
 
 // TestPeakMemory runs one adversarial input, named by SCANNER_PEAK, and logs
