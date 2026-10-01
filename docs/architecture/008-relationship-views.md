@@ -7,6 +7,9 @@ projection), #66 (encounter observer), and the stage 3 views PR. The
 evidence probe (`cmd/estate-experiment`) is deleted; its numbers live in
 the Evidence section below.
 
+Amended 2026-09-30: graph reports (`render='graph'` on the `about` and
+`person` views), issue #61.
+
 Depends on ADR-007's estate; implements ADR-005's encounter class; resolves
 ADR-007's deferred "any estate query tool".
 
@@ -249,13 +252,118 @@ surfaces.
   channel" edge; a per-channel API cost with no observer yet.
 - Mention edges (person tags inside bodies as directed edges) — the render
   path sees them; whether they are worth an event class is open.
-- A visualization surface. The precedent exists in this binary:
-  `pkg/setup` embeds a web UI (`go:embed`), serves it on localhost only,
-  and launches the browser cross-platform. Because views are deterministic
-  functions of the folds, a graph report is that same surface executing a
-  view on request and rendering it into an embedded page — the interaction
-  graph renders locally or not at all. Deferred until the views prove they
-  query useful things.
+
+The visualization surface this list once deferred is decided by the
+amendment below.
+
+## Amendment (2026-09-30): graph reports
+
+The `about` and `person` views can be drawn as a graph. Because a view is a
+deterministic function of the folds, drawing it is a second renderer over
+the same typed view data the markdown renderer reads. It adds no joins, no
+Slack calls, and no fields.
+
+### Surface: a parameter on the noun
+
+`estate` takes `render='graph'` for `view='about'` and `view='person'`.
+Every other view refuses it by name rather than ignoring it. The call
+returns the usual markdown view, so the agent keeps the content, followed by
+the report's absolute path and a `file://` URL.
+
+Under ADR-009 a verb encodes an effect: something the world outside the
+server can see. Writing a file into the server's own data directory is the
+same class of act as the ledgers `estate` already appends to on every read.
+It is private local state, invisible to Slack, and it touches no path the
+caller names. So it is scope on the noun that owns the data, not a new
+verb. Opening a browser or serving the page would reach into the user's
+environment, and that would be an effect. This version does neither. If a
+later version launches anything, that launch is a verb.
+
+### A static file, not a server
+
+The deferral pointed at `pkg/setup`'s pattern: an embedded page served on
+localhost, with a browser launch. A report needs none of it. A static file
+has no port, no listener for other local processes to reach, and no tie to
+the MCP process's lifetime, so idle exit and the ledger writer election do
+not apply to it. It also never puts a page on the wrong host. Under the SSE
+transport or a remote deployment the file is written on the server's host,
+and the response names that path rather than implying a local browser
+session.
+
+### Location and lifetime
+
+Reports are written to `<data dir>/reports/`
+(`$XDG_DATA_HOME/slack-mcp/reports/`), with the directory at 0700 and each
+file at 0600. A pre-existing directory is tightened to 0700. There is one
+file per view and subject handle, `<view>-<handle>.html`, with the name
+reduced to `[a-z0-9-]`. The write is atomic (temp file, then rename), so a
+reader never sees half a page, and the next render of the same view and
+person replaces it. Reports never go in a file-exchange directory such as
+the one ADR-012 proposes. Relationship data stays out of reach of any file
+parameter.
+
+### What the page may show
+
+The page shows no more than the markdown view does, and never more
+precisely.
+
+- The same page windows: the person view's surfaces and counterparts at the
+  current offset, and the about view's summary caps.
+- Names only. Node IDs are page-local (`n1`, `n2`, ...) and Slack IDs
+  serve only as join keys. Where a view falls back to a labelled-unknown
+  form that carries a raw ID, the graph writes what it is instead:
+  "unnamed conversation", "external user", "DM (unresolved user)".
+- No hour-level data for anyone. This is stricter than the markdown, which
+  shows the operator's own hour cadence, because a graph has no use for
+  it.
+- The reading plan stays in the markdown. It is prose built around
+  handles, not graph structure.
+
+The person view draws an ego network. The seed is at the center, joined to
+its active surfaces (edges weighted by active days), its counterparts
+(weighted by co-active plus DM days), and the channels it created. The
+about view draws the composite: the seed, the families on its founder
+plane, the top of its activity plane and circle, and after `deeper=true`,
+the convergence cells joined to each person observed there.
+
+### Page security
+
+- **Self-contained.** The graph library (Cytoscape.js, MIT) is vendored at
+  a pinned version, with its license file and a SHA-256 that a test
+  checks. It is embedded with `go:embed` and inlined into the page. Nothing
+  is fetched from a CDN or anywhere else.
+- **A strict policy.** A `Content-Security-Policy` meta tag precedes every
+  script: `default-src 'none'; script-src 'unsafe-inline'; style-src
+  'unsafe-inline'; img-src data:`. Inline script and style are the page's
+  only sources. `data:` images are allowed for the canvas renderer. No
+  `unsafe-eval` is needed, because the bundle uses neither `eval` nor
+  `Function`.
+- **Data as data.** The graph travels in a `<script type="application/json">`
+  block. Its JSON escapes `<`, `>`, `&`, U+2028 and U+2029, so no name can
+  close the element or open a comment. Every label reaches the screen
+  through the canvas renderer or `textContent`, never through markup. A
+  test plants a script-closing name in a channel and a person and asserts
+  that it never appears unescaped.
+
+### Batch exclusion
+
+ADR-010's executor admits reads only. `render=` turns an `estate` read into
+a write, so it is refused in two places: when a plan is validated (inline or
+on save), and when a stored playbook runs, which bypasses validation. The
+refusal names the item and the parameter.
+
+### Consequences
+
+- A report is a durable copy of relationship data that sits outside the
+  attention ledger's retention. It does not expire with the ninety-day
+  window, and deleting the ledgers does not delete it. The privacy
+  documentation says so, and issue #15's encryption-at-rest applies to it
+  as it does to the ledgers.
+- Opening the page is left to the human. Someone has to open the file
+  before the graph is seen at all.
+- Other render targets, such as #64's motifs, are additional consumers of
+  the same seam: one function per view that produces the graph model from
+  the typed data, tested apart from the HTML.
 
 ## Evidence
 
