@@ -636,7 +636,7 @@ func formatSendMessage(result *FeatureResult) string {
 		s = fmt.Sprintf("Replied in a thread and also sent to %s.", channel)
 	}
 	if r, _ := data["blocksRejected"].(bool); r {
-		s += "\nPosted as plain text: Slack rejected the rich-text formatting, so styling such as bold, lists and links may show as raw markup."
+		s += "\nPosted as mrkdwn text: Slack rejected the rich-text block, so lists may render as plain lines."
 	}
 	s += footer(result)
 	return s

@@ -115,7 +115,7 @@ func TestSayPostsRichTextWithMrkdwnFallback(t *testing.T) {
 	if data["rendering"] != "rich_text" || data["blocksRejected"] != false {
 		t.Fatalf("rendering not reported: %v", data)
 	}
-	if strings.Contains(out, "plain text") {
+	if strings.Contains(out, "Posted as mrkdwn") {
 		t.Fatalf("a clean rich_text post mentions the fallback:\n%s", out)
 	}
 	assertNoLeaks(t, srv, out)
@@ -145,7 +145,7 @@ func TestSayRetriesOnceAsTextWhenBlocksAreRejected(t *testing.T) {
 	if data["rendering"] != "text" || data["blocksRejected"] != true {
 		t.Fatalf("fallback not reported in data: %v", data)
 	}
-	if !strings.Contains(out, "Posted as plain text") {
+	if !strings.Contains(out, "Posted as mrkdwn text: Slack rejected the rich-text block") {
 		t.Fatalf("output does not name the fallback:\n%s", out)
 	}
 	assertNoLeaks(t, srv, out)
@@ -163,8 +163,11 @@ func TestSayReportsASecondFailureWithoutRetryingAgain(t *testing.T) {
 	if res.Success {
 		t.Fatalf("double failure reported as success:\n%s", out)
 	}
-	if !strings.Contains(out, "rejected the rich-text formatting") || !strings.Contains(out, "retry failed") {
+	if !strings.Contains(out, "rejected the rich-text block") || !strings.Contains(out, "retry failed") {
 		t.Fatalf("failure does not explain the retry:\n%s", out)
+	}
+	if strings.Contains(out, "permission") {
+		t.Fatalf("a block rejection is blamed on permissions:\n%s", out)
 	}
 	assertNoLeaks(t, srv, out)
 }
@@ -230,4 +233,31 @@ func TestSayReactionSendsNoBlocks(t *testing.T) {
 		t.Fatalf("reaction path changed: post=%d react=%d", srv.Calls("chat.postMessage"), srv.Calls("reactions.add"))
 	}
 	assertNoLeaks(t, srv, out)
+}
+
+// Every block-validation rejection takes the single retry, not only
+// invalid_blocks.
+func TestSayRetriesOnEveryBlockValidationError(t *testing.T) {
+	for _, code := range []string{"invalid_blocks_format", "msg_blocks_too_long"} {
+		t.Run(code, func(t *testing.T) {
+			srv := slacktest.New(t)
+			rec := recordPosts(srv, map[string]any{
+				"ok": false, "error": code,
+				"response_metadata": map[string]any{"messages": []any{"[ERROR] invalid element [json-pointer:/blocks/0/elements/0]"}},
+			}, postOK)
+			ap := bootedProvider(t, srv)
+
+			res, out := say(t, ap, map[string]any{"to": "#eng", "text": "- a\n- b"})
+			if n := srv.Calls("chat.postMessage"); n != 2 {
+				t.Fatalf("want 2 posts, got %d", n)
+			}
+			if _, has := rec.form(1)["blocks"]; has {
+				t.Fatalf("retry still carried blocks")
+			}
+			if !res.Success || res.Data.(map[string]any)["blocksRejected"] != true {
+				t.Fatalf("retry not reported: %s", out)
+			}
+			assertNoLeaks(t, srv, out)
+		})
+	}
 }

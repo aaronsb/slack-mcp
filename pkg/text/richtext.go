@@ -26,8 +26,8 @@ package text
 // a space and not followed by a word character or the marker.
 
 import (
-	"html"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -38,9 +38,27 @@ var (
 	fenceRE   = regexp.MustCompile("(?s)```\n?(.*?)\n?```")
 	quoteRE   = regexp.MustCompile(`^(?:>|&gt;) ?(.*)$`)
 	bulletRE  = regexp.MustCompile(`^( *)(?:[-•]|\*) +(.*)$`) // "\*(?= ) +" ≡ "\* +"
-	orderedRE = regexp.MustCompile(`^( *)\d+[.)] +(.*)$`)
+	orderedRE = regexp.MustCompile(`^( *)(\d+)[.)] +(.*)$`)
 	urlRE     = regexp.MustCompile(`^(https?|mailto):`)
+
+	// Entity targets become user/channel/usergroup elements only when they
+	// look like IDs; <@name> or <#name> would be rejected by Slack (or
+	// render wrong), so they stay literal text instead.
+	userIDRE      = regexp.MustCompile(`^[UW][A-Z0-9]+$`)
+	channelIDRE   = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
+	usergroupIDRE = regexp.MustCompile(`^S[A-Z0-9]+$`)
 )
+
+// slackUnescape decodes the only three entities Slack escapes in mrkdwn.
+// Deliberate divergence from the Python original's html.unescape (and Go's
+// html.UnescapeString): HTML5 also decodes legacy entities without a
+// semicolon, so a URL like ?a=1&region=us&notify=1 would become
+// "…®ion=us¬ify=1" — corrupted text that Slack accepts, so no retry fires.
+var slackUnescape = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace
+
+// maxOrderedNumber bounds what counts as a list number, so "2024. was a
+// year" stays a sentence.
+const maxOrderedNumber = 999
 
 // maxListIndent caps nested list depth; Slack renders at most 8 levels.
 const maxListIndent = 8
@@ -62,7 +80,7 @@ func (s inlineStyle) slack() *slack.RichTextSectionTextStyle {
 func textElement(value string, style inlineStyle) *slack.RichTextSectionTextElement {
 	return &slack.RichTextSectionTextElement{
 		Type:  slack.RTSEText,
-		Text:  html.UnescapeString(value),
+		Text:  slackUnescape(value),
 		Style: style.slack(),
 	}
 }
@@ -72,22 +90,25 @@ func textElement(value string, style inlineStyle) *slack.RichTextSectionTextElem
 func angleElement(body string, style inlineStyle) slack.RichTextSectionElement {
 	target, label, _ := strings.Cut(body, "|")
 	switch {
-	case strings.HasPrefix(target, "@") && len(target) > 1:
+	case strings.HasPrefix(target, "@") && userIDRE.MatchString(target[1:]):
 		return &slack.RichTextSectionUserElement{Type: slack.RTSEUser, UserID: target[1:]}
-	case strings.HasPrefix(target, "#") && len(target) > 1:
+	case strings.HasPrefix(target, "#") && channelIDRE.MatchString(target[1:]):
 		return &slack.RichTextSectionChannelElement{Type: slack.RTSEChannel, ChannelID: target[1:]}
-	case strings.HasPrefix(target, "!subteam^"):
+	case strings.HasPrefix(target, "!subteam^") && usergroupIDRE.MatchString(strings.TrimPrefix(target, "!subteam^")):
 		return &slack.RichTextSectionUserGroupElement{Type: slack.RTSEUserGroup, UsergroupID: strings.TrimPrefix(target, "!subteam^")}
+	// <!date^…> and other <!…> commands are not converted: they fall
+	// through to nil and stay literal text (a known gap; a date element
+	// needs the fallback text and format parsed out).
 	case strings.HasPrefix(target, "!") && broadcastRanges[target[1:]]:
 		return &slack.RichTextSectionBroadcastElement{Type: slack.RTSEBroadcast, Range: target[1:]}
 	case urlRE.MatchString(target):
 		link := &slack.RichTextSectionLinkElement{
 			Type:  slack.RTSELink,
-			URL:   html.UnescapeString(target),
+			URL:   slackUnescape(target),
 			Style: style.slack(),
 		}
 		if label != "" {
-			link.Text = html.UnescapeString(label)
+			link.Text = slackUnescape(label)
 		}
 		return link
 	}
@@ -184,6 +205,57 @@ func matchEmoji(s []rune, i int) (end int, name string, skin int) {
 	return -1, "", 0
 }
 
+// matchBareURL matches https?://[^\s<>]+ at i, not inside a word, minus
+// trailing sentence punctuation and any unmatched closing parenthesis. It
+// returns the end of the URL or -1. Code spans, fences and <…> links never
+// reach here: the scanner consumes them first.
+func matchBareURL(s []rune, i int) int {
+	if prev := runeAt(s, i-1); prev != 0 && isWord(prev) {
+		return -1
+	}
+	rest := string(s[i:min(i+8, len(s))])
+	var scheme int
+	switch {
+	case strings.HasPrefix(rest, "https://"):
+		scheme = 8
+	case strings.HasPrefix(rest, "http://"):
+		scheme = 7
+	default:
+		return -1
+	}
+	end := i + scheme
+	for end < len(s) && !unicode.IsSpace(s[end]) && s[end] != '<' && s[end] != '>' {
+		end++
+	}
+	for end > i+scheme {
+		last := s[end-1]
+		if strings.ContainsRune(".,;:!?", last) {
+			end--
+			continue
+		}
+		if last == ')' {
+			open, closed := 0, 0
+			for _, r := range s[i:end] {
+				switch r {
+				case '(':
+					open++
+				case ')':
+					closed++
+				}
+			}
+			if closed > open {
+				end--
+				continue
+			}
+		}
+		break
+	}
+	if end == i+scheme {
+		return -1
+	}
+	return end
+}
+
 // parseInline parses one run of inline mrkdwn into rich_text section elements.
 func parseInline(s string, style inlineStyle) []slack.RichTextSectionElement {
 	runes := []rune(s)
@@ -232,6 +304,14 @@ func parseInline(s string, style inlineStyle) []slack.RichTextSectionElement {
 				}
 				end, items = j+1, parseInline(string(runes[i+1:j]), inner)
 			}
+		case 'h':
+			if e := matchBareURL(runes, i); e >= 0 {
+				end, items = e, []slack.RichTextSectionElement{&slack.RichTextSectionLinkElement{
+					Type:  slack.RTSELink,
+					URL:   slackUnescape(string(runes[i:e])),
+					Style: style.slack(),
+				}}
+			}
 		case ':':
 			if e, name, skin := matchEmoji(runes, i); e >= 0 {
 				end, items = e, []slack.RichTextSectionElement{
@@ -278,7 +358,39 @@ func section(s string) *slack.RichTextSection {
 	return &slack.RichTextSection{Type: slack.RTESection, Elements: parseInline(s, inlineStyle{})}
 }
 
+// listLine is one line recognized as a list item.
+type listLine struct {
+	style  slack.RichTextListElementType
+	indent int
+	number int // ordered lists only
+	text   string
+}
+
+// parseListLine recognizes a bullet or ordered item. An ordered line counts
+// only when its number is at most maxOrderedNumber and it either starts a
+// list (0 or 1) or continues an ordered run, so a sentence like "2024. was a
+// year" or "3. is my lucky number" stays text.
+func parseListLine(line string, orderedRun bool) (listLine, bool) {
+	if m := bulletRE.FindStringSubmatch(line); m != nil {
+		return listLine{style: slack.RTEListBullet, indent: min(len(m[1])/2, maxListIndent), text: m[2]}, true
+	}
+	if m := orderedRE.FindStringSubmatch(line); m != nil {
+		n, err := strconv.Atoi(m[2])
+		if err != nil || n > maxOrderedNumber || (n > 1 && !orderedRun) {
+			return listLine{}, false
+		}
+		return listLine{style: slack.RTEListOrdered, indent: min(len(m[1])/2, maxListIndent), number: n, text: m[3]}, true
+	}
+	return listLine{}, false
+}
+
 // parseLines groups non-code lines into sections, quotes, and lists.
+//
+// Beyond the Python original: blank lines between list items do not split
+// the list (agents write "1. a\n\n2. b"), an ordered list carries its
+// starting number as offset (slack-go would otherwise send 0 and Slack
+// would renumber "2." after a sub-list as "1."), and items that parse to
+// nothing are dropped rather than sent as empty sections Slack may reject.
 func parseLines(lines []string) []slack.RichTextElement {
 	var (
 		blocks     []slack.RichTextElement
@@ -286,6 +398,8 @@ func parseLines(lines []string) []slack.RichTextElement {
 		items      []string
 		listStyle  slack.RichTextListElementType
 		listIndent int
+		listStart  int
+		orderedRun bool
 	)
 
 	flushSection := func() {
@@ -304,44 +418,71 @@ func parseLines(lines []string) []slack.RichTextElement {
 		}
 	}
 	flushList := func() {
-		if len(items) > 0 {
-			list := &slack.RichTextList{Type: slack.RTEList, Style: listStyle, Indent: listIndent}
-			for _, item := range items {
-				list.Elements = append(list.Elements, section(item))
-			}
-			blocks = append(blocks, list)
-			items = nil
+		if len(items) == 0 {
+			return
 		}
+		list := &slack.RichTextList{Type: slack.RTEList, Style: listStyle, Indent: listIndent}
+		if listStyle == slack.RTEListOrdered && listStart > 1 {
+			list.Offset = listStart - 1
+		}
+		for _, item := range items {
+			if sec := section(item); len(sec.Elements) > 0 {
+				list.Elements = append(list.Elements, sec)
+			}
+		}
+		if len(list.Elements) > 0 {
+			blocks = append(blocks, list)
+		}
+		items = nil
+	}
+	// continuesList reports whether the next non-blank line after i is a
+	// list item, so blank lines inside a list are skipped.
+	continuesList := func(i int) bool {
+		for _, next := range lines[i+1:] {
+			if strings.TrimSpace(next) == "" {
+				continue
+			}
+			_, ok := parseListLine(next, orderedRun)
+			return ok
+		}
+		return false
 	}
 
-	for _, line := range lines {
+	for i, line := range lines {
 		if m := quoteRE.FindStringSubmatch(line); m != nil {
 			flushSection()
 			flushList()
+			orderedRun = false
 			quote = append(quote, m[1])
 			continue
 		}
 
-		style := slack.RTEListBullet
-		m := bulletRE.FindStringSubmatch(line)
-		if m == nil {
-			style = slack.RTEListOrdered
-			m = orderedRE.FindStringSubmatch(line)
-		}
-		if m != nil {
+		if li, ok := parseListLine(line, orderedRun); ok {
 			flushSection()
 			flushQuote()
-			indent := min(len(m[1])/2, maxListIndent)
-			if len(items) > 0 && (style != listStyle || indent != listIndent) {
+			if len(items) > 0 && (li.style != listStyle || li.indent != listIndent) {
 				flushList()
 			}
-			listStyle, listIndent = style, indent
-			items = append(items, m[2])
+			if len(items) == 0 {
+				listStart = li.number
+			}
+			listStyle, listIndent = li.style, li.indent
+			if li.style == slack.RTEListOrdered {
+				orderedRun = true
+			}
+			items = append(items, li.text)
+			continue
+		}
+
+		if strings.TrimSpace(line) == "" && len(items) > 0 && continuesList(i) {
 			continue
 		}
 
 		flushQuote()
 		flushList()
+		if strings.TrimSpace(line) != "" {
+			orderedRun = false
+		}
 		sec = append(sec, line)
 	}
 
@@ -391,7 +532,7 @@ func ToRichText(s string) *slack.RichTextBlock {
 			elements = append(elements, &slack.RichTextPreformatted{
 				Type: slack.RTEPreformatted,
 				Elements: []slack.RichTextSectionElement{
-					&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: html.UnescapeString(code)},
+					&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: slackUnescape(code)},
 				},
 			})
 		}

@@ -95,17 +95,17 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 		return api.PostMessageContext(ctx, channelID, options...)
 	}
 
-	// invalid_blocks means Slack rejected the converter's output and posted
-	// nothing, so one retry as text alone cannot double-post. Any other
-	// error, or a second failure, is reported as-is.
+	// A block validation error means Slack rejected the converter's output
+	// and posted nothing, so one retry as text alone cannot double-post. Any
+	// other error, or a second failure, is reported as-is.
 	rendering := "text"
 	blocksRejected := false
 	var postedChannel, timestamp string
 	if len(blocks) > 0 {
 		rendering = "rich_text"
 		postedChannel, timestamp, err = post(true)
-		if isInvalidBlocks(err) {
-			log.Printf("Slack rejected rich_text blocks (%v); retrying once as text", err)
+		if rejected, detail := blocksRejection(err); rejected {
+			log.Printf("Slack rejected rich_text blocks (%v %v); retrying once as text", err, detail)
 			blocksRejected, rendering = true, "text"
 			postedChannel, timestamp, err = post(false)
 		}
@@ -115,13 +115,15 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	if err != nil {
 		log.Printf("Failed to send message: %v", err)
 		msg := fmt.Sprintf("Failed to send message: %v", err)
+		guidance := "⚠️ Check if you have permission to post in this channel"
 		if blocksRejected {
-			msg = fmt.Sprintf("Failed to send message: Slack rejected the rich-text formatting, and the plain-text retry failed too: %v", err)
+			msg = fmt.Sprintf("Failed to send message: Slack rejected the rich-text block, and the mrkdwn text retry failed too: %v", err)
+			guidance = "⚠️ Nothing was posted. Both attempts were refused; the error above names the second refusal."
 		}
 		return &FeatureResult{
 			Success:  false,
 			Message:  msg,
-			Guidance: "⚠️ Check if you have permission to post in this channel",
+			Guidance: guidance,
 		}, nil
 	}
 
@@ -165,8 +167,20 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	return result, nil
 }
 
-// isInvalidBlocks reports whether Slack refused a post for its blocks.
-func isInvalidBlocks(err error) bool {
+// blockRejections are the chat.postMessage errors that mean Slack refused
+// the blocks themselves at validation, before posting anything.
+var blockRejections = map[string]bool{
+	"invalid_blocks":        true,
+	"invalid_blocks_format": true,
+	"msg_blocks_too_long":   true,
+}
+
+// blocksRejection reports whether Slack refused a post for its blocks, with
+// the response metadata messages that name the offending element.
+func blocksRejection(err error) (bool, []string) {
 	var se slack.SlackErrorResponse
-	return errors.As(err, &se) && se.Err == "invalid_blocks"
+	if errors.As(err, &se) && blockRejections[se.Err] {
+		return true, se.ResponseMetadata.Messages
+	}
+	return false, nil
 }

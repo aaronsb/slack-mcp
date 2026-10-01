@@ -3,6 +3,7 @@ package text
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -153,6 +154,44 @@ func TestToRichTextInline(t *testing.T) {
 			`[{"type":"text","text":"naïve_x_ é*b*"}]`},
 		{"CRLF input is LF", "one\r\ntwo",
 			`[{"type":"text","text":"one\ntwo"}]`},
+		// review of #117: only Slack's three entities decode (B1)
+		{"legacy entities in a labelled link URL survive", "<https://x.io/?orgId=1&region=us-east&notify=1&param=2&timestamp=1|dash>",
+			`[{"type":"link","url":"https://x.io/?orgId=1&region=us-east&notify=1&param=2&timestamp=1","text":"dash"}]`},
+		{"legacy entities in an unlabelled link URL survive", "<https://x.io/?a=1&amp;region=us&notify=1>",
+			`[{"type":"link","url":"https://x.io/?a=1&region=us&notify=1"}]`},
+		{"legacy entities in a bare URL survive", "https://x.io/?a=1&region=us&param=2",
+			`[{"type":"link","url":"https://x.io/?a=1&region=us&param=2"}]`},
+		{"legacy entities in text survive", "AT&T &copy; &region=us &notify &para",
+			`[{"type":"text","text":"AT&T &copy; &region=us &notify &para"}]`},
+		{"only Slack's entities decode", "&lt;b&gt; &amp;amp; &quot;",
+			`[{"type":"text","text":"<b> &amp; &quot;"}]`},
+
+		// bare URLs become links (W3)
+		{"bare URL", "see https://x.io/a now", `[
+			{"type":"text","text":"see "},
+			{"type":"link","url":"https://x.io/a"},
+			{"type":"text","text":" now"}]`},
+		{"bare URL drops trailing punctuation", "go to http://x.io/a.", `[
+			{"type":"text","text":"go to "},
+			{"type":"link","url":"http://x.io/a"},
+			{"type":"text","text":"."}]`},
+		{"bare URL keeps balanced parens, drops unmatched", "(https://x.io/a_(b))!", `[
+			{"type":"text","text":"("},
+			{"type":"link","url":"https://x.io/a_(b)"},
+			{"type":"text","text":")!"}]`},
+		{"bare URL inside bold keeps the style", "*https://x.io*",
+			`[{"type":"link","url":"https://x.io","style":{"bold":true}}]`},
+		{"bare URL in a code span stays code", "`https://x.io`",
+			`[{"type":"text","text":"https://x.io","style":{"code":true}}]`},
+		{"URL glued to a word is not a link", "xhttps://x.io and https://",
+			`[{"type":"text","text":"xhttps://x.io and https://"}]`},
+
+		// entities only for ID-shaped targets; date commands literal (W4)
+		{"name-shaped mentions stay literal", "<@bob> <#general> <!subteam^eng>",
+			`[{"type":"text","text":"<@bob> <#general> <!subteam^eng>"}]`},
+		{"date command stays literal", "<!date^1392734382^{date}|Feb 18>",
+			`[{"type":"text","text":"<!date^1392734382^{date}|Feb 18>"}]`},
+
 		{"unterminated fence stays literal", "```code without end",
 			`[{"type":"text","text":"` + "```" + `code without end"}]`},
 	}
@@ -233,12 +272,12 @@ func TestToRichTextFullBlock(t *testing.T) {
 
 func TestToRichTextListEdges(t *testing.T) {
 	// Indent caps at 8 levels; ordered markers accept "1)"; "*" bullets need a space.
-	els := elementsOf(t, "                        - deep\n2) two\n* star")
+	els := elementsOf(t, "                        - deep\n1) one\n* star")
 	if l := els[0].(*slack.RichTextList); l.Indent != maxListIndent {
 		t.Fatalf("indent not capped: %d", l.Indent)
 	}
 	if l := els[1].(*slack.RichTextList); l.Style != "ordered" {
-		t.Fatalf("2) not ordered: %s", mustJSON(l))
+		t.Fatalf("1) not ordered: %s", mustJSON(l))
 	}
 	if l := els[2].(*slack.RichTextList); l.Style != "bullet" {
 		t.Fatalf("* not a bullet: %s", mustJSON(l))
@@ -250,5 +289,67 @@ func TestToRichTextBlankMessageHasNoElements(t *testing.T) {
 		if els := ToRichText(in).Elements; len(els) != 0 {
 			t.Fatalf("%q: want no elements, got %s", in, mustJSON(els))
 		}
+	}
+}
+
+func orderedLists(els []slack.RichTextElement) []*slack.RichTextList {
+	var out []*slack.RichTextList
+	for _, e := range els {
+		if l, ok := e.(*slack.RichTextList); ok && l.Style == slack.RTEListOrdered {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// W1: blank lines between items keep one list.
+func TestToRichTextOrderedListSurvivesBlankLines(t *testing.T) {
+	els := elementsOf(t, "1. a\n\n2. b\n\n\n3. c\n\nafter")
+	if len(els) != 2 {
+		t.Fatalf("want list + section, got %s", mustJSON(els))
+	}
+	l, ok := els[0].(*slack.RichTextList)
+	if !ok || len(l.Elements) != 3 || l.Offset != 0 {
+		t.Fatalf("want one ordered list of 3 at offset 0, got %s", mustJSON(els[0]))
+	}
+	if _, ok := els[1].(*slack.RichTextSection); !ok {
+		t.Fatalf("trailing paragraph: %s", mustJSON(els[1]))
+	}
+}
+
+// W1: a sub-list splits the ordered list; the continuation keeps its number.
+func TestToRichTextOrderedListResumesAfterSubList(t *testing.T) {
+	els := elementsOf(t, "1. a\n  - sub\n\n2. b\n3. c")
+	lists := orderedLists(els)
+	if len(els) != 3 || len(lists) != 2 {
+		t.Fatalf("want ordered, bullet, ordered; got %s", mustJSON(els))
+	}
+	if lists[0].Offset != 0 || lists[1].Offset != 1 || len(lists[1].Elements) != 2 {
+		t.Fatalf("offsets %d/%d, second list %d items", lists[0].Offset, lists[1].Offset, len(lists[1].Elements))
+	}
+	if raw := mustJSON(lists[1]); !strings.Contains(raw, `"offset":1`) {
+		t.Fatalf("offset not on the wire: %s", raw)
+	}
+}
+
+// W1: numbered sentences are not lists.
+func TestToRichTextNumberedSentencesAreText(t *testing.T) {
+	for _, in := range []string{"2024. was a year", "3. is my lucky number", "1000. too many"} {
+		els := elementsOf(t, in)
+		if _, ok := els[0].(*slack.RichTextSection); !ok || len(els) != 1 {
+			t.Fatalf("%q read as a list: %s", in, mustJSON(els))
+		}
+	}
+}
+
+// W4: an item that parses to nothing is dropped, not sent empty.
+func TestToRichTextDropsEmptyListItems(t *testing.T) {
+	els := elementsOf(t, "- a\n- \n- b")
+	l, ok := els[0].(*slack.RichTextList)
+	if !ok || len(l.Elements) != 2 {
+		t.Fatalf("want 2 items, got %s", mustJSON(els))
+	}
+	if els := elementsOf(t, "- "); len(els) != 0 {
+		t.Fatalf("an all-empty list was kept: %s", mustJSON(els))
 	}
 }
