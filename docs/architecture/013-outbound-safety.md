@@ -503,9 +503,13 @@ outbound-safety: BLOCKED say to=#general (C0123ABCD) class=private-key location=
 ```
 
 The record the agent cannot suppress through any tool is the quarantine
-file. The log is not that record: on stdio it goes to
-`/tmp/slack-mcp.log`, created at 0666 and shared by every user and
-process on the host. Tightening that mode is issue #118.
+file. The log is the operator's notice, not that record. On stdio it
+goes to `$XDG_STATE_HOME/slack-mcp/slack-mcp.log` (default
+`~/.local/state/slack-mcp/`), in a directory at 0700 and a file at
+0600, or to `SLACK_MCP_LOG_FILE` when the client environment sets it;
+on SSE it goes to stderr. Every log output passes through a writer that
+redacts credentials (#118). Before #118 the stdio log was
+`/tmp/slack-mcp.log` at 0666, shared by every user on the host.
 
 Two surfaces carry the state to the agent:
 
@@ -682,9 +686,10 @@ outbound-safety: PENDING p7k2 case=file-move say to=#general (C0123ABCD) files=1
 ```
 
 It names the ID, the gate cases, the destination, and the counts, never
-the text or file names, since the stdio log is readable by every user
-on the host (#118); case 1's content is read through `slack-mcp
-approve`. `slack-mcp approve` with no ID lists every pending request
+the text or file names. The log is private to the operator (#118), but
+it outlives the request, and case 1's content is held only in the
+pending file, which deletes it on expiry; that content is read through
+`slack-mcp approve`. `slack-mcp approve` with no ID lists every pending request
 with its age and expiry. The agent's result names the ID and tells it
 to tell the operator. No other channel is added: no desktop
 notification, no outbound message. A desktop notifier would make the
@@ -920,7 +925,7 @@ a list of the external destinations that skip the gate would be a list
 of where an attacker would ask the agent to send.
 
 The operator sees each send trust let through in a line in the operator
-log, private at mode 0600 once PR #124 lands (#118):
+log (0600, #118):
 
 ```
 outbound-safety: TRUSTED say to=#partner-acme (C0456EFGH) case=external entry=cli
