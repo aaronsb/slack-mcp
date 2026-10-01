@@ -641,7 +641,10 @@ clearable:
   for this instance, and returns the link. The page lists each
   quarantined person and conversation and the strike count or lock, each
   with the failure type: the scanner class and where it matched, the
-  only facts the file keeps. It never shows a matched value, which the
+  only facts the file keeps. While the server holds writes after a block
+  it could not record, the strike row shows too, and clearing it writes
+  the clear of strikes that releases the hold where places compare (The
+  strike lock). It never shows a matched value, which the
   file does not store, or a Slack ID. Each row has a checkbox. **Clear**
   appends a clear entry for each checked row, marked `by=web`; **Done**
   closes the page without clearing. Either one stops that server

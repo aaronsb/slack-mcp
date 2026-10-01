@@ -219,3 +219,30 @@ func TestUnreadableStateOffersOnlyDone(t *testing.T) {
 		t.Fatalf("page: %s", body)
 	}
 }
+
+// The in-memory hold after an unrecorded block has no strikes in the file;
+// the page still offers the strike row, and clearing it writes the clear
+// that releases the hold.
+func TestHeldWritesOfferTheStrikeRow(t *testing.T) {
+	isolate(t)
+	ws, err := safety.OpenDir(t.TempDir(), org, safety.Strict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := Start(ws.Quarantine, Options{Listen: ephemeral, Held: func() bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(in.Stop)
+	_, body := get(t, in.URL())
+	if !strings.Contains(body, "Writes held") || !strings.Contains(body, `value="clear"`) {
+		t.Fatalf("page: %s", body)
+	}
+	before := ws.Quarantine.State().Position
+	if code, b := post(t, in, self(in), url.Values{"action": {"clear"}, "row": {"0"}}); code != http.StatusOK || !strings.Contains(b, "Cleared 1.") {
+		t.Fatalf("POST %d: %s", code, b)
+	}
+	if !ws.Quarantine.State().ClearedStrikesAfter(before) {
+		t.Fatal("no clear of strikes written after the hold")
+	}
+}

@@ -40,8 +40,11 @@ type Store interface {
 type Options struct {
 	Name     func(safety.Key) string
 	Describe func(safety.Reason) string
-	Now      func() time.Time
-	Idle     time.Duration
+	// Held reports the server's in-memory hold after a block the file
+	// could not record; the strike row then shows even with no strikes.
+	Held func() bool
+	Now  func() time.Time
+	Idle time.Duration
 	// Listen returns the port and listener; setup.FindPort by default.
 	Listen func() (int, net.Listener, error)
 }
@@ -82,6 +85,9 @@ func Start(store Store, opts Options) (*Instance, error) {
 	}
 	if opts.Name == nil {
 		opts.Name = func(k safety.Key) string { return k.Name }
+	}
+	if opts.Held == nil {
+		opts.Held = func() bool { return false }
 	}
 	if opts.Describe == nil {
 		opts.Describe = func(r safety.Reason) string { return r.Class }
@@ -180,12 +186,17 @@ func (in *Instance) list() view {
 		return v
 	}
 	v.Malformed = len(st.Malformed)
-	if st.Strikes > 0 || st.LockEngaged() {
+	held := in.opts.Held()
+	if st.Strikes > 0 || st.LockEngaged() || held {
 		title := fmt.Sprintf("Strikes: %d of %d", st.Strikes, st.Limit)
 		scope := "Another block engages the strike lock."
-		if st.LockEngaged() {
+		switch {
+		case st.LockEngaged():
 			title = fmt.Sprintf("Strike lock engaged (%d of %d)", st.Strikes, st.Limit)
 			scope = "Every message and read receipt is refused, to anyone."
+		case held:
+			title = "Writes held: a block could not be recorded"
+			scope = "Every message and read receipt is refused, to anyone. Clearing the strikes releases the hold unless the safety state was replaced or unreadable since; then approve the pending lift request with slack-mcp approve, or restart the server."
 		}
 		lr := row{Key: safety.StrikesKey, Title: title, Scope: scope}
 		for _, rs := range st.StrikeReasons {

@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/lifecycle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
@@ -68,6 +69,10 @@ func unlockHandler(ctx context.Context, params map[string]interface{}) (*Feature
 	in, err := startUnlock(ws.Quarantine, unlock.Options{
 		Name:     func(k safety.Key) string { return keyName(ap, k) },
 		Describe: func(r safety.Reason) string { return describeReason(ap, r) },
+		Held: func() bool {
+			held, _ := ws.UnrecordedHeld(time.Now())
+			return held
+		},
 	})
 	if err == nil {
 		unlockPage = in
