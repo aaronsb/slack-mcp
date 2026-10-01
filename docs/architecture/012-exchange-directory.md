@@ -12,6 +12,10 @@ amendment to ADR-008 that lands with #61.
 The read side (`say files=`) and the write side (`download`) ship in the
 same release.
 
+Amended 2026-09-30: a missing name answers with the matching names, and
+an explicit `filename=` that is taken is suffixed like a Slack-supplied
+one. ADR-013 adds the outbound checks this ADR handed on.
+
 ## Context
 
 Three features move bytes between the local disk and Slack. `download`
@@ -90,10 +94,12 @@ not depend on it.
 
 ### The override is a foot-gun guard, not the boundary
 
-The override is operator configuration. Injected content cannot set an
-environment variable, so the threat this ADR addresses cannot move the
-directory. The override checks catch an operator pointing it somewhere
-that makes bare names dangerous. They run on every file operation, like
+The override is operator configuration, taken only from the process
+environment the MCP client sets. Injected content cannot set that
+environment, and ADR-014 refuses to start when a `.env` file supplies
+any key outside its allowlist, so the threat this ADR addresses cannot
+move the directory through configuration. The override checks catch an
+operator pointing it somewhere that makes bare names dangerous. They run on every file operation, like
 the checks above.
 
 They compare by file identity, not by string. Each path is resolved
@@ -173,35 +179,47 @@ for the link count.
 - Size and count limits are checked from that `Stat`, and the read is
   bounded by the limit, since the file can grow after the check.
 
-A missing name answers with a correction hint: the names closest to the
-one requested, up to a fixed cap, with the directory's total count. It
-is a correction aid on a failed call, not a listing. It departs from
-ADR-009's rule that a cap never bounds reachability: names beyond the
-cap are not reachable through it. That is acceptable for a hint whose
-job is to fix a near miss, and a page of it would need a next call
-through `say`, a verb that posts to Slack.
+A missing name answers with the files in the directory whose names
+match the one requested. A stem is the name without its extension, the
+extension as defined under Writes, so the stem of `.env` is `.env` and
+no valid name has an empty stem. Names are compared under Unicode simple
+case folding, the folding `strings.EqualFold` uses. A name matches when
+it contains the requested name's stem, or when its own stem is contained
+in the requested name. Matches are listed alphabetically, capped, with
+the count of all matches. The call still makes zero Slack calls and
+posts nothing; the agent retries with a listed name.
 
-A sandboxed client that cannot see the server's filesystem has no way to
-enumerate the exchange directory in v1. If one is needed, a read-only
-listing is a view or parameter on a noun under ADR-009, not a verb, and
-is deferred.
+The answer is a correction aid, but an agent can enumerate the
+directory with it by varying the requested name: a one-letter stem
+matches every name containing that letter. Each answer is still capped,
+so a large directory takes many failed calls to list. That departs from
+ADR-009's rule that a cap never bounds reachability, and is accepted for
+a hint whose job is to fix a near miss; a page of it would need a next
+call through `say`, a verb that posts to Slack.
+
+A sandboxed client that cannot see the server's filesystem has no
+direct way to list the exchange directory in v1, only the enumeration
+above. If one is needed, a read-only listing is a view or parameter on a
+noun under ADR-009, not a verb, and is deferred.
 
 ### Writes
 
 `download` creates its file through the root with `O_EXCL` at mode
 0600.
 
-A caller's `filename` is validated before any Slack call. It is refused,
-not sanitized, since an explicit name that came back changed would hide
-the caller's mistake, and it is never suffixed: when that name is taken,
-the call fails with an error naming the existing file.
+A caller's `filename` is validated before any Slack call. A malformed
+one is refused, not sanitized: a name that fails the bare-name rule is
+the shape of an attempt to reach outside the directory, and silently
+repairing it would hide that.
 
 Without `filename`, the server sanitizes Slack's `file.Name` into a
 valid bare name: each refused character becomes `_`, trailing dots and
 spaces are dropped, a device-name stem gets a leading `_`, an over-long
 name is truncated at a rune boundary keeping its extension, and an empty
-result falls back to the file ID. When that name is taken, the server
-tries a suffix before the extension, where the extension is what
+result falls back to the file ID.
+
+When the name is taken, whether the caller gave it or Slack did, the
+server tries a suffix before the extension, where the extension is what
 `filepath.Ext` returns unless the only dot is the leading one:
 
 | Name | Suffixed |
@@ -215,8 +233,9 @@ It tries the name and up to 99 suffixes, 100 attempts in all, then
 fails naming the collision and suggesting a `filename=` that is free. A
 suffixed name that would exceed the length limit truncates the stem.
 
-The output reports the name used and the absolute path. The path is for
-display; the server never opens anything by it.
+The output reports the name used and the absolute path. A suffixed name
+is stated as a rename: `budget.xlsx existed; saved as budget (1).xlsx`.
+The path is for display; the server never opens anything by it.
 
 ### `download` writes only to the exchange directory
 
@@ -247,6 +266,39 @@ ADR-009's verb test (a capability is its own tool only if invoking it
 changes the world) does not decide this: copying and deleting files do
 change the world. The ground is that the change belongs to the client.
 
+## Amendment (2026-09-30): misses and collisions
+
+Two failures that cost the agent a round trip without protecting
+anything now answer in the same call. The Reads and Writes sections
+above carry the amended rules.
+
+### A missing name lists its matches
+
+Before: the names closest to the one requested, by an unstated
+distance. After: the names that match it by stem under the rule in
+Reads, in alphabetical order, capped, with the count of all matches. A
+match rule the agent can predict is one it can act on; a distance
+ranking was a second guess at what the agent meant. The rule also lets
+the agent enumerate the directory, as Reads states.
+
+### An explicit name that is taken is suffixed
+
+Before: an explicit `filename=` that was taken failed, on the ground
+that a changed name would hide the caller's mistake. After: it takes
+the same `name (n).ext` suffix as a Slack-supplied name, bounded at the
+same 100 attempts, and the output states the rename in the words of the
+example above. The plain statement keeps the collision visible, which
+was the point of refusing; the refusal added only a retry in which the
+agent picked the suffix itself.
+
+Malformed explicit names are still refused before any Slack call, for
+the reason under Writes.
+
+### Still no rename, move, or delete verb
+
+Unchanged: renaming or deleting a file in the exchange directory is the
+client's job, as above. The operator may revisit this.
+
 ## Consequences
 
 ### Positive
@@ -268,8 +320,8 @@ change the world. The ground is that the change belongs to the client.
   while its other name exists.
 - Files accumulate. Nothing is deleted automatically; the directory is
   the operator's to clean.
-- A sandboxed client that cannot see the server's filesystem cannot
-  enumerate the exchange directory.
+- A sandboxed client that cannot see the server's filesystem can list
+  the exchange directory only through failed `say files=` calls.
 - When the server runs on a different host from the client (the
   experimental remote deployment, or SSE bound to a non-loopback host),
   the exchange directory is on the server's host and the agent's file
@@ -290,9 +342,9 @@ change the world. The ground is that the change belongs to the client.
 - Download-then-attach moves a file between conversations entirely
   through tool parameters: `download` from a private channel, then
   `say files=` to a public one. This ADR bounds where files live, not
-  where they go. Secret scanning, quarantine of downloads, and
-  confirmation for sensitive destinations are handed to the forthcoming
-  outbound-safety ADR.
+  where they go. ADR-013 decides where they go: a secret scan on every
+  `say`, quarantine of the destination on a match, and operator approval
+  for a file that moves between conversations.
 - Some filesystems report a link count of 1 for every file, which
   disables the hard-link rule on them.
 - On Windows the override guard is only the refusal list. It misses
@@ -341,6 +393,8 @@ second breaking change.
 
 - ADR-009: the surface these parameters live on, its verb test, and its
   echo and paging laws.
+- ADR-013: outbound safety. This ADR is its first layer: nothing outside
+  the exchange directory can be named.
 - ADR-008: as accepted, it defers graph reports to a localhost page
   embedded in the binary. The graph-report amendment to ADR-008 that
   lands with #61 writes them as files under `<DataDir>/reports/`; this
