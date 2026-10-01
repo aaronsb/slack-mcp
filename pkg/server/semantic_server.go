@@ -117,18 +117,7 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 		}
 
 		// Provide a callback so auth-setup can hot-load the provider after success
-		params["_setProvider"] = func(p *provider.ApiProvider) {
-			s.provider.Store(p)
-			log.Println("Provider hot-loaded after successful auth setup")
-			go provider.Guard("post-auth-boot", func() {
-				log.Println("Booting provider in background after auth...")
-				if _, err := p.Provide(); err != nil {
-					log.Printf("Warning: post-auth provider boot failed: %v", err)
-				} else {
-					log.Println("Provider booted successfully after auth")
-				}
-			})
-		}
+		params["_setProvider"] = s.swapProvider
 
 		// Add provider to params for features that need it
 		p := s.provider.Load()
@@ -159,6 +148,30 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature) {
 
 	// Register the tool
 	s.server.AddTool(mcp.NewTool(feature.Name, toolOptions...), handler)
+}
+
+// swapProvider installs p as the live provider after auth and boots it in the
+// background. The old provider is shut down first: flock is per open file, so
+// while it still holds the estate and attention ledgers the new provider's
+// Open loses the writer election and boots read-only (#108). The new provider
+// opens its ledgers only when it boots, which happens after the shutdown.
+//
+// Residual race: a tool call that loaded the old provider before the swap may
+// still be running on it and will see a shut-down provider.
+func (s *SemanticMCPServer) swapProvider(p *provider.ApiProvider) {
+	if old := s.provider.Load(); old != nil && old != p {
+		old.Shutdown()
+	}
+	s.provider.Store(p)
+	log.Println("Provider hot-loaded after successful auth setup")
+	go provider.Guard("post-auth-boot", func() {
+		log.Println("Booting provider in background after auth...")
+		if _, err := p.Provide(); err != nil {
+			log.Printf("Warning: post-auth provider boot failed: %v", err)
+		} else {
+			log.Println("Provider booted successfully after auth")
+		}
+	})
 }
 
 // createToolOption converts schema properties to MCP tool options
