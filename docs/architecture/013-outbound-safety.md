@@ -70,10 +70,11 @@ sections below carry the rules.
   a line break, so a cloud service-account key file matches. A PuTTY
   key's body is the `N` lines `Private-Lines: N` declares, with at least
   40 base64 characters, so Ed25519 and ECDSA keys match.
-- Credential URL: a user part holding `?`, `#`, `&`, or `=` is a query
-  or fragment, not userinfo.
+- Credential URL: a user part holding `?` or `#` is a query or
+  fragment, not userinfo; `&` and `=` are legal in userinfo.
 - JWT: only a header start that can begin a JSON object's base64 counts
-  toward a cap of 16 starts per run.
+  toward a cap of 16 starts per run, tried nearest the `.` first so a
+  crafted prefix of starts cannot spend the cap.
 - Budget: every decoded buffer costs at least 64 bytes, so memory
   follows the budget whatever the input's shape.
 - Env secret: in the joined `rich_text` form an element's line ends at
@@ -165,8 +166,8 @@ boundary means it ends the input or precedes such a byte.
 | AWS access key | left boundary, `AKIA` or `ASIA`, exactly 16 of `[A-Z0-9]`, right boundary |
 | GitHub token | left boundary, `ghp_`, `gho_`, `ghu_`, `ghs_`, or `ghr_` and at least 36 of `[A-Za-z0-9]`; or `github_pat_` and at least 82 of `[A-Za-z0-9_]` |
 | Model-provider key | left boundary, `sk-`, a lowercase word `[a-z]+`, `-`, and at least 32 of `[A-Za-z0-9_-]` (`sk-ant-`, `sk-proj-`, `sk-svcacct-`, `sk-admin-`); or `sk-` and at least 40 of `[A-Za-z0-9]` |
-| JWT | left boundary, three `.`-separated segments of `[A-Za-z0-9_-]`: a header of at least 10 characters, a payload of at least 10, and a signature of at least 16; the header base64url-decodes, padding optional, to a JSON object with a string member `alg`. Inside a run of `[A-Za-z0-9_-]` a header can start only at the run's start or after a `-` or `_`; only starts whose first character is `e`, `I`, `C`, or `D` (the base64 of `{` or of a leading space, tab, newline, or carriage return) are tried, at most 16 per run |
-| Credential URL | `scheme://user:password@host` anywhere, with a non-empty password that is not a placeholder (below) and not, case-insensitive, `password`, `pass`, or `secret`, and a user part (possibly empty) holding none of `?`, `#`, `&`, or `=`; the password may hold `#` |
+| JWT | left boundary, three `.`-separated segments of `[A-Za-z0-9_-]`: a header of at least 10 characters, a payload of at least 10, and a signature of at least 16; the header base64url-decodes, padding optional, to a JSON object with a string member `alg`. Inside a run of `[A-Za-z0-9_-]` a header can start only at the run's start or after a `-` or `_`; only starts whose first character is `e`, `I`, `C`, or `D` (the base64 of `{` or of a leading space, tab, newline, or carriage return) are tried, nearest the first `.` first, at most 16 per run |
+| Credential URL | `scheme://user:password@host` anywhere, with a non-empty password that is not a placeholder (below) and not, case-insensitive, `password`, `pass`, or `secret`, and a user part (possibly empty) holding neither `?` nor `#` (`&` and `=` are legal userinfo); the password may hold `#` |
 | Env secret | a line `NAME=value`, below |
 
 A private-key header with no key body after it (code that parses PEM
@@ -195,7 +196,8 @@ when a word, case-insensitive, is one of `SECRET`, `SECRETS`,
 `SECRETKEY`, `ACCESSKEY`, `PRIVATEKEY`, `AUTHTOKEN`, `CREDENTIAL`,
 `CREDENTIALS`, or `AUTH`, and no word is `PUBLIC` or `PUB`. Whole words
 keep `MONKEY`, `AUTHOR`, and `BYPASS` out. The value is taken without
-surrounding quotes; an unquoted value ends at ` #`. `NAME` must start a
+surrounding quotes; an unquoted value ends at a `#` after a space or
+tab, as dotenv parsers and the shell read a comment. `NAME` must start a
 line in at least one scanned form. In the joined `rich_text` form, the
 start of each inline element counts as a line start, and that line ends
 at the next element's start, so a whole code element
