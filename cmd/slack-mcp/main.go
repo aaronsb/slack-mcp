@@ -13,7 +13,6 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/server"
 	"github.com/aaronsb/slack-mcp/pkg/setup"
-	"github.com/joho/godotenv"
 )
 
 var defaultSseHost = "127.0.0.1"
@@ -44,9 +43,12 @@ func main() {
 		}
 	}
 
-	// Load .env file if it exists
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	// .env may set only the allowlisted keys; anything else must come from
+	// the client environment. Stderr, because stdio logging goes to a file.
+	if err := loadDotEnv(".env", os.LookupEnv, os.Setenv); err != nil {
+		log.Print(err)
+		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
+		os.Exit(1)
 	}
 
 	// Refuse a deployment and idle-timeout combination that cannot help
