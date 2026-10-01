@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
@@ -146,6 +147,12 @@ func flowToFeatureResult(resp *setup.FlowResponse) *FeatureResult {
 	// Map FlowResponse actions to NextActions
 	var nextActions []string
 	for _, a := range resp.Actions {
+		// The flow names a choice as "select:<x>"; the tool takes it as
+		// action="select" value="<x>", so the hint says it that way.
+		if v, ok := strings.CutPrefix(a, "select:"); ok {
+			nextActions = append(nextActions, fmt.Sprintf("auth action=\"select\" value=%q", v))
+			continue
+		}
 		nextActions = append(nextActions, fmt.Sprintf("auth action=%q", a))
 	}
 

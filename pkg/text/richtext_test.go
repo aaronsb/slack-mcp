@@ -265,9 +265,9 @@ func TestToRichTextBoldLineIsNotABullet(t *testing.T) {
 }
 
 // ported: test_plain_preview_round_trip
-func TestRichTextToPlainRoundTrip(t *testing.T) {
+func TestRichTextToMrkdwnRoundTrip(t *testing.T) {
 	in := "Hi <@U0123ABCD>\n- a\n  - b\n> q"
-	if got := RichTextToPlain([]slack.Block{ToRichText(in)}); got != in {
+	if got := RichTextToMrkdwn([]slack.Block{ToRichText(in)}); got != in {
 		t.Fatalf("round trip\n got %q\nwant %q", got, in)
 	}
 }
@@ -399,5 +399,20 @@ func TestToRichTextSectionAfterListHasNoLeadingBlank(t *testing.T) {
 	got := generic(t, els[1].(*slack.RichTextSection).Elements)
 	if !reflect.DeepEqual(got, decode(t, `[{"type":"text","text":"after\n\nmore"}]`)) {
 		t.Fatalf("section: %s", mustJSON(got))
+	}
+}
+
+// What say posts reads back as written: lines, ordered and bullet lists,
+// quotes, code, inline styles, links, and escaped entities.
+func TestRichTextToMrkdwnRoundTripsAComposedMessage(t *testing.T) {
+	in := "*Smoke test* for <@U0123ABCD>\n" +
+		"*Bold*, _italic_, ~strike~, `code`, and a <https://example.com/?a=1&amp;b=2|named link>.\n" +
+		"> quote one\n> quote two\n" +
+		"- bullet one\n- bullet with *bold* inside\n" +
+		"1. first\n2. second\n" +
+		"```if a &lt; b &amp;&amp; c &gt; d {}```\n" +
+		"Emoji :rocket: and 3 &lt; 4"
+	if got := RichTextToMrkdwn([]slack.Block{ToRichText(in)}); got != in {
+		t.Fatalf("round trip\n got %q\nwant %q", got, in)
 	}
 }

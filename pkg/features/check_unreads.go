@@ -6,7 +6,6 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
-	"strings"
 )
 
 // CheckUnreads provides a comprehensive view of all unread activity
@@ -177,10 +176,8 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 
 		// Process mentions in channels
 		if !isDM && (focus == "all" || focus == "mentions") {
-			mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
-
 			for _, msg := range resp.Messages {
-				if strings.Contains(msg.Text, mentionPattern) {
+				if mentionsUser(msg, currentUserID) {
 					rm := renderer.Render(msg)
 					authorName := rm.Author
 					isUrgent := categorizeUrgency(msg.Text) == "high"

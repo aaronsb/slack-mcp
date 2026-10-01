@@ -84,10 +84,12 @@ func readHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 		return readRef(ctx, apiProvider, api, ref, limit)
 	}
 
-	// '@' names a person: the read-policy ladder and resolution since=
-	// uses, so '@me' is the self-DM rather than every conversation
-	// containing "me", and a DM the cache has not seen yet is still found.
-	if strings.HasPrefix(target, "@") {
+	// '@' names a person and a bare ID names a conversation: both take the
+	// read-policy ladder and resolution since= uses, so '@me' is the
+	// self-DM rather than every conversation containing "me", a DM the
+	// cache has not seen yet is still found, and an ID reads like it does
+	// in say rather than being fuzzy-matched against names.
+	if strings.HasPrefix(target, "@") || provider.LooksLikeChannelID(target) {
 		convID, terr := resolveTarget(ctx, apiProvider, target, provider.ReadPolicy, "target")
 		if terr != nil {
 			return terr.result(), nil
