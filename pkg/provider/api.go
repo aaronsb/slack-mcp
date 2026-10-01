@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/cache"
@@ -54,14 +55,10 @@ type ApiProvider struct {
 	dmMap      map[string]string
 	dmMapMutex sync.RWMutex
 
-	// Authenticated user identity
-	selfUserID string
-	selfUser   string
-	selfTeam   string
-	selfTeamID string
-	// selfEnterpriseID is the Enterprise Grid organization, or empty
-	// outside Grid (ADR-013, gate case 1).
-	selfEnterpriseID string
+	// identity is the authenticated account, stored once by
+	// captureIdentity during boot. Handlers read it while a background boot
+	// may be writing it, so it is swapped whole, never mutated.
+	identity atomic.Pointer[selfIdentity]
 
 	// Cache persistence
 	store *cache.Store
@@ -122,10 +119,30 @@ type providerConfig struct {
 	// endpoint. Empty means normal team-endpoint discovery via auth.test.
 	baseURL string
 
+	// account seeds the identity before boot.
+	account *selfIdentity
+
 	// estateSweepInterval overrides the 24h estate sweep cadence. Zero
 	// keeps the default. A construction option only — no env var and no
 	// CLI flag, because the estate maintains itself.
 	estateSweepInterval time.Duration
+}
+
+// Account is the account auth.test reported before the provider was built.
+type Account struct {
+	Team, TeamID, EnterpriseID, UserID, User string
+}
+
+// WithAccount seeds the provider's identity with the account the caller's
+// startup auth.test reported, so the account's organization is known
+// before boot without a Slack call (ADR-013: the strike lock is a local
+// check). Boot's own auth.test replaces it.
+func WithAccount(a Account) Option {
+	return func(c *providerConfig) {
+		if a.TeamID != "" {
+			c.account = &selfIdentity{userID: a.UserID, user: a.User, team: a.Team, teamID: a.TeamID, enterpriseID: a.EnterpriseID}
+		}
+	}
 }
 
 // WithEstateSweepInterval overrides how often the estate sweep runs. Meant
@@ -190,6 +207,9 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 		dmMap:               make(map[string]string),
 		store:               store,
 		estateSweepInterval: cfg.estateSweepInterval,
+	}
+	if cfg.account != nil {
+		ap.identity.Store(cfg.account)
 	}
 
 	return ap
@@ -267,6 +287,22 @@ func (ap *ApiProvider) Shutdown() {
 	})
 }
 
+// selfIdentity is the account auth.test reported at boot. enterpriseID is
+// the Enterprise Grid organization, or empty outside Grid (ADR-013, gate
+// case 1).
+type selfIdentity struct {
+	userID, user, team, teamID, enterpriseID string
+}
+
+// me returns the captured identity, or the zero value before boot has
+// captured one.
+func (ap *ApiProvider) me() selfIdentity {
+	if id := ap.identity.Load(); id != nil {
+		return *id
+	}
+	return selfIdentity{}
+}
+
 func (ap *ApiProvider) captureIdentity() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -275,11 +311,10 @@ func (ap *ApiProvider) captureIdentity() {
 		log.Printf("Could not capture identity: %v", err)
 		return
 	}
-	ap.selfUserID = res.UserID
-	ap.selfUser = res.User
-	ap.selfTeam = res.Team
-	ap.selfTeamID = res.TeamID
-	ap.selfEnterpriseID = res.EnterpriseID
+	ap.identity.Store(&selfIdentity{
+		userID: res.UserID, user: res.User, team: res.Team,
+		teamID: res.TeamID, enterpriseID: res.EnterpriseID,
+	})
 	// Named fields only; see boot on why the response is never logged whole.
 	log.Printf("Authenticated: team=%s user=%s", res.Team, res.User)
 }
@@ -813,20 +848,21 @@ type Identity struct {
 
 // ProvideIdentity returns the authenticated user's identity
 func (ap *ApiProvider) ProvideIdentity() *Identity {
-	if ap.selfUserID == "" {
+	self := ap.me()
+	if self.userID == "" {
 		return nil
 	}
 
 	id := &Identity{
-		UserID:   ap.selfUserID,
-		Username: ap.selfUser,
-		Team:     ap.selfTeam,
-		TeamID:   ap.selfTeamID,
+		UserID:   self.userID,
+		Username: self.user,
+		Team:     self.team,
+		TeamID:   self.teamID,
 	}
 
 	// Enrich from users cache
 	ap.usersMutex.RLock()
-	if user, ok := ap.users[ap.selfUserID]; ok {
+	if user, ok := ap.users[self.userID]; ok {
 		if user.RealName != "" {
 			id.DisplayName = user.RealName
 		}
@@ -1242,7 +1278,8 @@ func (ap *ApiProvider) CheckUploadURL(raw string) error {
 // outside Grid), and own user ID, as auth.test reported them at boot. All
 // three are empty until the provider has booted.
 func (ap *ApiProvider) Organization() (teamID, enterpriseID, userID string) {
-	return ap.selfTeamID, ap.selfEnterpriseID, ap.selfUserID
+	id := ap.me()
+	return id.teamID, id.enterpriseID, id.userID
 }
 
 // FetchConversationInfo calls conversations.info for id, whatever the

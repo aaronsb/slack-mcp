@@ -34,7 +34,8 @@ func (ap *ApiProvider) attn() *estate.AttentionStore {
 // session's own user ID: two operators' agents see different traffic and
 // must not mix ledgers. Failure degrades to nil, same as the estate.
 func (ap *ApiProvider) openAttention() {
-	if ap.selfTeamID == "" || ap.selfUserID == "" {
+	self := ap.me()
+	if self.teamID == "" || self.userID == "" {
 		log.Printf("Attention ledger disabled: no identity captured")
 		return
 	}
@@ -43,7 +44,7 @@ func (ap *ApiProvider) openAttention() {
 	if ap.isClosed() {
 		return
 	}
-	att, err := estate.OpenAttention(ap.selfTeamID, ap.selfUserID, time.Now())
+	att, err := estate.OpenAttention(self.teamID, self.userID, time.Now())
 	if err != nil {
 		log.Printf("Attention ledger unavailable: %v", err)
 		return
@@ -79,7 +80,7 @@ func (ap *ApiProvider) ObserveEncounters(conv string, samples []EncounterSample)
 			continue
 		}
 		enc := estate.Encounter{User: s.User, Conv: conv, Day: ts.UTC().Format("2006-01-02")}
-		if s.User == ap.selfUserID {
+		if s.User == ap.me().userID {
 			h := ts.UTC().Hour()
 			enc.Hour = &h
 		}

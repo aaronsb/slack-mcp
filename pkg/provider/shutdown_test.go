@@ -82,7 +82,7 @@ func TestLedgerOpenAfterShutdownTakesNoFlock(t *testing.T) {
 	const team, self = "T0LATE", "U0SELF"
 
 	ap := NewWithTokens("xoxc-test", "xoxd-test")
-	ap.selfTeamID, ap.selfUserID = team, self
+	ap.identity.Store(&selfIdentity{teamID: team, userID: self})
 	ap.Shutdown()
 	ap.openEstate()
 	ap.openAttention()

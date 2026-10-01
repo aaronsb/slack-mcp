@@ -148,6 +148,10 @@ func main() {
 	}
 }
 
+func providerAccount(a setup.Account) provider.Account {
+	return provider.Account{Team: a.Team, TeamID: a.TeamID, EnterpriseID: a.EnterpriseID, UserID: a.UserID, User: a.User}
+}
+
 // looksLikeToken returns true if the value matches Slack token format.
 // Env vars from mcpb may contain stale or placeholder values — only use
 // them when they look like real tokens.
@@ -190,7 +194,7 @@ func loadProvider() (*provider.ApiProvider, setup.Account, error) {
 				log.Println("Clearing stale setup flow state")
 				cfg.ClearFlow()
 			}
-			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken), account, nil
+			return provider.NewWithTokens(ws.XoxcToken, ws.XoxdToken, provider.WithAccount(providerAccount(account))), account, nil
 		}
 	}
 
@@ -206,7 +210,7 @@ func loadProvider() (*provider.ApiProvider, setup.Account, error) {
 			return nil, setup.Account{}, fmt.Errorf("environment tokens are invalid (%v) — run auth-setup to configure", err)
 		}
 		log.Println("Environment tokens authenticated successfully")
-		return provider.NewWithTokens(token, cookie), account, nil
+		return provider.NewWithTokens(token, cookie, provider.WithAccount(providerAccount(account))), account, nil
 	}
 
 	if token != "" || cookie != "" {

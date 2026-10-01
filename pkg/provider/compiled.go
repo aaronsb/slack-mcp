@@ -132,5 +132,5 @@ func (ap *ApiProvider) AttentionByConversation() map[string]map[string][]string 
 // SelfUserID exposes the session's own user ID for the views' asymmetric
 // treatment of the operator.
 func (ap *ApiProvider) SelfUserID() string {
-	return ap.selfUserID
+	return ap.me().userID
 }
