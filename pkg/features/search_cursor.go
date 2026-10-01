@@ -41,8 +41,10 @@ type searchCursor struct {
 	Version int    `json:"v"`
 	Page    int    `json:"p"`
 	Count   int    `json:"c"`
-	Since   string `json:"s"` // window start, YYYY-MM-DD
-	Widened bool   `json:"w,omitempty"`
+	Since   string `json:"s"` // window start, YYYY-MM-DD; "" when Unbounded
+	// Unbounded marks a window with no lower bound (before= or raw date text).
+	Unbounded bool `json:"u,omitempty"`
+	Widened   bool `json:"w,omitempty"`
 	// Timeframe is the caller's explicit timeframe ("" when defaulted), so a
 	// continuation that passes a different one is refused like a changed limit.
 	Timeframe string `json:"t,omitempty"`
@@ -82,7 +84,7 @@ func decodeSearchCursor(s string) (searchCursor, error) {
 	if c.Page < 1 || c.Page > searchMaxPage || c.Count < 1 || c.Count > searchMaxCount || c.Digest == "" {
 		return c, fmt.Errorf("not a search cursor")
 	}
-	if _, err := time.Parse("2006-01-02", c.Since); err != nil {
+	if _, err := time.Parse("2006-01-02", c.Since); err != nil && !(c.Unbounded && c.Since == "") {
 		return c, fmt.Errorf("not a search cursor")
 	}
 	return c, nil

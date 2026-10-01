@@ -586,21 +586,29 @@ func formatSearch(result *FeatureResult) string {
 	query := str(data, "query")
 	results := asList(data["results"])
 
-	b.WriteString(fmt.Sprintf("## Search: \"%s\" (%d results)\n\n", query, len(results)))
+	if query == "" {
+		b.WriteString(fmt.Sprintf("## Search by filters (%d results)\n\n", len(results)))
+	} else {
+		b.WriteString(fmt.Sprintf("## Search: \"%s\" (%d results)\n\n", query, len(results)))
+	}
 
 	if sent := str(data, "effectiveQuery"); sent != "" {
 		b.WriteString("Sent to Slack: " + sent + "\n")
 	}
+	wroteLine := str(data, "effectiveQuery") != ""
 	if cov, ok := data["coverage"].(map[string]interface{}); ok {
 		for _, r := range asList(cov["fromResolved"]) {
 			b.WriteString(fmt.Sprintf("from %s -> @%s\n", str(r, "input"), str(r, "handle")))
+			wroteLine = true
 		}
 		for _, r := range asList(cov["inResolved"]) {
 			b.WriteString(fmt.Sprintf("in %s -> %s\n", str(r, "input"), str(r, "resolved")))
+			wroteLine = true
 		}
 	}
-	b.WriteString("\n")
-
+	if wroteLine {
+		b.WriteString("\n")
+	}
 	if len(results) == 0 && result.Message != "" {
 		b.WriteString(result.Message + "\n")
 	}

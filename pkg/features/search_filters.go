@@ -18,6 +18,8 @@ type searchFilters struct {
 	channels    []string
 	inResolved  []map[string]interface{}
 	after       string // YYYY-MM-DD, "" when not passed
+	afterRaw    string // as passed (3d or a date); the digest hashes this
+	beforeRaw   string
 	before      string // YYYY-MM-DD, "" when not passed
 	has         []string
 	thread      bool
@@ -33,16 +35,26 @@ var hasEmojiRe = regexp.MustCompile(`^:[a-z0-9_+\-']+:$`)
 // has:file and has:star forms are unverified and not offered.
 const searchHasValues = "link, pin, or an :emoji: for a reaction"
 
-// Raw-text modifiers that collide with a structured parameter.
+// Raw-text modifiers that collide with a structured parameter. Each needs a
+// value-shaped token right after the colon (Slack modifiers take no space), so
+// prose like "check in: error" or "blocked on: deploy" is not a modifier.
+// Quoted phrases are ignored.
+const dateValue = `("?)(\d|today|yesterday|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|spring|summer|fall|autumn|winter)`
+
 var rawModifier = map[string]*regexp.Regexp{
-	"in":     regexp.MustCompile(`(?i)(^|\s)-?in:`),
-	"from":   regexp.MustCompile(`(?i)(^|\s)-?from:`),
-	"after":  regexp.MustCompile(`(?i)(^|\s)after:`),
-	"before": regexp.MustCompile(`(?i)(^|\s)before:`),
-	"has":    regexp.MustCompile(`(?i)(^|\s)-?has:`),
+	"in":     regexp.MustCompile(`(?i)(^|\s)-?in:\S`),
+	"from":   regexp.MustCompile(`(?i)(^|\s)-?from:\S`),
+	"after":  regexp.MustCompile(`(?i)(^|\s)after:` + dateValue),
+	"before": regexp.MustCompile(`(?i)(^|\s)before:` + dateValue),
+	"has":    regexp.MustCompile(`(?i)(^|\s)-?has:(link|pin|star|files?|reaction|image|:)`),
 	"is":     regexp.MustCompile(`(?i)(^|\s)-?is:thread`),
 }
-var rawAnyDate = regexp.MustCompile(`(?i)(^|\s)(after|before|on|during):`)
+var rawOnDuring = regexp.MustCompile(`(?i)(^|\s)(on|during):` + dateValue)
+var rawAnyDate = regexp.MustCompile(`(?i)(^|\s)(after|before|on|during):` + dateValue)
+var quotedPhrase = regexp.MustCompile(`"[^"]*"`)
+
+// rawText is the query without quoted phrases, for modifier detection.
+func rawText(q string) string { return quotedPhrase.ReplaceAllString(q, " ") }
 
 func filterFailure(msg, guidance string) *FeatureResult {
 	return &FeatureResult{Success: false, Message: msg, Guidance: guidance}
@@ -68,6 +80,7 @@ func parseDateParam(name, v string) (string, *FeatureResult) {
 // parseSearchFilters validates and resolves the filters. A non-nil result is a
 // refusal: no search has run.
 func parseSearchFilters(ctx context.Context, p *provider.ApiProvider, query string, params map[string]interface{}) (*searchFilters, *FeatureResult) {
+	query = rawText(query)
 	f := &searchFilters{rawDatesSet: rawAnyDate.MatchString(query)}
 	conflict := func(name string) *FeatureResult {
 		return filterFailure(fmt.Sprintf("The query text already contains %s:, and %s= would add a second one.", name, name),
@@ -100,24 +113,43 @@ func parseSearchFilters(ctx context.Context, p *provider.ApiProvider, query stri
 	}
 
 	var err *FeatureResult
-	if s, _ := params["after"].(string); strings.TrimSpace(s) != "" {
+	afterRaw, _ := params["after"].(string)
+	beforeRaw, _ := params["before"].(string)
+	afterRaw, beforeRaw = strings.TrimSpace(afterRaw), strings.TrimSpace(beforeRaw)
+	timeframe, _ := params["timeframe"].(string)
+	if strings.TrimSpace(timeframe) != "" {
+		switch {
+		case afterRaw != "":
+			return nil, filterFailure("Both after= and timeframe= were passed.", "Pass after= or timeframe=, not both.")
+		case beforeRaw != "":
+			return nil, filterFailure("Both before= and timeframe= were passed.", "Pass timeframe= for the window start, or after=/before= for an explicit range, not both.")
+		case f.rawDatesSet:
+			return nil, filterFailure("timeframe= was passed with a date operator in the query text.", "Drop timeframe=: the date operator in query= already sets the window.")
+		}
+	}
+	if afterRaw != "" || beforeRaw != "" {
+		if rawOnDuring.MatchString(query) {
+			return nil, filterFailure("The query text already contains on: or during:, and after=/before= would add a second date bound.",
+				"Use the raw on:/during: in query=, or after=/before=, not both.")
+		}
+	}
+	if afterRaw != "" {
 		if rawModifier["after"].MatchString(query) {
 			return nil, conflict("after")
 		}
-		if tf, _ := params["timeframe"].(string); strings.TrimSpace(tf) != "" {
-			return nil, filterFailure("Both after= and timeframe= were passed.", "Pass after= or timeframe=, not both.")
-		}
-		if f.after, err = parseDateParam("after", s); err != nil {
+		if f.after, err = parseDateParam("after", afterRaw); err != nil {
 			return nil, err
 		}
+		f.afterRaw = afterRaw
 	}
-	if s, _ := params["before"].(string); strings.TrimSpace(s) != "" {
+	if beforeRaw != "" {
 		if rawModifier["before"].MatchString(query) {
 			return nil, conflict("before")
 		}
-		if f.before, err = parseDateParam("before", s); err != nil {
+		if f.before, err = parseDateParam("before", beforeRaw); err != nil {
 			return nil, err
 		}
+		f.beforeRaw = beforeRaw
 	}
 	if f.after != "" && f.before != "" && f.after > f.before {
 		return nil, filterFailure(fmt.Sprintf("after=%s is later than before=%s.", f.after, f.before), "Swap them, or widen the range.")
@@ -176,5 +208,23 @@ func (f *searchFilters) explicitWindow() bool {
 
 // digestParts feed searchDigest: every filter that decides what a page holds.
 func (f *searchFilters) digestParts() string {
-	return fmt.Sprintf("%q|%q|%q|%v|%q", f.channels, f.after, f.before, f.thread, f.has)
+	// The raw strings, not the resolved dates: a relative "3d" resolves to a
+	// different date after midnight, and a cursor must survive that.
+	return fmt.Sprintf("%q|%q|%q|%v|%q", f.channels, f.afterRaw, f.beforeRaw, f.thread, f.has)
+}
+
+// hasFilter reports whether any structured search filter is present.
+func hasFilter(params map[string]interface{}) bool {
+	for _, k := range []string{"in", "from", "has"} {
+		if len(stringList(params[k])) > 0 {
+			return true
+		}
+	}
+	for _, k := range []string{"after", "before"} {
+		if s, _ := params[k].(string); strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	t, _ := params["thread"].(bool)
+	return t
 }

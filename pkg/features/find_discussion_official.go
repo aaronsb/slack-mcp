@@ -112,7 +112,10 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		}
 		// The cursor pins the window that produced it, so page 2 of a search
 		// that widened stays in the widened window, and nothing re-widens.
-		since, _ = time.Parse("2006-01-02", cur.Since)
+		since = time.Time{}
+		if !cur.Unbounded {
+			since, _ = time.Parse("2006-01-02", cur.Since)
+		}
 		page, count, widened, continuing = cur.Page, cur.Count, cur.Widened, true
 		built = buildQueryFrom(query, since, filters, people)
 	} else {
@@ -189,20 +192,22 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	hasMore := shownPage < reachable
 
 	coverage := map[string]interface{}{
-		"page":          shownPage,
-		"pages":         pages,
-		"searchedSince": since.Format("2006-01-02"),
-		"window":        describeSearchWindow(since, widened, pinned),
-		"widened":       widened,
-		"channels":      channelNames(channels),
-		"from":          people,
-		"totalMatches":  messages.Total,
-		"returned":      len(results),
+		"page":         shownPage,
+		"pages":        pages,
+		"window":       describeSearchWindow(since, widened, pinned),
+		"widened":      widened,
+		"channels":     channelNames(channels),
+		"from":         people,
+		"totalMatches": messages.Total,
+		"returned":     len(results),
 		// Same meaning as read: complete means this response ends the result
 		// set, so the last page of a paged search is complete. It is false when
 		// more pages follow, when Slack's page cap hides the tail, or when Slack
 		// omitted paging and reported more matches than it returned.
 		"complete": !hasMore && !capped && (pages > 1 || messages.Total <= len(results)),
+	}
+	if !since.IsZero() {
+		coverage["searchedSince"] = since.Format("2006-01-02")
 	}
 	if capped {
 		coverage["reachablePages"] = reachable
@@ -230,7 +235,12 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	}
 
 	if hasMore {
-		next := searchCursor{Page: shownPage + 1, Count: count, Since: since.Format("2006-01-02"), Widened: widened, Digest: digest}
+		next := searchCursor{Page: shownPage + 1, Count: count, Widened: widened, Digest: digest}
+		if since.IsZero() {
+			next.Unbounded = true
+		} else {
+			next.Since = since.Format("2006-01-02")
+		}
 		if pinned {
 			next.Timeframe = strings.ToLower(strings.TrimSpace(timeframe))
 		}
@@ -244,7 +254,11 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	}
 
 	if len(results) == 0 {
-		result.Message = fmt.Sprintf("Nothing matching %q (%s).", query, coverage["window"])
+		if query == "" {
+			result.Message = fmt.Sprintf("Nothing matched the filters (%s).", coverage["window"])
+		} else {
+			result.Message = fmt.Sprintf("Nothing matching %q (%s).", query, coverage["window"])
+		}
 		if continuing {
 			result.Guidance = fmt.Sprintf("Page %d came back empty: the result set shrank since the cursor was issued (matches were deleted or edited). "+
 				"Rerun the search without cursor= to start over.", page)
@@ -261,7 +275,11 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		return result, nil
 	}
 
-	result.Message = fmt.Sprintf("%d results for %q.", len(results), query)
+	if query == "" {
+		result.Message = fmt.Sprintf("%d results for the filters.", len(results))
+	} else {
+		result.Message = fmt.Sprintf("%d results for %q.", len(results), query)
+	}
 	result.NextActions = []string{
 		"Read one in full: messages target='<handle from a result>'",
 	}

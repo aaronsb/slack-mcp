@@ -130,29 +130,29 @@ var Messages = &Feature{
 			"in": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "query only: narrow to a '#channel' or '@person' (DM); resolved by name, a miss returns candidates and does not search",
+				"description": "search: narrow to a '#channel' or '@person' (DM); resolved by name, a miss returns candidates and does not search. Several entries compose as repeated in: clauses; Slack's OR/AND behavior for repeats is unverified",
 			},
 			"from": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "query only: messages by these people; resolved through the person ladder, a miss returns candidates and does not search",
+				"description": "search: messages by these people; resolved through the person ladder, a miss returns candidates and does not search. Several entries compose as repeated from: clauses; Slack's OR/AND behavior for repeats is unverified",
 			},
 			"after": map[string]interface{}{
 				"type":        "string",
-				"description": "query only: YYYY-MM-DD (or 3d, 2w). Replaces the default window; not with timeframe",
+				"description": "search: YYYY-MM-DD (or 3d, 2w). Replaces the default window; not with timeframe",
 			},
 			"before": map[string]interface{}{
 				"type":        "string",
-				"description": "query only: YYYY-MM-DD (or 3d, 2w)",
+				"description": "search: YYYY-MM-DD (or 3d, 2w)",
 			},
 			"has": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "query only: 'link', 'pin', or a reaction as ':emoji:' (Slack's has::emoji:). Other values (file, star, bare reaction) are unverified and rejected",
+				"description": "search: 'link', 'pin', or a reaction as ':emoji:' (Slack's has::emoji:). Other values (file, star, bare reaction) are unverified and rejected",
 			},
 			"thread": map[string]interface{}{
 				"type":        "boolean",
-				"description": "query only: only messages in threads (is:thread)",
+				"description": "search: only messages in threads (is:thread)",
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
@@ -164,7 +164,7 @@ var Messages = &Feature{
 			},
 			"timeframe": map[string]interface{}{
 				"type":        "string",
-				"description": "query only: how far back to search (default 1w); not with after=",
+				"description": "search: how far back to search (default 1w); not with after=",
 			},
 		},
 		"required": []string{},
@@ -179,7 +179,14 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 	since, _ := params["since"].(string)
 
 	switch {
-	case query != "":
+	case query != "" || hasFilter(params):
+		if target != "" && hasFilter(params) {
+			return &FeatureResult{
+				Success:  false,
+				Message:  "target= cannot be combined with search filters.",
+				Guidance: "To search one place use in='#channel' or in='@person'; to read it, drop the filters.",
+			}, nil
+		}
 		// Echo what ran: the limit as Slack received it, not as passed.
 		shown := params
 		if lim, ok := explicitLimit(params); ok {
@@ -216,7 +223,7 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 	default:
 		return &FeatureResult{
 			Success: false,
-			Message: "messages needs an address: target='<handle|#channel|@person>' (optionally with around=<ts> or since=<window>), or query='<slack search>'",
+			Message: "messages needs an address: target='<handle|#channel|@person>' (optionally with around=<ts> or since=<window>), or query='<slack search>' and/or filters (in, from, after, before, has, thread)",
 		}, nil
 	}
 }

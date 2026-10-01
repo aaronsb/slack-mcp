@@ -190,7 +190,7 @@ func TestUnresolvableNamesFailWithCandidatesAndNoSearch(t *testing.T) {
 }
 
 func TestEachFilterChangesTheCursorDigest(t *testing.T) {
-	base := map[string]any{"query": "deploy", "timeframe": "3d"}
+	base := map[string]any{"query": "deploy"}
 	variants := map[string]map[string]any{
 		"in":     {"in": "#engineering"},
 		"before": {"before": "2026-09-10"},
@@ -252,5 +252,79 @@ func TestFiltersWorkInBatch(t *testing.T) {
 	}})
 	if len(queries) != 2 || queries[0] != queries[1] {
 		t.Errorf("batch query differs from direct: %q", queries)
+	}
+}
+
+func TestProseColonsAreNotModifiers(t *testing.T) {
+	for _, q := range []string{"blocked on: deploy", "meeting on: friday", "check in: error", `"after:2026-01-01" literal`} {
+		res, reqs := filterSearch(t, map[string]any{"query": q, "after": "2026-09-01", "in": "#engineering", "from": []any{"sarah"}, "has": []any{"link"}})
+		if !res.Success || len(*reqs) != 1 {
+			t.Errorf("%q refused or not searched: %q %q", q, res.Message, res.Guidance)
+		}
+	}
+	// Real modifiers still conflict.
+	for _, q := range []string{"x on:2026-01-01", "x during:january"} {
+		res, _ := filterSearch(t, map[string]any{"query": q, "after": "2026-09-01"})
+		if res.Success {
+			t.Errorf("%q with after= accepted", q)
+		}
+	}
+	// Prose "on: friday" is not a date operator, so the window is not pinned by it.
+	_, reqs := filterSearch(t, map[string]any{"query": "meeting on: friday"})
+	if !strings.Contains(lastQuery(reqs), "after:20") {
+		t.Errorf("prose suppressed the auto window: %q", lastQuery(reqs))
+	}
+}
+
+func TestTimeframeConflictsWithOtherDateBounds(t *testing.T) {
+	for name, p := range map[string]map[string]any{
+		"before":   {"query": "x", "before": "2026-09-01", "timeframe": "3d"},
+		"raw date": {"query": "x before:2026-09-01", "timeframe": "3d"},
+	} {
+		res, reqs := filterSearch(t, p)
+		if res.Success || len(*reqs) != 0 || !strings.Contains(res.Message, "timeframe") {
+			t.Errorf("%s: success=%v msg=%q searches=%d", name, res.Success, res.Message, len(*reqs))
+		}
+	}
+}
+
+func TestUnboundedWindowHasNoZeroDateAndPages(t *testing.T) {
+	run, reqs := pagedSearchWith(t, 3)
+	first := run(map[string]any{"query": "deploy", "before": "2026-09-10"})
+	cov := first.Data.(map[string]any)["coverage"].(map[string]any)
+	if _, ok := cov["searchedSince"]; ok {
+		t.Errorf("searchedSince reported for an unbounded window: %v", cov["searchedSince"])
+	}
+	out := features.FormatResult("search", first)
+	if strings.Contains(out, "0001") {
+		t.Errorf("zero date leaked:\n%s", out)
+	}
+	if first.Pagination == nil {
+		t.Fatal("no cursor")
+	}
+	second := run(map[string]any{"query": "deploy", "before": "2026-09-10", "cursor": first.Pagination.NextCursor})
+	if !second.Success {
+		t.Fatalf("page 2 refused: %s", second.Message)
+	}
+	if q := (*reqs)[1].query; strings.Contains(q, "after:") || !strings.Contains(q, "before:2026-09-10") {
+		t.Errorf("page 2 query %q", q)
+	}
+}
+
+func TestRelativeDigestSurvivesTheDateRollingOver(t *testing.T) {
+	run, _ := pagedSearchWith(t, 3)
+	first := run(map[string]any{"query": "deploy", "after": "3d"})
+	if first.Pagination == nil {
+		t.Fatal("no cursor")
+	}
+	if res := run(map[string]any{"query": "deploy", "after": "3d", "cursor": first.Pagination.NextCursor}); !res.Success {
+		t.Errorf("same relative after refused: %s", res.Message)
+	}
+}
+
+func TestRepeatedInAndFromComposeRepeatedClauses(t *testing.T) {
+	_, reqs := filterSearch(t, map[string]any{"query": "x", "after": "2026-09-01", "in": []any{"#engineering", "engineering"}, "from": []any{"sarah", "sarah"}})
+	if got := lastQuery(reqs); !strings.Contains(got, "in:#engineering in:#engineering from:@schen from:@schen") {
+		t.Errorf("composed %q", got)
 	}
 }
