@@ -1,0 +1,3 @@
+# Vendored assets are embedded byte-for-byte and pinned by hash (CSP and
+# TestVendoredLibraryMatchesItsPin); line-ending conversion would break both.
+pkg/report/assets/** -text

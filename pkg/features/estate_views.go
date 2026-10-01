@@ -17,7 +17,7 @@ import (
 // encounter observer accumulates.
 var EstateViews = &Feature{
 	Name:        "estate",
-	Description: "Relationship views over the accumulated estate. view='about' answers \"tell me about X\" whole: founder plane, activity plane, circle, and a ranked reading plan. Other views: 'families' (engagement channels by stem), 'person' (footprint + counterparts), 'initiatives' (what moved, by creator), 'convergence' (where a group co-occurs). Fold-first at zero Slack calls; bounded compiled searches only when coverage requires.",
+	Description: "Relationship views over the accumulated estate. view='about' answers \"tell me about X\" whole: founder plane, activity plane, circle, and a ranked reading plan. Other views: 'families' (engagement channels by stem), 'person' (footprint + counterparts), 'initiatives' (what moved, by creator), 'convergence' (where a group co-occurs). Fold-first at zero Slack calls; bounded compiled searches only when coverage requires. about/person take render='graph' to also write the view as a static HTML graph page under the server's data directory.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -74,10 +74,16 @@ var EstateViews = &Feature{
 				"description": "Skip the first N items of the view's ranked lists — a cap never prevents paging; capped responses name the exact next call",
 				"default":     0,
 			},
+			"render": map[string]interface{}{
+				"type":        "string",
+				"description": "about/person only: 'graph' also writes the view as a self-contained HTML graph report under the server's data directory (reports/, private 0600, replaced on each render) and returns its path and file:// URL with the usual markdown. Not available inside batch.",
+			},
 		},
 		"required": []string{"view"},
 	},
 	Handler: estateViewsHandler,
+	// render='graph' writes a report file.
+	EffectParams: []string{"render"},
 }
 
 // famPhaseTokens marks the engagement-phase suffixes the families motif
@@ -152,10 +158,19 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 	person = strings.TrimSpace(person)
 	deeper, _ := params["deeper"].(bool)
 
+	render, refusal := viewRender(view, params)
+	if refusal != nil {
+		return refusal, nil
+	}
+
 	result := func(v interface{}, msg string) (*FeatureResult, error) {
+		data := map[string]interface{}{"view": v}
+		if render == renderGraph {
+			data["report"] = writeGraphReport(view, v)
+		}
 		return &FeatureResult{
 			Success: true,
-			Data:    map[string]interface{}{"view": v},
+			Data:    data,
 			Message: msg,
 		}, nil
 	}
@@ -403,27 +418,32 @@ func familiesData(apiProvider *provider.ApiProvider, search, person string, limi
 }
 
 // formatEstate renders the estate views. The rendered markdown is the
-// agent's entire world — result.Data never reaches the client.
+// agent's entire world — result.Data never reaches the client — so a graph
+// report is announced here, after the view it draws.
 func formatEstate(result *FeatureResult) string {
 	dataMap, _ := result.Data.(map[string]interface{})
+	var out string
 	switch v := dataMap["view"].(type) {
 	case *estateFamiliesData:
-		return formatFamiliesView(v)
+		out = formatFamiliesView(v)
 	case *personViewData:
-		return formatPersonView(v)
+		out = formatPersonView(v)
 	case *initiativesViewData:
-		return formatInitiativesView(v)
+		out = formatInitiativesView(v)
 	case *convergenceViewData:
-		return formatConvergenceView(v)
+		out = formatConvergenceView(v)
 	case *aboutViewData:
-		return formatAboutView(v)
+		out = formatAboutView(v)
 	default:
-		out := result.Message
+		out = result.Message
 		if result.Guidance != "" {
 			out += "\n\n" + result.Guidance
 		}
-		return out
 	}
+	if rep, ok := dataMap["report"].(*graphReport); ok {
+		out += "\n\n" + formatGraphReport(rep)
+	}
+	return out
 }
 
 func formatFamiliesView(view *estateFamiliesData) string {

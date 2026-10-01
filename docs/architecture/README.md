@@ -63,7 +63,7 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 |---|---|---|---|
 | [006](006-observation-ledger.md) | Observation Ledger and Folded Caches | Proposed, amended by 007 | **Partial** — its mechanisms shipped inside ADR-007's estate; the attention ledger is not started |
 | [007](007-estate-ledger.md) | The Estate Ledger | Accepted | **Implemented** — #51–#57; running against a live workspace |
-| [008](008-relationship-views.md) | Relationship Views | Accepted | Implemented — families/person/initiatives/convergence/about views, encounter observer, compiled executor (#62, #65, #66, stage 3 PR) |
+| [008](008-relationship-views.md) | Relationship Views | Accepted, amended 2026-09-30 | Implemented — families/person/initiatives/convergence/about views, encounter observer, compiled executor (#62, #65, #66, stage 3 PR); graph reports via `render='graph'` on about/person, static 0600 files under `<data dir>/reports/` (#61) |
 | [009](009-tool-surface-recomposition.md) | Tool Surface Recomposition | Accepted | Implemented — shipped at v2.0.0; eight tools by the verb/noun/parameter assignment rule, pinned by `TestV2SurfaceIsExactlyEightTools`; superseded #49 |
 | [010](010-batch-executor.md) | The Batch Executor | Accepted | One-shot read batches + saved playbooks + the frequency hint |
 | [011](011-time-flows-down-the-page.md) | Time Flows Down the Page | Accepted | Every rendered message list is oldest-first; fetches stay newest-first so caps keep the newest |

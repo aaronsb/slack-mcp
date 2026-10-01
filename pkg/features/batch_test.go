@@ -2,6 +2,7 @@ package features_test
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/playbook"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/report"
 	"github.com/aaronsb/slack-mcp/pkg/slacktest"
 	"github.com/slack-go/slack"
 )
@@ -125,6 +127,65 @@ func TestBatchRejectsNesting(t *testing.T) {
 	})
 	if res.Success || !strings.Contains(res.Message, "batch may not contain batch") {
 		t.Fatalf("nesting not rejected: %+v", res)
+	}
+}
+
+// render='graph' turns an estate read into a file write; ADR-010 keeps
+// writes out of batch, so it is refused before anything runs — inline and
+// on save — and no report file appears.
+func TestBatchRefusesRender(t *testing.T) {
+	srv := slacktest.New(t)
+	ap := bootedProvider(t, srv)
+
+	render := []any{
+		map[string]any{"tool": "estate", "params": map[string]any{"view": "channels"}},
+		map[string]any{"tool": "estate", "params": map[string]any{"view": "person", "person": "schen", "render": "graph"}},
+	}
+	for _, params := range []map[string]any{
+		{"commands": render},
+		{"save": "drawing", "commands": render},
+	} {
+		res := runBatch(t, ap, params)
+		if res.Success {
+			t.Fatalf("render= was admitted to a batch: %+v", params)
+		}
+		if !strings.Contains(res.Message, "Command 2") || !strings.Contains(res.Message, "render=") || !strings.Contains(res.Message, "reads") {
+			t.Fatalf("refusal does not name the item, the parameter, and the boundary: %s", res.Message)
+		}
+	}
+	if after := runBatch(t, ap, map[string]any{"run": "drawing"}); after.Success {
+		t.Fatal("a refused save persisted a playbook")
+	}
+	if _, err := os.Stat(report.Dir()); !os.IsNotExist(err) {
+		t.Fatalf("a refused batch touched the reports directory: %v", err)
+	}
+}
+
+func TestStoredPlaybookWithRenderRendersErrorInPlace(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(twoChannels()...)
+	ap := bootedProvider(t, srv)
+
+	store, err := playbook.Open(ap.ProvideIdentity().Team)
+	if err != nil {
+		t.Fatalf("playbook.Open: %v", err)
+	}
+	skewed := []playbook.Command{
+		{Tool: "estate", Params: map[string]any{"view": "about", "person": "schen", "render": "graph"}},
+		{Tool: "estate", Params: map[string]any{"view": "channels"}},
+	}
+	if err := store.Save("skewed", skewed, time.Now()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	out := batchOut(t, ap, map[string]any{"run": "skewed"})
+	errAt := strings.Index(out, "render= is an effect")
+	channelsAt := strings.Index(out, "## Channels")
+	if errAt < 0 || channelsAt < errAt {
+		t.Fatalf("render item not refused in place, or execution stopped:\n%s", out)
+	}
+	if _, err := os.Stat(report.Dir()); !os.IsNotExist(err) {
+		t.Fatalf("a stored render item wrote a report: %v", err)
 	}
 }
 

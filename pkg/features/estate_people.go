@@ -185,6 +185,9 @@ type counterpartRow struct {
 }
 
 type personViewData struct {
+	// ID is the resolved user ID: a join key for the graph seam, never
+	// rendered.
+	ID           string
 	Label, Title string
 	Days         int
 	Footprint    []footprintRow
@@ -216,6 +219,7 @@ func personView(ctx context.Context, ap *provider.ApiProvider, person string, da
 	for i := range ids {
 		id = i
 	}
+	data.ID = id
 	data.Label = labels[id]
 	data.Handle = ids[id]
 	if u, ok := ap.ProvideUsersMap()[id]; ok {
