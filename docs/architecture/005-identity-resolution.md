@@ -9,7 +9,8 @@ instead of a hint to search — a miss must cost the agent zero extra hops.
 Partially implemented: `ResolvePerson` runs the ladder behind `search from:`;
 rings, encounter-recency ranking, email lookup, and the remaining person
 parameters are open. Candidates rank prefix-before-substring, then by handle;
-the attention ledger exists but is not wired into ranking.
+the attention ledger exists but is not wired into ranking. `list-users` matches
+names only.
 
 ## Context
 
@@ -104,7 +105,7 @@ ranking difference. Rejected.
 | Intent | resolve to one person | show who matches |
 | Result | a person, or bounded ambiguity | a result set |
 | Network | never | permitted |
-| Ranking | encounter recency | match quality |
+| Ranking | encounter recency (unbuilt; see Status) | match quality |
 | A miss means | not encountered — search | not in this workspace |
 | Called from | any parameter naming a person | an explicit call |
 
@@ -264,7 +265,8 @@ assumption.
 
 - "Is this me?" is answerable from cached state with no API call, by wiring an identity the
   provider already captures.
-- A recent joiner is reachable by email or search rather than permanently invisible.
+- A recent joiner is reachable by search, and by email once that lookup lands, rather than
+  permanently invisible.
 - `@` is deterministic and network-free, so its ladder is unit-testable against a fixture map.
 - The wrong-person send is closed off structurally rather than by caution.
 - `list-users` stops advertising an email match it does not perform.
