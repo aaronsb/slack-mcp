@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/mattn/go-isatty"
@@ -263,7 +264,7 @@ func matchKey(arg string, ks []safety.Key) (safety.Key, bool) {
 // terminal: C0 controls other than newline and tab, DEL, C1 controls, and
 // bytes that are not UTF-8, so text an agent supplied cannot move the
 // cursor, retitle the window, or write the clipboard (OSC 52); and
-// bidirectional and zero-width formatting characters, so it cannot reorder
+// invisible formatting characters (invisibleFormat), so it cannot reorder
 // or hide what the operator reads before approving.
 func termSafe(s string) string {
 	var b strings.Builder
@@ -286,12 +287,13 @@ func termSafe(s string) string {
 	return b.String()
 }
 
-// invisibleFormat reports the bidi controls (U+061C, U+200E-200F,
-// U+202A-202E, U+2066-2069) and zero-width characters (U+200B-200D,
-// U+FEFF) termSafe escapes.
+// invisibleFormat reports the characters termSafe escapes because they
+// render as nothing or rearrange what renders: Unicode format characters
+// (category Cf: bidi controls, zero-width characters, the soft hyphen,
+// invisible operators, tag characters) and the line and paragraph
+// separators U+2028 and U+2029.
 func invisibleFormat(r rune) bool {
-	return r == 0x061c || (r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) ||
-		(r >= 0x2066 && r <= 0x2069) || r == 0xfeff
+	return unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029
 }
 
 // termSafeAll escapes each string.
