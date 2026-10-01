@@ -48,6 +48,12 @@ or case 3, and quarantine wins over it. Added at an approval (`soft`
 only) or with `slack-mcp trust add`; stored beside the quarantine file;
 never listed to the agent. Under Trusted destinations.
 
+Amendment (2026-10-01): zlib. The scanner also inflates zlib streams
+found at any offset, under gzip's attempt cap, header accounting, and
+budget, so text in PDF `FlateDecode` streams and PNG `zTXt`, `iTXt`,
+and `IDAT` chunks is read. Occurrences past the attempt cap make the
+field unscannable. Under Decoding.
+
 ## Context
 
 The agent this server serves can run for hours, and reading other
@@ -248,16 +254,29 @@ through the full pattern set and the decoders again.
   bytes, including the bytes a glued base64 prefix of four or more
   characters decodes to, is still inflated. An attempt that fails
   (a bad header, a bad checksum, a missing trailer) still has whatever
-  it inflated before failing scanned. Each attempt counts the header
-  bytes it reads, as well as its output, against the budget, and a
-  buffer starts at most 1024 attempts, so a buffer of repeated
-  `1f 8b 08` costs bounded work.
+  it inflated before failing scanned.
+- **Zlib.** Every occurrence of `78 01`, `78 5e`, `78 9c`, or `78 da`
+  in a file's bytes or in any decoded output starts an inflate attempt,
+  on the same terms as gzip: glued streams are found, and an attempt
+  that fails (a bad block, a bad Adler-32 checksum, a missing trailer)
+  still has whatever it inflated scanned. PDF content and object
+  streams (`FlateDecode`) and PNG `zTXt`, `iTXt`, and `IDAT` chunks are
+  zlib streams, and the text in them is otherwise opaque.
+
+Each gzip or zlib attempt counts the header bytes it reads, as well as
+its output, against the budget. A buffer starts at most 1024 attempts,
+gzip and zlib together, so a buffer of repeated headers costs bounded
+work. A buffer with more header occurrences than that makes its field
+unscannable, since a stream past the cap would go unread; `78 5e` is
+`x^` in text, so a message can reach the cap, and is refused rather
+than passed.
 
 There is no precedence between decoders. A span more than one decoder
 recognizes (every hex run is also a base64 run) is decoded by each, in a
 fixed order: base64 at alignments 0 to 3, then hex at alignments 0 and
-1, then URL-decoding; gzip occurrences inside each output follow in
-offset order. A match through any of them blocks.
+1, then URL-decoding; gzip and zlib occurrences inside each output
+follow in offset order (a gzip and a zlib header never start at the same
+offset). A match through any of them blocks.
 
 Decoding goes to depth 3: the content as sent is depth 0, and output at
 depth 3 is matched but not decoded again. A budget of 32 MiB of decoded
@@ -287,6 +306,15 @@ enough to decode again. A `.har` also carries the request headers and
 cookies it captured, and blocks on them, correctly. The budget is sized
 for these files: at 8 MiB, under 3 MiB of base64 would already be
 unscannable.
+
+Zlib costs the inflated size of every stream. A PNG's `IDAT` inflates
+to its filtered pixel rows, width times height times bytes per pixel,
+so a 1920x1080 RGBA screenshot costs about 8 MiB. A 3840x2160 one costs
+about 31.6 MiB, nearly the whole budget before its pixel rows are
+decoded in turn, and is likely refused as unscannable. A PDF pays for every
+`FlateDecode` stream, embedded images and fonts included. Inflating
+`IDAT` reads bytes hidden in pixel data, not text drawn as pixels, which
+no decoder reads.
 
 No model is in the loop. The patterns are compiled into the binary, and
 the same input gives the same answer. A match on any class is a
@@ -856,7 +884,8 @@ text or file names.
   enough matches and the strike lock engages. ADR-014's soft posture
   raises the count, and the clear path ends the freeze.
 - A large compressed upload can exhaust the decode budget and be refused
-  as unscannable.
+  as unscannable. A 4K PNG screenshot can, and so can a PDF with
+  large embedded images.
 - The notice tells a requester their request was caught.
 - Gated calls wait on the operator, and the operator learns of them
   only from the log or `slack-mcp approve`. Unattended, they wait up to
@@ -869,10 +898,13 @@ text or file names.
 
 - **Encodings the decoders miss.** A determined agent can still get a
   secret past layer 2: an encoding the scanner does not decode, a
-  secret split across calls, a format no pattern names, or a zip
-  container, Office documents included, which the scanner does not
-  open, or a zlib or raw deflate stream, which the scanner does not
-  inflate. The layers raise the cost; they do not make exfiltration
+  secret split across calls, a format no pattern names, a zip
+  container (`.zip`, `.docx`, `.xlsx`, `.pptx`, and other Office
+  documents), which the scanner does not open, a raw deflate stream
+  with no zlib or gzip header, which it does not inflate, text drawn in
+  an image, which it does not OCR, or text a PDF draws through a font
+  with a custom encoding, which inflates to glyph codes rather than
+  characters. The layers raise the cost; they do not make exfiltration
   impossible.
 - **Provenance is by hash.** A one-byte edit with the client's file
   tools gives a downloaded file a new hash and no record, and case 2
