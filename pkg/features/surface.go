@@ -274,7 +274,7 @@ var Say = &Feature{
 			"files": map[string]interface{}{
 				"type":        "array",
 				"items":       map[string]interface{}{"type": "string"},
-				"description": "Attach files, at most 10, as one message: bare names inside the exchange directory (the directory download saves into), not paths. Copy a file in first. Not with emoji or broadcast.",
+				"description": "Attach files, at most 10, as one message: bare names inside the exchange directory (the directory download saves into), not paths. Copy a file in first, or write it with put when your file tools cannot reach that directory. Not with emoji or broadcast.",
 			},
 			"thread": map[string]interface{}{
 				"type":        "string",

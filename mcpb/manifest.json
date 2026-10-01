@@ -72,6 +72,10 @@
       "description": "Download a shared file"
     },
     {
+      "name": "put",
+      "description": "Write a new file into the exchange directory for say to attach"
+    },
+    {
       "name": "unlock",
       "description": "Open a local page to review and clear safety locks"
     }
