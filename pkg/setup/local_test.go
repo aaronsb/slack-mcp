@@ -29,6 +29,14 @@ func TestLoopbackOnlyRefusesOtherHosts(t *testing.T) {
 	}
 }
 
+// A slow sender cannot hold a connection, and so a page's lock, open.
+func TestLocalServerBoundsReadsAndWrites(t *testing.T) {
+	l := NewLocalServer(nil, 51837, http.NotFoundHandler())
+	if l.server.ReadTimeout == 0 || l.server.WriteTimeout == 0 || l.server.ReadHeaderTimeout == 0 {
+		t.Fatalf("timeouts: read %v write %v header %v", l.server.ReadTimeout, l.server.WriteTimeout, l.server.ReadHeaderTimeout)
+	}
+}
+
 func TestIsLoopbackOrigin(t *testing.T) {
 	for origin, want := range map[string]bool{
 		"http://127.0.0.1:51837":  true,

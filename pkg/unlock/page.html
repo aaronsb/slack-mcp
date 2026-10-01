@@ -46,13 +46,15 @@ button.secondary { background: transparent; color: var(--fg); }
 <form method="post"><div class="buttons"><button class="secondary" type="submit" name="action" value="done">Done</button></div></form>
 {{else}}
 <form method="post">
+<input type="hidden" name="at" value="{{.At}}">
+{{if .Changed}}<p><strong>The locks changed since this page was shown, so nothing was cleared. Review them again.</strong></p>{{end}}
 {{if or .Lock .Rows}}
 <ul class="rows">
 {{with .Lock}}
-<li class="lock"><label><input type="checkbox" name="row" value="{{.Index}}"><span><span class="title">{{.Title}}</span><br>{{.Scope}}{{range .Reasons}}<span class="reason">{{.}}</span>{{end}}</span></label></li>
+<li class="lock"><label><input type="checkbox" name="row" value="{{.ID}}"><span><span class="title">{{.Title}}</span><br>{{.Scope}}{{range .Reasons}}<span class="reason">{{.}}</span>{{end}}</span></label></li>
 {{end}}
 {{range .Rows}}
-<li><label><input type="checkbox" name="row" value="{{.Index}}"><span><span class="title">{{.Title}}</span><br>{{.Scope}}{{range .Reasons}}<span class="reason">{{.}}</span>{{end}}</span></label></li>
+<li><label><input type="checkbox" name="row" value="{{.ID}}"><span><span class="title">{{.Title}}</span><br>{{.Scope}}{{range .Reasons}}<span class="reason">{{.}}</span>{{end}}</span></label></li>
 {{end}}
 </ul>
 {{else}}

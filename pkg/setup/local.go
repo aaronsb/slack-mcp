@@ -26,7 +26,12 @@ type LocalServer struct {
 // NewLocalServer wraps h for the listener at port. Call Start to serve.
 func NewLocalServer(listener net.Listener, port int, h http.Handler) *LocalServer {
 	return &LocalServer{
-		server:   &http.Server{Handler: LoopbackOnly(port, h), ReadHeaderTimeout: 10 * time.Second},
+		server: &http.Server{
+			Handler:           LoopbackOnly(port, h),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+		},
 		listener: listener,
 		port:     port,
 	}
@@ -41,12 +46,15 @@ func (l *LocalServer) Start() {
 	}()
 }
 
-// Stop shuts the server down; later calls do nothing.
+// Stop shuts the server down, closing any connection a graceful shutdown
+// leaves open; later calls do nothing.
 func (l *LocalServer) Stop() {
 	l.stopOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = l.server.Shutdown(ctx)
+		if err := l.server.Shutdown(ctx); err != nil {
+			_ = l.server.Close()
+		}
 	})
 }
 

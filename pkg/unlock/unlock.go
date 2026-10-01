@@ -5,7 +5,9 @@
 package unlock
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"fmt"
@@ -13,7 +15,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -26,8 +27,16 @@ var pageHTML string
 
 var page = template.Must(template.New("unlock").Parse(pageHTML))
 
-// IdleTimeout stops an instance nobody answered.
+// IdleTimeout stops an instance nobody has loaded or answered for that
+// long; each load restarts it.
 const IdleTimeout = 15 * time.Minute
+
+// maxForm bounds a POST body; the form holds a few row IDs.
+const maxForm = 8 << 10
+
+// ReferrerPolicy keeps the form POST's Origin header: under no-referrer
+// Chromium and Firefox send "Origin: null", which the check refuses.
+const ReferrerPolicy = "same-origin"
 
 // Store is the quarantine state the page reads and clears.
 type Store interface {
@@ -55,18 +64,20 @@ type Instance struct {
 	store Store
 	opts  Options
 	token string
-	local *setup.LocalServer
+	// secret keys the row IDs, so a row's ID names its key and nothing
+	// else, whatever order the rows render in.
+	secret []byte
+	local  *setup.LocalServer
 
 	mu     sync.Mutex
 	closed bool
-	rows   []row
 	done   chan struct{}
 	timer  *time.Timer
 }
 
 type row struct {
 	Key     safety.Key
-	Index   int
+	ID      string
 	Title   string
 	Scope   string
 	Reasons []string
@@ -92,7 +103,7 @@ func Start(store Store, opts Options) (*Instance, error) {
 	if opts.Describe == nil {
 		opts.Describe = func(r safety.Reason) string { return r.Class }
 	}
-	var b [16]byte
+	var b [48]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return nil, fmt.Errorf("token: %w", err)
 	}
@@ -100,7 +111,7 @@ func Start(store Store, opts Options) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	in := &Instance{store: store, opts: opts, token: hex.EncodeToString(b[:]), done: make(chan struct{})}
+	in := &Instance{store: store, opts: opts, token: hex.EncodeToString(b[:16]), secret: b[16:], done: make(chan struct{})}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/unlock/"+in.token, in.serve)
 	in.local = setup.NewLocalServer(listener, port, mux)
@@ -138,55 +149,86 @@ type view struct {
 	Lock       *row
 	Rows       []row
 	Malformed  int
-	Result     string
+	// At is the state the rows were read from; a Clear carries it back,
+	// and one answering a different state applies nothing (Changed).
+	At      string
+	Changed bool
+	Result  string
 }
 
 func (in *Instance) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", ReferrerPolicy)
 
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.closed {
-		http.Error(w, "This page is closed. Ask for a new link to clear anything else.", http.StatusGone)
-		return
-	}
+	var form map[string][]string
 	switch r.Method {
 	case http.MethodGet:
-		in.render(w, in.list())
 	case http.MethodPost:
 		if !setup.IsLoopbackOrigin(r.Header.Get("Origin"), in.local.Port()) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
+			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		v := view{Result: in.answer(r.PostForm)}
-		in.closed = true
-		in.timer.Stop()
-		close(in.done)
-		in.render(w, v)
-		go in.local.Stop()
+		// Read the body before taking the lock, so a slow or large
+		// sender cannot hold the page.
+		r.Body = http.MaxBytesReader(w, r.Body, maxForm)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "the form is too large or malformed", http.StatusRequestEntityTooLarge)
+			return
+		}
+		form = r.PostForm
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.closed {
+		http.Error(w, "This page is closed. Ask for a new one to clear anything else.", http.StatusGone)
+		return
+	}
+	cur := in.list()
+	if form == nil || (first(form["action"]) == "clear" && first(form["at"]) != cur.At) {
+		// A load, or a Clear answering a page whose locks have changed
+		// since: apply nothing and show the current state.
+		cur.Changed = form != nil
+		in.timer.Reset(in.opts.Idle)
+		in.render(w, cur)
+		return
+	}
+	v := view{Result: in.answer(form, cur)}
+	in.closed = true
+	in.timer.Stop()
+	close(in.done)
+	in.render(w, v)
+	go in.local.Stop()
 }
 
-// list reads the state and keeps the rows the form's indexes refer to.
+// rowID names a key on the page: an HMAC under the instance's secret, so
+// it is stable across loads and reveals nothing about the key.
+func (in *Instance) rowID(k safety.Key) string {
+	m := hmac.New(sha256.New, in.secret)
+	m.Write([]byte(string(k.Kind) + "\x00" + k.ID))
+	return hex.EncodeToString(m.Sum(nil)[:12])
+}
+
+// list reads the state into rows, each carrying its key's rowID, and the
+// state's place in the file.
 func (in *Instance) list() view {
 	st := in.store.State()
-	in.rows = nil
-	var v view
+	held := in.opts.Held()
+	v := view{At: fmt.Sprintf("%d.%d.%t", st.Position.Epoch, st.Position.Line, held)}
 	if st.Err != nil {
 		v.Unreadable = "The safety state cannot be read, so every message and read receipt is refused. Nothing here can clear it until the state is readable again; running slack-mcp quarantine list in a terminal names the error."
 		return v
 	}
 	v.Malformed = len(st.Malformed)
-	held := in.opts.Held()
 	if st.Strikes > 0 || st.LockEngaged() || held {
 		title := fmt.Sprintf("Strikes: %d of %d", st.Strikes, st.Limit)
 		scope := "Another block engages the strike lock."
@@ -198,54 +240,75 @@ func (in *Instance) list() view {
 			title = "Writes held: a block could not be recorded"
 			scope = "Every message and read receipt is refused, to anyone. Clearing the strikes releases the hold unless the safety state was replaced or unreadable since; then approve the pending lift request with slack-mcp approve, or restart the server."
 		}
-		lr := row{Key: safety.StrikesKey, Title: title, Scope: scope}
+		lr := row{Key: safety.StrikesKey, ID: in.rowID(safety.StrikesKey), Title: title, Scope: scope}
 		for _, rs := range st.StrikeReasons {
 			lr.Reasons = append(lr.Reasons, in.opts.Describe(rs))
 		}
-		in.rows = append(in.rows, lr)
+		v.Lock = &lr
 	}
 	for _, k := range st.People {
-		in.rows = append(in.rows, in.keyRow(st, k, "Every DM and group DM with them is closed to messages and read receipts."))
+		v.Rows = append(v.Rows, in.keyRow(st, k, "Every DM and group DM with them is closed to messages and read receipts."))
 	}
 	for _, k := range st.Conversations {
-		in.rows = append(in.rows, in.keyRow(st, k, "Closed to messages and read receipts."))
+		v.Rows = append(v.Rows, in.keyRow(st, k, "Closed to messages and read receipts."))
 	}
-	for i := range in.rows {
-		in.rows[i].Index = i
-	}
-	if len(in.rows) > 0 && in.rows[0].Key.Kind == safety.KeyStrikes {
-		v.Lock = &in.rows[0]
-		v.Rows = in.rows[1:]
-	} else {
-		v.Rows = in.rows
-	}
+	disambiguate(st, v.Rows)
 	return v
 }
 
 func (in *Instance) keyRow(st safety.QuarantineState, k safety.Key, scope string) row {
-	rw := row{Key: k, Title: in.opts.Name(k), Scope: scope}
+	rw := row{Key: k, ID: in.rowID(k), Title: in.opts.Name(k), Scope: scope}
 	if rs, ok := st.ReasonFor(k); ok {
 		rw.Reasons = []string{in.opts.Describe(rs)}
 	}
 	return rw
 }
 
-// answer applies the form: Clear clears the checked rows, Done nothing.
-func (in *Instance) answer(form map[string][]string) string {
+// disambiguate tells apart rows whose names came out the same, as two
+// conversations the cache cannot name do: by block time and position.
+func disambiguate(st safety.QuarantineState, rows []row) {
+	count := map[string]int{}
+	for _, r := range rows {
+		count[r.Title]++
+	}
+	seen := map[string]int{}
+	for i, r := range rows {
+		n := count[r.Title]
+		if n < 2 {
+			continue
+		}
+		seen[r.Title]++
+		suffix := fmt.Sprintf(" (%d of %d)", seen[r.Title], n)
+		if rs, ok := st.ReasonFor(r.Key); ok && !rs.Time.IsZero() {
+			suffix = fmt.Sprintf(" (blocked %s; %d of %d)", rs.Time.Local().Format("Jan 2 15:04:05"), seen[r.Title], n)
+		}
+		rows[i].Title += suffix
+	}
+}
+
+// answer applies the form to the rows of cur: Clear clears the checked
+// rows, Done nothing.
+func (in *Instance) answer(form map[string][]string, cur view) string {
 	if first(form["action"]) != "clear" {
 		log.Printf("outbound-safety: clearing page closed without clearing")
 		return "Closed without clearing anything. You can close this tab."
 	}
+	byID := map[string]safety.Key{}
+	if cur.Lock != nil {
+		byID[cur.Lock.ID] = cur.Lock.Key
+	}
+	for _, r := range cur.Rows {
+		byID[r.ID] = r.Key
+	}
 	checked, cleared, failed := 0, 0, 0
-	seen := map[int]bool{}
-	for _, raw := range form["row"] {
-		i, err := strconv.Atoi(raw)
-		if err != nil || i < 0 || i >= len(in.rows) || seen[i] {
+	seen := map[string]bool{}
+	for _, id := range form["row"] {
+		k, ok := byID[id]
+		if !ok || seen[id] {
 			continue
 		}
-		seen[i] = true
+		seen[id] = true
 		checked++
-		k := in.rows[i].Key
 		ok, err := in.store.Clear(k, safety.ByWeb, "", in.opts.Now())
 		switch {
 		case err != nil:
