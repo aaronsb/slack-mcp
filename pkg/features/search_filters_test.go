@@ -328,3 +328,47 @@ func TestRepeatedInAndFromComposeRepeatedClauses(t *testing.T) {
 		t.Errorf("composed %q", got)
 	}
 }
+
+func TestRawModifierDetectionShapes(t *testing.T) {
+	conflicts := []map[string]any{
+		{"query": `x after:"January 5"`, "after": "2026-09-01"},
+		{"query": `x from:"sarah"`, "from": []any{"sarah"}},
+		{"query": `x in:"eng"`, "in": "#engineering"},
+		{"query": "x on:monday", "after": "2026-09-01"},
+		{"query": "x during:lastweek", "before": "2026-09-01"},
+		{"query": "x after:yesterday", "after": "2026-09-01"},
+		{"query": "x before:week", "before": "2026-09-01"},
+		{"query": "x on:sept", "after": "2026-09-01"},
+	}
+	for _, p := range conflicts {
+		if res, reqs := filterSearch(t, p); res.Success || len(*reqs) != 0 {
+			t.Errorf("not detected: %v", p["query"])
+		}
+	}
+	for _, q := range []string{"x on:marketing", "x after:mayor", "x before:monkeys", "x during:summers"} {
+		res, reqs := filterSearch(t, map[string]any{"query": q, "after": "2026-09-01", "before": "2026-09-10"})
+		if !res.Success || len(*reqs) != 1 {
+			t.Errorf("%q wrongly read as a date operator: %q", q, res.Message)
+		}
+	}
+}
+
+func TestRelativeBeforeIsPinnedInTheCursor(t *testing.T) {
+	run, reqs := pagedSearchWith(t, 3)
+	first := run(map[string]any{"query": "deploy", "before": "3d"})
+	if first.Pagination == nil {
+		t.Fatal("no cursor")
+	}
+	second := run(map[string]any{"query": "deploy", "before": "3d", "cursor": first.Pagination.NextCursor})
+	if !second.Success {
+		t.Fatalf("refused: %s", second.Message)
+	}
+	got := *reqs
+	if !strings.Contains(got[0].query, "before:20") || got[0].query != got[1].query {
+		t.Errorf("before drifted between pages: %q vs %q", got[0].query, got[1].query)
+	}
+	raw, _ := base64.RawURLEncoding.DecodeString(first.Pagination.NextCursor)
+	if !strings.Contains(string(raw), `"b":"20`) {
+		t.Errorf("cursor does not pin before: %s", raw)
+	}
+}

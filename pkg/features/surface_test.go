@@ -250,3 +250,28 @@ func TestTargetWithFiltersIsRefused(t *testing.T) {
 		t.Errorf("a refused call searched")
 	}
 }
+
+func TestFiltersOnlyEchoIsClean(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(channel("C1", "engineering"))
+	srv.Handle("search.messages", func(*http.Request) any {
+		return map[string]any{"ok": true, "messages": map[string]any{"total": 0, "matches": []any{}}}
+	})
+	ap := bootedProvider(t, srv)
+	out := runTool(t, features.Messages, ap, map[string]any{"after": "7d", "in": []any{"#engineering"}, "thread": false, "has": []any{}})
+	if !strings.Contains(out, "`messages after=7d in=[#engineering]`") {
+		t.Errorf("echo:\n%s", out)
+	}
+}
+
+func TestTargetWithQueryIsRefused(t *testing.T) {
+	srv := slacktest.New(t)
+	ap := bootedProvider(t, srv)
+	out := runTool(t, features.Messages, ap, map[string]any{"target": "#eng", "query": "x"})
+	if !strings.Contains(out, "cannot be combined") || !strings.Contains(out, "in='#channel'") {
+		t.Errorf("not refused:\n%s", out)
+	}
+	if srv.Calls("search.messages") != 0 {
+		t.Errorf("searched")
+	}
+}

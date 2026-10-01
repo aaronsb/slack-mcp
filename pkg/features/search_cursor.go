@@ -44,7 +44,10 @@ type searchCursor struct {
 	Since   string `json:"s"` // window start, YYYY-MM-DD; "" when Unbounded
 	// Unbounded marks a window with no lower bound (before= or raw date text).
 	Unbounded bool `json:"u,omitempty"`
-	Widened   bool `json:"w,omitempty"`
+	// Before pins the resolved before= date, so a relative before=3d does not
+	// shift between pages across midnight (the digest hashes the raw string).
+	Before  string `json:"b,omitempty"`
+	Widened bool   `json:"w,omitempty"`
 	// Timeframe is the caller's explicit timeframe ("" when defaulted), so a
 	// continuation that passes a different one is refused like a changed limit.
 	Timeframe string `json:"t,omitempty"`

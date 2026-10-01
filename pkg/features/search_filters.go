@@ -39,7 +39,15 @@ const searchHasValues = "link, pin, or an :emoji: for a reaction"
 // value-shaped token right after the colon (Slack modifiers take no space), so
 // prose like "check in: error" or "blocked on: deploy" is not a modifier.
 // Quoted phrases are ignored.
-const dateValue = `("?)(\d|today|yesterday|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|spring|summer|fall|autumn|winter)`
+//
+// The date-shaped values recognised, a documented list: a digit; today,
+// yesterday; month names (full or three-letter); weekday names; the seasons;
+// and the relative words week, month, year, lastweek, lastmonth, lastyear.
+// Word boundaries keep on:marketing and after:mayor from reading as dates.
+const dateValue = `"?(\d|(today|yesterday|` +
+	`jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?|` +
+	`mon(day)?|tue(s(day)?)?|wed(nesday)?|thu(r(s(day)?)?)?|fri(day)?|sat(urday)?|sun(day)?|` +
+	`spring|summer|fall|autumn|winter|week|month|year|lastweek|lastmonth|lastyear)\b)`
 
 var rawModifier = map[string]*regexp.Regexp{
 	"in":     regexp.MustCompile(`(?i)(^|\s)-?in:\S`),
@@ -51,10 +59,19 @@ var rawModifier = map[string]*regexp.Regexp{
 }
 var rawOnDuring = regexp.MustCompile(`(?i)(^|\s)(on|during):` + dateValue)
 var rawAnyDate = regexp.MustCompile(`(?i)(^|\s)(after|before|on|during):` + dateValue)
-var quotedPhrase = regexp.MustCompile(`"[^"]*"`)
+var quotedPhrase = regexp.MustCompile(`[A-Za-z]+:"[^"]*"|"[^"]*"`)
 
-// rawText is the query without quoted phrases, for modifier detection.
-func rawText(q string) string { return quotedPhrase.ReplaceAllString(q, " ") }
+// rawText is the query without free-standing quoted phrases, for modifier
+// detection. A quote directly after a modifier (after:"January 5", in:"x") is
+// that modifier's value and stays.
+func rawText(q string) string {
+	return quotedPhrase.ReplaceAllStringFunc(q, func(m string) string {
+		if m[0] != '"' {
+			return m
+		}
+		return " "
+	})
+}
 
 func filterFailure(msg, guidance string) *FeatureResult {
 	return &FeatureResult{Success: false, Message: msg, Guidance: guidance}
@@ -87,10 +104,10 @@ func parseSearchFilters(ctx context.Context, p *provider.ApiProvider, query stri
 			fmt.Sprintf("Use either %s= or the raw %s: in query=, not both.", name, name))
 	}
 
+	if len(stringList(params["in"])) > 0 && rawModifier["in"].MatchString(query) {
+		return nil, conflict("in")
+	}
 	for _, in := range stringList(params["in"]) {
-		if rawModifier["in"].MatchString(query) {
-			return nil, conflict("in")
-		}
 		trimmed := strings.TrimSpace(in)
 		if provider.LooksLikeChannelID(trimmed) {
 			return nil, filterFailure(fmt.Sprintf("in=%q looks like an internal ID; this server addresses places by name.", in),

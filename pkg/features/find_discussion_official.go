@@ -112,6 +112,9 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 		}
 		// The cursor pins the window that produced it, so page 2 of a search
 		// that widened stays in the widened window, and nothing re-widens.
+		if cur.Before != "" {
+			filters.before = cur.Before
+		}
 		since = time.Time{}
 		if !cur.Unbounded {
 			since, _ = time.Parse("2006-01-02", cur.Since)
@@ -235,7 +238,7 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	}
 
 	if hasMore {
-		next := searchCursor{Page: shownPage + 1, Count: count, Widened: widened, Digest: digest}
+		next := searchCursor{Page: shownPage + 1, Count: count, Widened: widened, Digest: digest, Before: filters.before}
 		if since.IsZero() {
 			next.Unbounded = true
 		} else {
