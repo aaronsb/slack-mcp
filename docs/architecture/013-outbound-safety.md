@@ -196,7 +196,7 @@ outbound-safety: BLOCKED say to=#general (C0123ABCD) class=private-key location=
 The record the agent cannot suppress through any tool is the quarantine
 file. The log is not that record: on stdio it goes to
 `/tmp/slack-mcp.log`, created at 0666 and shared by every user and
-process on the host. Tightening that mode is filed as a follow-up.
+process on the host. Tightening that mode is issue #118.
 
 Two surfaces carry the state to the agent:
 
@@ -321,34 +321,28 @@ and says the operator must approve it; it does not print the command.
 
 #### Elicitation
 
-For cases 1 and 2, the server also asks in-band when the client says it
-can answer. It never asks for case 3: a host may let the model answer an
-elicitation, and a lift answered by the agent under attack would undo
-the quarantine that attack produced.
+For cases 1 and 2, the server also asks in-band, and only where nothing
+on the server waits for the answer. It never asks for case 3: a host may
+let the model answer an elicitation, and a lift answered by the agent
+under attack would undo the quarantine that attack produced.
 
-The server checks the client capabilities carried by the request it is
-handling, never inferring them from an earlier request. When they do
-not declare elicitation, the result is the plain pending refusal. When
-they do, the tool handler returns mcp-go's
-`InputRequestBuilder.ToolResult()` with an approval form that names the
-pending ID:
+The server asks only a client on protocol 2026-07-28 or later whose
+current request declares elicitation in its capabilities, never
+inferring them from an earlier request. For that client the tool
+handler returns mcp-go's `InputRequestBuilder.ToolResult()` with an
+approval form naming the pending ID. The client receives the
+input-required result and retries the call with its answer and the
+server's request state. The server holds nothing open in between.
 
-- A client on protocol 2026-07-28 or later receives the input-required
-  result and retries the call with its answer and the server's request
-  state.
-- For an earlier client, mcp-go fulfills the request itself: it issues
-  `elicitation/create` and re-invokes the handler with the answer and
-  the request state. It waits on the outer request's context, so the
-  wait ends when the client answers, cancels, or disconnects; mcp-go
-  offers no per-request deadline there, and the server sets none. A
-  failure in that bridge becomes a JSON-RPC internal error, which is why
-  the server asks only when elicitation is declared. The pending request
-  is recorded before the ask, so the CLI still lists it.
-- This server's transports are stdio and SSE. mcp-go's SSE session
-  cannot issue `elicitation/create`, so on SSE the server asks only
-  clients on 2026-07-28 or later. SSE serves several sessions; the
-  request state is bound to the session where the transport identifies
-  one.
+Every other client gets the plain pending refusal and approval through
+the CLI: an earlier client, a request that does not declare elicitation,
+and any session on SSE. For an earlier client, mcp-go would fulfill an
+input-required result itself by issuing `elicitation/create` and waiting
+on the outer request's context, with no deadline the server can set. An
+unattended agent must never hang on a prompt nobody answers, so the
+server never returns that result to an earlier client. SSE serves
+several sessions; the request state is bound to the session where the
+transport identifies one.
 
 The request state carries an HMAC under a key the server process holds
 in memory. It binds the destination, the content hash, the gate case,
@@ -419,8 +413,6 @@ client to answer at all. MCP sampling is not used as a guard.
   through a pseudo-terminal. The client's permissions should deny the
   agent writes to the data directory and execution of `slack-mcp`
   subcommands.
-- **An unanswered elicitation holds the call.** For an earlier client
-  the call waits until the client answers or cancels.
 - **The server instructions are static.** They are built once at
   startup and read by the client when it connects, so a quarantine set
   later reaches the agent through the banner only.
@@ -455,6 +447,10 @@ outlives a removal; restoring the layers restores its state.
   `WithLegacyServerInitiatedRequests`. It re-enables a request form the
   2026-07-28 protocol removed, for clients that no longer expect it, and
   is deprecated.
+- **Eliciting from earlier clients through mcp-go's bridge.** The bridge
+  waits on the outer request's context with no deadline, and a bridge
+  failure surfaces as a JSON-RPC internal error that hides the pending
+  ID. The CLI path covers those clients without either cost.
 - **Approval for every `say`.** It turns the agent's one contribution
   verb into a queue, and an operator who approves everything stops
   reading the requests.
