@@ -13,6 +13,14 @@ func SearchDigestForTest(query string, channels, people []string) string {
 	return searchDigest(query, &searchFilters{channels: channels}, people)
 }
 
+// SetOpenBrowserForTest stands in for the browser launch unlock makes. It
+// returns a restore func.
+func SetOpenBrowserForTest(fn func(url string) error) func() {
+	prev := openBrowser
+	openBrowser = fn
+	return func() { openBrowser = prev }
+}
+
 // SetFetchFileForTest stands in for the files.slack.com fetch, which the
 // internal client pins to Slack hosts. It returns a restore func.
 func SetFetchFileForTest(fn func(url string, w io.Writer) (int64, error)) func() {

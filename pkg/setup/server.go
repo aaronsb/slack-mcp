@@ -3,9 +3,10 @@ package setup
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
+
 	"net"
 	"net/http"
 	"os"
@@ -242,7 +243,9 @@ func RunSetup() error {
 		fmt.Printf("  Opening browser to %s\n", url)
 		fmt.Printf("  Follow the instructions there to connect your Slack workspace.\n\n")
 		fmt.Printf("  Waiting for tokens... (Ctrl+C to cancel)\n\n")
-		OpenBrowserURL(url)
+		if err := OpenBrowserURL(url); err != nil {
+			fmt.Printf("  %v. Please open this URL manually: %s\n\n", err, url)
+		}
 	}()
 
 	team, user, err := RunSetupServer(listener, port)
@@ -356,12 +359,15 @@ func AuthTest(xoxc, xoxd string) (Account, error) {
 // pile of tabs behind, and on a headless CI runner it is a pointless subprocess.
 const NoBrowserEnv = "SLACK_MCP_NO_BROWSER"
 
-// OpenBrowserURL opens the default browser to the given URL, unless
-// SLACK_MCP_NO_BROWSER is set.
-func OpenBrowserURL(url string) {
+// ErrNoBrowser is OpenBrowserURL's error when SLACK_MCP_NO_BROWSER is set.
+var ErrNoBrowser = errors.New("browser launch suppressed by " + NoBrowserEnv)
+
+// OpenBrowserURL opens the default browser to the given URL. It writes
+// nothing itself: on stdio the server's stdout is the JSON-RPC stream, so
+// the caller decides where a failure goes.
+func OpenBrowserURL(url string) error {
 	if os.Getenv(NoBrowserEnv) != "" {
-		log.Printf("Browser launch suppressed by %s. Open this URL manually: %s", NoBrowserEnv, url)
-		return
+		return ErrNoBrowser
 	}
 
 	var cmd *exec.Cmd
@@ -374,7 +380,9 @@ func OpenBrowserURL(url string) {
 		cmd = exec.Command("xdg-open", url)
 	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("Could not open browser: %v", err)
-		fmt.Printf("  Please open this URL manually: %s\n", url)
+		return fmt.Errorf("could not open a browser: %w", err)
 	}
+	// Reap the launcher; xdg-open and open exit once the browser has it.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }

@@ -19,13 +19,13 @@ import (
 
 // offerUnlock is the sentence a refusal and the server instructions carry
 // so a desktop operator has a path to clear a lock (ADR-013, #132).
-const offerUnlock = "When the operator asks to clear a lock, call unlock and give them the link; clearing is theirs to do on that page or with the slack-mcp CLI, never by any other route."
+const offerUnlock = "When the operator asks to clear a lock, call unlock, which opens a page in their browser; clearing is theirs to do on that page or with the slack-mcp CLI, never by any other route."
 
 // Unlock opens ADR-013's local clearing page. It clears nothing itself and
 // never reports what the operator cleared.
 var Unlock = &Feature{
 	Name:        "unlock",
-	Description: "Open a page in the operator's browser where they can review and clear the outbound-safety locks: quarantined people and conversations, and the strike lock. Returns the page's link. The operator does the clearing there; this tool clears nothing and does not report what they clear. Call it when the operator asks to clear a lock; never open the link yourself.",
+	Description: "Open a page in the operator's browser where they can review and clear the outbound-safety locks: quarantined people and conversations, and the strike lock. The operator does the clearing there; this tool clears nothing, returns no link, and does not report what they clear. Call it when the operator asks to clear a lock.",
 	Schema: map[string]interface{}{
 		"type":       "object",
 		"properties": map[string]interface{}{},
@@ -41,11 +41,36 @@ var (
 // startUnlock is the page's constructor; tests replace it.
 var startUnlock = unlock.Start
 
+// openBrowser launches the operator's browser; tests replace it.
+var openBrowser = setup.OpenBrowserURL
+
+type sseKey struct{}
+
+// WithSSE marks ctx as a call on the SSE transport, whose host need not be
+// the operator's.
+func WithSSE(ctx context.Context, sse bool) context.Context {
+	return context.WithValue(ctx, sseKey{}, sse)
+}
+
+func onSSE(ctx context.Context) bool {
+	sse, _ := ctx.Value(sseKey{}).(bool)
+	return sse
+}
+
+// cliClears is where a refusal sends the operator instead of the page.
+const cliClears = "The operator clears locks in a terminal: slack-mcp quarantine list, then slack-mcp quarantine clear <who>."
+
 func unlockHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
 	if dep, _ := lifecycle.DeploymentFromEnv(); dep == lifecycle.Remote {
 		return &FeatureResult{
 			Success: false,
-			Message: "unlock is unavailable on a remote deployment: the page would open on the server's host, not the operator's. The operator clears locks with slack-mcp quarantine on that host.",
+			Message: "unlock is unavailable on a remote deployment: the page would open on the server's host, not the operator's. " + cliClears,
+		}, nil
+	}
+	if onSSE(ctx) {
+		return &FeatureResult{
+			Success: false,
+			Message: "unlock is unavailable over SSE: the server's host need not be the operator's. " + cliClears,
 		}, nil
 	}
 	ap, _ := params["_provider"].(*provider.ApiProvider)
@@ -82,14 +107,29 @@ func unlockHandler(ctx context.Context, params map[string]interface{}) (*Feature
 		log.Printf("outbound-safety: unlock: page not started: %v", err)
 		return &FeatureResult{Success: false, Message: "The clearing page could not be started (no free local port). Tell the operator; slack-mcp quarantine clears from a terminal."}, nil
 	}
-	log.Printf("outbound-safety: clearing page opened on port %d", in.Port())
-	setup.OpenBrowserURL(in.URL())
+	// The link carries the page's token, and a result that held it would
+	// let an agent with an HTTP tool clear its own locks. It goes to the
+	// browser only.
+	if err := openBrowser(in.URL()); err != nil {
+		in.Stop()
+		unlockMu.Lock()
+		if unlockPage == in {
+			unlockPage = nil
+		}
+		unlockMu.Unlock()
+		log.Printf("outbound-safety: clearing page not opened: %v", err)
+		return &FeatureResult{
+			Success: false,
+			Message: "Could not open a browser for the clearing page, so it is closed. " + cliClears,
+		}, nil
+	}
+	log.Printf("outbound-safety: clearing page opened in the browser on port %d", in.Port())
 
 	return &FeatureResult{
 		Success: true,
-		Message: "Opened the clearing page in the operator's browser: " + in.URL(),
-		Guidance: "If the browser did not open, give the operator this link. The page is theirs: they check what to clear and press Clear or Done, and either closes the page. " +
-			"This result does not say what they cleared; your next say or mark-read runs every check again. Do not open the link yourself.",
+		Message: "Opened the clearing page in your browser.",
+		Guidance: "The page is the operator's: they check what to clear and press Clear or Done, and either closes it. " +
+			"This result does not say what they cleared; your next say or mark-read runs every check again.",
 	}, nil
 }
 

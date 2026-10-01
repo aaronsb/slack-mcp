@@ -168,6 +168,7 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature, handle st
 		params["_provider"] = p
 
 		// Execute feature
+		ctx = features.WithSSE(ctx, s.sse.Load())
 		result, err := feature.Handler(features.WithElicitation(ctx, s.elicitation(ctx, request)), params)
 		if err != nil {
 			if bannered[feature.Name] {

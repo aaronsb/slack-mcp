@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -257,7 +258,9 @@ func (f *Flow) doManualFlow() *FlowResponse {
 	f.persist()
 
 	url := fmt.Sprintf("http://localhost:%d", f.port)
-	OpenBrowserURL(url)
+	if err := OpenBrowserURL(url); err != nil {
+		log.Printf("Setup page not opened in a browser (%v); it is at %s", err, url)
+	}
 
 	return &FlowResponse{
 		State:    StateManualFlow,
