@@ -3,20 +3,20 @@ package features
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+	"io"
 
-	"github.com/aaronsb/slack-mcp/pkg/paths"
+	"github.com/aaronsb/slack-mcp/pkg/exchange"
+	"github.com/aaronsb/slack-mcp/pkg/lifecycle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 )
 
-// DownloadFile retrieves a file attachment from a Slack message and saves
-// it to the local filesystem. Defaults to ~/Downloads; a custom destDir may
-// be supplied but the resolved target path must live inside that directory.
+// DownloadFile retrieves a file attachment from a Slack message and saves it
+// into the exchange directory (ADR-012), the only place a file parameter can
+// name. The file is created through the directory's os.Root at 0600; a taken
+// name is suffixed and the rename stated.
 var DownloadFile = &Feature{
 	Name:        "download-file",
-	Description: "Download a file attachment from a Slack message. File IDs come from the 'files' field of messages returned by get-context or search.",
+	Description: "Download a file attachment from a Slack message into the exchange directory. File IDs come from the 'files' field of messages.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -24,13 +24,9 @@ var DownloadFile = &Feature{
 				"type":        "string",
 				"description": "Slack file ID (e.g. F01234ABCD), as returned in the 'files' array of a message",
 			},
-			"destDir": map[string]interface{}{
-				"type":        "string",
-				"description": "Directory to save the file in. Defaults to ~/Downloads. Must be an absolute path.",
-			},
 			"filename": map[string]interface{}{
 				"type":        "string",
-				"description": "Override the filename (no path separators). Defaults to the original Slack filename.",
+				"description": "Name to save as in the exchange directory: a bare name, not a path. Defaults to the Slack filename. A taken name gets a ' (n)' suffix and the result says so.",
 			},
 		},
 		"required": []string{"fileId"},
@@ -38,52 +34,59 @@ var DownloadFile = &Feature{
 	Handler: downloadFileHandler,
 }
 
+// fetchFile streams a Slack file URL to w. A variable so tests can stand in
+// for files.slack.com, which the internal client pins.
+var fetchFile = func(ctx context.Context, ap *provider.ApiProvider, url string, w io.Writer) (int64, error) {
+	return ap.ProvideInternalClient().DownloadFile(ctx, url, w)
+}
+
 func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
+	fail := func(msg, guidance string) (*FeatureResult, error) {
+		return &FeatureResult{Success: false, Message: msg, Guidance: guidance}, nil
+	}
+
+	// Everything the caller can get wrong is refused before any Slack call.
+	if _, ok := params["destDir"]; ok {
+		return fail(
+			fmt.Sprintf("destDir was removed: download saves only into the exchange directory (%s). Pass filename= to choose the name.", exchange.Locate().Path),
+			"Copy the file elsewhere with your own file tools after it downloads. The operator can move the exchange directory with SLACK_MCP_EXCHANGE_DIR in the MCP client config.",
+		)
+	}
+
 	fileID, _ := params["fileId"].(string)
 	if fileID == "" {
-		return &FeatureResult{
-			Success: false,
-			Message: "fileId is required",
-		}, nil
+		return fail("fileId is required", "")
 	}
 
-	destDir, _ := params["destDir"].(string)
-	if strings.TrimSpace(destDir) == "" {
-		destDir = paths.DownloadsDir()
+	explicit, _ := params["filename"].(string)
+	if explicit != "" {
+		if err := exchange.ValidateName(explicit); err != nil {
+			return fail(err.Error(), "Pass a bare name such as report.pdf. Nothing was downloaded.")
+		}
 	}
 
-	overrideName, _ := params["filename"].(string)
+	dir, err := exchange.Open()
+	if err != nil {
+		return fail(err.Error(), "Nothing was downloaded.")
+	}
+	defer dir.Close()
 
 	apiProvider, ok := params["_provider"].(*provider.ApiProvider)
 	if !ok {
-		return &FeatureResult{
-			Success: false,
-			Message: "Internal error: provider not available",
-		}, nil
+		return fail("Internal error: provider not available", "")
 	}
-
 	api, err := apiProvider.Provide()
 	if err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to connect to Slack: %v", err),
-		}, nil
+		return fail(fmt.Sprintf("Failed to connect to Slack: %v", err), "")
 	}
 
 	file, _, _, err := api.GetFileInfoContext(ctx, fileID, 0, 0)
 	if err != nil {
-		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("Failed to look up file %s: %v", fileID, err),
-			Guidance: "Verify the fileId from a recent messages result. External files are not downloadable.",
-		}, nil
+		return fail(fmt.Sprintf("Failed to look up file %s: %v", fileID, err),
+			"Verify the fileId from a recent messages result. External files are not downloadable.")
 	}
-
 	if file.Size > provider.MaxDownloadBytes {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("File %s is %d bytes, exceeding the %d byte limit", fileID, file.Size, provider.MaxDownloadBytes),
-		}, nil
+		return fail(fmt.Sprintf("File %s is %d bytes, exceeding the %d byte limit", fileID, file.Size, provider.MaxDownloadBytes), "")
 	}
 
 	downloadURL := file.URLPrivateDownload
@@ -91,98 +94,58 @@ func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*F
 		downloadURL = file.URLPrivate
 	}
 	if downloadURL == "" {
-		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("File %s has no downloadable URL (external or hidden)", fileID),
-			Guidance: "Slack doesn't expose a private URL for this file type — it may be hosted externally.",
-		}, nil
+		return fail(fmt.Sprintf("File %s has no downloadable URL (external or hidden)", fileID),
+			"Slack doesn't expose a private URL for this file type — it may be hosted externally.")
 	}
 
-	name := overrideName
+	name := explicit
 	if name == "" {
-		name = file.Name
-	}
-	if name == "" {
-		name = fileID
-	}
-	if strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Invalid filename %q: must not contain path separators", name),
-		}, nil
+		name = exchange.Sanitize(file.Name, exchange.Sanitize(fileID, ""))
+		if name == "" {
+			return fail(fmt.Sprintf("File %s has no usable name; pass filename=", fileID), "")
+		}
 	}
 
-	destAbs, err := filepath.Abs(destDir)
+	created, err := dir.Create(name)
 	if err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Invalid destDir: %v", err),
-		}, nil
+		return fail(err.Error(), "")
 	}
-	targetAbs, err := filepath.Abs(filepath.Join(destAbs, name))
+	n, err := fetchFile(ctx, apiProvider, downloadURL, created.File)
+	if closeErr := created.File.Close(); err == nil && closeErr != nil {
+		err = fmt.Errorf("finalizing file: %w", closeErr)
+	}
 	if err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Invalid target path: %v", err),
-		}, nil
-	}
-	rel, err := filepath.Rel(destAbs, targetAbs)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("Refusing to write outside destDir: %s", targetAbs),
-			Guidance: "Path traversal blocked. Pick a filename without '..' or '/'.",
-		}, nil
+		_ = dir.Remove(created.Name)
+		return fail(fmt.Sprintf("Download failed: %v", err), "")
 	}
 
-	if err := os.MkdirAll(destAbs, 0o755); err != nil {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to create destDir %s: %v", destAbs, err),
-		}, nil
+	path := dir.DisplayPath(created.Name)
+	msg := fmt.Sprintf("Downloaded %s (%d bytes) into the exchange directory as %s", file.Name, n, created.Name)
+	if notice := created.Notice(); notice != "" {
+		msg += ". " + notice
 	}
-
-	// O_EXCL refuses to follow symlinks and refuses to clobber existing
-	// files — closes the symlink-TOCTOU window on destDir contents.
-	out, err := os.OpenFile(targetAbs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return &FeatureResult{
-			Success:  false,
-			Message:  fmt.Sprintf("Failed to create file %s: %v", targetAbs, err),
-			Guidance: "The target file already exists or is a symlink. Pass a different filename or remove the existing file first.",
-		}, nil
+	data := map[string]interface{}{
+		"fileId":   fileID,
+		"name":     created.Name,
+		"mimetype": file.Mimetype,
+		"size":     n,
+		"path":     path,
 	}
-
-	internal := apiProvider.ProvideInternalClient()
-	n, err := internal.DownloadFile(ctx, downloadURL, out)
-	if err != nil {
-		out.Close()
-		os.Remove(targetAbs)
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Download failed: %v", err),
-		}, nil
+	if created.Renamed() {
+		data["requested"] = created.Requested
 	}
-	if closeErr := out.Close(); closeErr != nil {
-		os.Remove(targetAbs)
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to finalize file: %v", closeErr),
-		}, nil
+	var next []string
+	if dep, _ := lifecycle.DeploymentFromEnv(); dep == lifecycle.Remote {
+		data["host"] = "server"
+		next = append(next, "The path is on the server's host, not this client's; the operator transfers the file.")
+	} else {
+		next = append(next, fmt.Sprintf("Read the file at %s", path))
 	}
 
 	return &FeatureResult{
-		Success: true,
-		Message: fmt.Sprintf("Downloaded %s (%d bytes) to %s", file.Name, n, targetAbs),
-		Data: map[string]interface{}{
-			"fileId":   fileID,
-			"name":     file.Name,
-			"mimetype": file.Mimetype,
-			"size":     n,
-			"path":     targetAbs,
-		},
-		NextActions: []string{
-			fmt.Sprintf("Read the file at %s", targetAbs),
-		},
+		Success:     true,
+		Message:     msg,
+		Data:        data,
+		NextActions: next,
 	}, nil
 }

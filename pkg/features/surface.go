@@ -327,7 +327,7 @@ func authHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 // Download is download-file under its shorter name.
 var Download = &Feature{
 	Name:        "download",
-	Description: "Download a file shared in Slack to the local filesystem.",
+	Description: "Download a file shared in Slack into the exchange directory, the one local directory file parameters can name. filename= is a bare name, not a path; a taken name is saved with a ' (n)' suffix and the result says so.",
 	Schema:      DownloadFile.Schema,
 	Handler:     downloadHandler,
 }

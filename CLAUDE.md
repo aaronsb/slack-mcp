@@ -35,14 +35,14 @@ make npm-publish NPM_TOKEN=... # Publish to npm
 | `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
 | `mark-read` | verb | Fire read receipts — the one visibly-public read signal |
 | `auth` | verb | Interactive token setup (localhost only) |
-| `download` | verb | Download a shared file |
+| `download` | verb | Download a shared file into the exchange directory (`filename=` is a bare name, not a path; a taken name is saved as `name (n).ext` and the result says so) |
 
 Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the batch executor encodes composition, never effect, and admits only the read nouns (ADR-010). Every noun echoes its effective parameters and pages every capped list.
 
 ## Environment
 
 Required: `SLACK_MCP_XOXC_TOKEN`, `SLACK_MCP_XOXD_TOKEN` (or config file at `~/.config/slack-mcp/config.json`)
-Optional: `SLACK_MCP_HOST`, `SLACK_MCP_PORT`, `SLACK_MCP_SSE_API_KEY`, `SLACK_MCP_DEBUG`, `SLACK_MCP_DEPLOYMENT` (experimental, untested over SSH; `local`\|`remote`; default `local`, `remote` must be declared in the MCP client config, never detected), `SLACK_MCP_IDLE_TIMEOUT` (remote stdio only, default `2h`; `0`/`off` disables; set on a local or SSE server, it refuses to start)
+Optional: `SLACK_MCP_HOST`, `SLACK_MCP_PORT`, `SLACK_MCP_SSE_API_KEY`, `SLACK_MCP_DEBUG`, `SLACK_MCP_DEPLOYMENT` (experimental, untested over SSH; `local`\|`remote`; default `local`, `remote` must be declared in the MCP client config, never detected), `SLACK_MCP_IDLE_TIMEOUT` (remote stdio only, default `2h`; `0`/`off` disables; set on a local or SSE server, it refuses to start), `SLACK_MCP_EXCHANGE_DIR` (absolute path to an existing 0700 directory you own; default `$XDG_DATA_HOME/slack-mcp/exchange`, created 0700; client config only, never `.env`; refused if it is `$HOME`, a dot-directory under it, the config or data directory, or Desktop/Documents/Downloads — ADR-012)
 `.env`: may set only `SLACK_MCP_PERSONALITY` and `SLACK_MCP_NO_BROWSER` (never overriding the environment). Every other setting comes from the MCP client config; any other key in `.env` that the environment does not already set refuses startup, naming the key.
 SSE auth: when `SLACK_MCP_SSE_API_KEY` is set, every SSE/message request needs `Authorization: Bearer <key>` (else 401). A non-loopback `SLACK_MCP_HOST` without a key of at least 16 characters refuses to start.
 Binding to loopback is not the same as local-only: set the key whenever a tunnel or reverse proxy fronts the port, and terminate TLS at the proxy since the key travels in a header.
