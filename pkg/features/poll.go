@@ -11,6 +11,7 @@ import (
 
 	"github.com/aaronsb/slack-mcp/pkg/handle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/aaronsb/slack-mcp/pkg/watermark"
 	"github.com/slack-go/slack"
 )
@@ -476,7 +477,7 @@ func newNameIndex(apiProvider *provider.ApiProvider, t *tick) func(conversation)
 				names[ch.ID] = "@" + displayName(u)
 			}
 		case ch.IsMpIM:
-			names[ch.ID] = groupName(ch.Name, byName)
+			names[ch.ID] = text.GroupDMName(ch.Name, byName)
 		case ch.Name != "":
 			names[ch.ID] = "#" + ch.Name
 		}
@@ -492,34 +493,6 @@ func newNameIndex(apiProvider *provider.ApiProvider, t *tick) func(conversation)
 		t.conversationsUnnamed++
 		return c.ID
 	}
-}
-
-// groupName turns Slack's internal group-DM name into the people in it.
-// The wire format is "mpdm-alice--bob--carol-1", which is not something to show
-// anyone.
-func groupName(raw string, byName map[string]string) string {
-	trimmed := strings.TrimPrefix(raw, "mpdm-")
-	if i := strings.LastIndex(trimmed, "-"); i > 0 {
-		trimmed = trimmed[:i]
-	}
-
-	parts := strings.Split(trimmed, "--")
-	if raw == "" || len(parts) == 0 {
-		return "group DM"
-	}
-
-	people := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if display, ok := byName[p]; ok {
-			people = append(people, display)
-		} else if p != "" {
-			people = append(people, p)
-		}
-	}
-	if len(people) == 0 {
-		return "group DM"
-	}
-	return "group: " + strings.Join(people, ", ")
 }
 
 func displayName(u slack.User) string {

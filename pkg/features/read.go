@@ -8,6 +8,7 @@ import (
 
 	"github.com/aaronsb/slack-mcp/pkg/handle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 )
 
@@ -395,7 +396,7 @@ func matchConversations(apiProvider *provider.ApiProvider, needles []string) []c
 			label, kind = "@"+displayName(u), "dm"
 			names = []string{u.Name, u.RealName, u.Profile.DisplayName}
 		case ch.IsMpIM:
-			label, kind = groupName(ch.Name, nil), "group"
+			label, kind = text.GroupDMName(ch.Name, nil), "group"
 			names = []string{ch.Name}
 		default:
 			if ch.Name == "" {
@@ -530,7 +531,7 @@ func conversationLabel(apiProvider *provider.ApiProvider, channelID string) (str
 				return "@" + displayName(u), true
 			}
 		case ch.IsMpIM:
-			return groupName(ch.Name, nil), true
+			return text.GroupDMName(ch.Name, nil), true
 		case ch.Name != "":
 			return "#" + ch.Name, true
 		}

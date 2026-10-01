@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 	"log"
 	"strings"
@@ -248,7 +249,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 
 						mention := map[string]interface{}{
 							"type":      "mention",
-							"channel":   info.Name,
+							"channel":   text.ChannelLabel(info.Name, info.IsMpIM),
 							"author":    authorName,
 							"message":   rm.Body,
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
@@ -309,7 +310,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 
 						mention := map[string]interface{}{
 							"type":      "mention",
-							"channel":   info.Name,
+							"channel":   text.ChannelLabel(info.Name, info.IsMpIM),
 							"author":    authorName,
 							"message":   rm.Body,
 							"timestamp": formatTimestamp(parseSlackTimestamp(msg.Timestamp)),
@@ -353,7 +354,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 
 				channelData := map[string]interface{}{
 					"type":        "channel",
-					"channel":     info.Name,
+					"channel":     text.ChannelLabel(info.Name, info.IsMpIM),
 					"channelId":   ch.ID,
 					"hasUnreads":  ch.HasUnreads,
 					"lastMessage": "Multiple unread messages",

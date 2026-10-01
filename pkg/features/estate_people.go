@@ -9,6 +9,7 @@ import (
 
 	"github.com/aaronsb/slack-mcp/pkg/estate"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 )
 
 // The activity-plane views (ADR-008 stage 3). Every view is fold-first; the
@@ -43,7 +44,7 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 			}
 			out[ch.ID] = info
 		case ch.IsMpIM:
-			out[ch.ID] = convInfo{Label: groupName(ch.Name, nil)}
+			out[ch.ID] = convInfo{Label: text.GroupDMName(ch.Name, nil)}
 		case ch.Name != "":
 			out[ch.ID] = convInfo{Label: "#" + ch.Name}
 		}

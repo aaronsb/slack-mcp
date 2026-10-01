@@ -19,6 +19,7 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/paths"
 	"github.com/aaronsb/slack-mcp/pkg/safety"
 	"github.com/aaronsb/slack-mcp/pkg/setup"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/aaronsb/slack-mcp/pkg/transport"
 )
 
@@ -209,7 +210,7 @@ func (d *slackDirectory) conversation(id string) (cliTarget, error) {
 		}
 		return t, nil
 	case ch.IsMpIM:
-		t := cliTarget{Key: safety.Conversation(ch.ID, "#"+ch.Name), DestKind: safety.DestGroupDM, External: ch.IsExtShared}
+		t := cliTarget{Key: safety.Conversation(ch.ID, text.GroupDMName(ch.Name, nil)), DestKind: safety.DestGroupDM, External: ch.IsExtShared}
 		cursor := ""
 		for {
 			ids, next, err := d.api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{ChannelID: ch.ID, Cursor: cursor, Limit: 200})
@@ -262,13 +263,13 @@ func (d *slackDirectory) CurrentName(k safety.Key) (string, bool) {
 	case safety.KeyConversation:
 		for _, ch := range d.channels {
 			if ch.ID == k.ID && ch.Name != "" {
-				return "#" + ch.Name, true
+				return text.ChannelLabel(ch.Name, ch.IsMpIM), true
 			}
 		}
 		ctx, cancel := ctx15()
 		defer cancel()
 		if ch, err := d.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: k.ID}); err == nil && ch.Name != "" {
-			return "#" + ch.Name, true
+			return text.ChannelLabel(ch.Name, ch.IsMpIM), true
 		}
 	}
 	return "", false

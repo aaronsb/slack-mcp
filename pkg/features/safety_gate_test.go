@@ -488,7 +488,7 @@ func TestSafetyUncachedRawIDClassifiedByConversationsInfo(t *testing.T) {
 	})
 	f.srv.ResetCalls()
 	res := f.say(t, context.Background(), map[string]any{"to": "C0MPIM0001", "text": "hello"})
-	wantIn(t, res.Message, "#mpdm-schen--bockeliea-1 is quarantined", "@schen (and every DM and group DM with them)")
+	wantIn(t, res.Message, "group: schen, bockeliea is quarantined", "@schen (and every DM and group DM with them)")
 	if f.srv.Calls("conversations.info") == 0 || f.srv.Calls("conversations.members") == 0 {
 		t.Fatalf("classified without conversations.info/members")
 	}

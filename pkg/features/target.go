@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 )
 
@@ -177,6 +178,8 @@ func channelDestination(ap *provider.ApiProvider, typed string, ch slack.Channel
 		} else {
 			d.Name = "a direct message"
 		}
+	case ch.IsMpIM:
+		d.Name = text.GroupDMName(ch.Name, nil)
 	case ch.Name != "":
 		d.Name = "#" + ch.Name
 	default:
