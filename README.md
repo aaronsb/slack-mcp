@@ -143,6 +143,7 @@ The deployment is `local` unless you declare it. The server does not detect it: 
 | `mark-read` | verb | Fire read receipts — the one visibly-public read signal; refused at a quarantined destination, and never opens a DM |
 | `auth` | verb | Interactive token setup (localhost only) |
 | `download` | verb | Download a shared file into the exchange directory (`filename=` is a bare name, not a path; a taken name is saved as `name (n).ext` and the result says so) |
+| `unlock` | verb | Open a local page in your browser to review and clear quarantines and the strike lock; the page clears, the tool only returns its link and never reports what was cleared (ADR-013) |
 
 Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the batch executor encodes composition, never effect, and admits only the read nouns (ADR-010). Every noun echoes its effective parameters and pages every capped list.
 
@@ -150,7 +151,7 @@ Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the
 
 Everything this server posts is attributed to your account, and the agent reads text anyone in the workspace can write. So every `say` passes a fixed order before any content reaches Slack or any DM is opened (ADR-013):
 
-1. **Strike lock** — after too many blocks, every `say` and `mark-read` is refused until you clear it.
+1. **Strike lock** — after too many blocks, every `say` and `mark-read` is refused until you clear it (CLI, or the `unlock` page).
 2. **Exchange directory** — file names are bare names inside it (ADR-012).
 3. **Quarantine** — a destination a block closed refuses `say` and `mark-read`; reads keep working.
 4. **Secret scanner** — the text as sent, a reaction's emoji, and each file's name and bytes, including base64, hex, URL-encoded, gzip, and zlib content. A match is a block: nothing is sent, and the agent is told the class and the field, never the value.
@@ -180,7 +181,9 @@ slack-mcp trust list
 slack-mcp trust remove '#partner'
 ```
 
-A client on MCP protocol 2026-07-28 or later that declares elicitation on the call is also asked in-band to approve once, deny, or (in `soft`) approve and trust; every other client, and every SSE session, uses the CLI. Lifting a quarantine or the lock is CLI-only.
+A client on MCP protocol 2026-07-28 or later that declares elicitation on the call is also asked in-band to approve once, deny, or (in `soft`) approve and trust; every other client, and every SSE session, uses the CLI. Elicitation never lifts a quarantine or the lock.
+
+Without a terminal (Claude Desktop and other desktop clients), ask the agent to clear a lock. It calls `unlock`, which opens a page on `127.0.0.1` in your browser listing each quarantined person or conversation and the strike lock, with what the scanner found (the kind of secret and where, never the value). Check what to clear and press **Clear**, or press **Done** to close without clearing; either closes the page, and the link stops working. A page left alone closes after fifteen minutes. Clears from the page are recorded as `by=web`, beside the CLI's `by=cli`. `unlock` is unavailable under `SLACK_MCP_DEPLOYMENT=remote`, where the page would open on the server's host.
 
 The state lives beside the estate ledger, in `$XDG_DATA_HOME/slack-mcp/ledger/<team>/` (`quarantine.jsonl`, `pending.jsonl`, `trust.jsonl`, `provenance.jsonl`, each `0600`). They are append-only JSON lines, and a running server rereads them on every gated call, so editing or deleting a line takes effect at once; prefer the CLI, which keeps the history.
 

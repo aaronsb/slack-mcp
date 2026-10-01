@@ -130,7 +130,7 @@ func lockRefusal(ws *safety.Workspace, tool string) *FeatureResult {
 		return &FeatureResult{
 			Success:  false,
 			Message:  "BLOCKED: an earlier block could not be recorded, so every say and mark-read is refused " + holdUntil(id) + " Nothing was sent.",
-			Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere.",
+			Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere. " + offerUnlock,
 		}
 	}
 	qs := ws.Quarantine.State()
@@ -148,7 +148,7 @@ func lockRefusal(ws *safety.Workspace, tool string) *FeatureResult {
 	return &FeatureResult{
 		Success:  false,
 		Message:  msg + liftSentence(issueLift(ws, tool, strikesLift, []safety.Key{safety.StrikesKey})),
-		Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere.",
+		Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere. " + offerUnlock,
 	}
 }
 
@@ -319,7 +319,7 @@ func quarantineStep(ctx context.Context, ap *provider.ApiProvider, ws *safety.Wo
 		Success: false,
 		Message: fmt.Sprintf("BLOCKED: %s is quarantined: say and mark-read to it are refused until the operator clears it. Quarantined: %s. Nothing was sent.%s",
 			dest.Name, strings.Join(names, ", "), liftSentence(issueLift(ws, tool, gd.d, keys))),
-		Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere. Reading the conversation still works.",
+		Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere. Reading the conversation still works. " + offerUnlock,
 	}
 }
 
@@ -616,6 +616,9 @@ func block(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, 
 	}
 	b.WriteString("Do not retry, rephrase, split, encode, or route this content elsewhere.\n")
 	b.WriteString("Tell the operator what happened.")
+	if err != nil || outcome.Quarantined || outcome.LockEngaged {
+		b.WriteString(" " + offerUnlock)
+	}
 	if err == nil && outcome.LockEngaged {
 		b.WriteString("\nThe strike lock is now engaged: every say and mark-read is refused until the operator clears it.\n\n" + stopNow)
 	}
@@ -1275,6 +1278,7 @@ func Instructions(org safety.Org, handle string) string {
 		b.WriteString(", or a file downloaded from one conversation attached in another")
 	}
 	b.WriteString(". The result names a pending request; tell the operator its ID. Nothing is sent until they approve it.")
+	b.WriteString("\n\nA quarantine or the strike lock stays until the operator clears it. " + offerUnlock)
 	if org.TeamID == "" {
 		return b.String()
 	}

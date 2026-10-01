@@ -70,6 +70,10 @@
     {
       "name": "download",
       "description": "Download a shared file"
+    },
+    {
+      "name": "unlock",
+      "description": "Open a local page to review and clear safety locks"
     }
   ],
   "user_config": {

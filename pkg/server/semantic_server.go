@@ -79,9 +79,9 @@ func NewSemanticMCPServer(provider *provider.ApiProvider, opts ...Option) *Seman
 	registry := features.NewRegistry()
 
 	// The v2 surface (ADR-009): three read-only nouns carrying the depth,
-	// five verbs whose names state their blast radius, and batch — ADR-010's
+	// six verbs whose names state their blast radius, and batch — ADR-010's
 	// executor over the nouns. The v1 features stay exported for the nouns
-	// to delegate to; only these nine are advertised.
+	// to delegate to; only these ten are advertised.
 	registry.Register(features.Inbox)
 	registry.Register(features.Messages)
 	registry.Register(features.EstateViews)
@@ -91,6 +91,7 @@ func NewSemanticMCPServer(provider *provider.ApiProvider, opts ...Option) *Seman
 	registry.Register(features.MarkAsRead)
 	registry.Register(features.Auth)
 	registry.Register(features.Download)
+	registry.Register(features.Unlock)
 
 	semanticServer := &SemanticMCPServer{
 		server:   s,

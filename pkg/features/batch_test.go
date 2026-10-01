@@ -105,7 +105,7 @@ func TestBatchRejectsWriteToolsByName(t *testing.T) {
 	srv := slacktest.New(t)
 	ap := bootedProvider(t, srv)
 
-	for _, tool := range []string{"say", "dismiss", "mark-read", "auth", "download"} {
+	for _, tool := range []string{"say", "dismiss", "mark-read", "auth", "download", "unlock"} {
 		res := runBatch(t, ap, map[string]any{
 			"commands": []any{map[string]any{"tool": tool}},
 		})
