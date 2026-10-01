@@ -161,7 +161,8 @@ an attended assistant on the operator's own account.
 
 The strike lock persists across a posture change. A block that engages
 the lock records that it did, and the lock holds until
-`slack-mcp quarantine clear strikes`, whatever the posture is when the
+`slack-mcp quarantine clear strikes` (which also releases ADR-013's
+in-memory hold after an unrecorded block), whatever the posture is when the
 server next reads the file. Two `strict` strikes stay locked under
 `soft`, whose limit is three. Otherwise editing one setting in the
 client config and restarting would lift the lock, an ungated lift that
