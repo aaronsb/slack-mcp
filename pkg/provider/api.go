@@ -173,28 +173,7 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 				)
 			}
 
-			api := slack.New(token,
-				withHTTPClientOption(cookie),
-			)
-
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			// The result is used for its URL only and is never logged: it
-			// carries the HTTP response headers, and Slack's Set-Cookie
-			// holds a live session cookie. captureIdentity logs who
-			// authenticated, by named field.
-			res, err := api.AuthTestContext(ctx)
-			if err != nil {
-				log.Printf("ERROR: Slack authentication failed: %v", err)
-				log.Printf("Please check your tokens")
-				return api
-			}
-
-			return slack.New(token,
-				withHTTPClientOption(cookie),
-				withTeamEndpointOption(res.URL),
-			)
+			return discoverTeamClient(token, cookie)
 		},
 		internalClient:      internal,
 		users:               make(map[string]slack.User),
@@ -206,6 +185,33 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 	}
 
 	return ap
+}
+
+// discoverTeamClient runs auth.test and returns a client bound to the team
+// endpoint it names. extra applies to the discovery client only; tests use it
+// to aim discovery at a fake host. On failure it returns the discovery client.
+//
+// The auth.test result is used for its URL only and is never logged: it
+// carries the HTTP response headers, and Slack's Set-Cookie holds a live
+// session cookie. captureIdentity logs who authenticated, by named field.
+func discoverTeamClient(token, cookie string, extra ...slack.Option) *slack.Client {
+	opts := append([]slack.Option{withHTTPClientOption(cookie)}, extra...)
+	api := slack.New(token, opts...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	res, err := api.AuthTestContext(ctx)
+	if err != nil {
+		log.Printf("ERROR: Slack authentication failed: %v", err)
+		log.Printf("Please check your tokens")
+		return api
+	}
+
+	return slack.New(token,
+		withHTTPClientOption(cookie),
+		withTeamEndpointOption(res.URL),
+	)
 }
 
 func (ap *ApiProvider) Provide() (*slack.Client, error) {
@@ -1121,7 +1127,9 @@ func withHTTPClientOption(cookie string) func(c *slack.Client) {
 		if proxyURL := os.Getenv("SLACK_MCP_PROXY"); proxyURL != "" {
 			parsed, err := url.Parse(proxyURL)
 			if err != nil {
-				log.Fatalf("Failed to parse proxy URL: %v", err)
+				// The parse error quotes the URL, which may carry
+				// user:pass, so the value is never printed.
+				log.Fatalf("invalid SLACK_MCP_PROXY: not a valid URL")
 			}
 			proxy = http.ProxyURL(parsed)
 		} else {

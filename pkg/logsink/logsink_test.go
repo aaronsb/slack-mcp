@@ -22,6 +22,13 @@ func TestRedactMasksCredentials(t *testing.T) {
 		{"d cookie", "Cookie: d=abc123; d-s=17", "Cookie: d=<redacted>; d-s=17"},
 		{"bearer", "Authorization: Bearer sk-live-secret", "Authorization: Bearer <redacted>"},
 		{"bearer token shape", "Authorization: Bearer xoxc-1-2", "Authorization: Bearer <redacted>"},
+		{"proxy userinfo", "proxyconnect http://alice:s3cret@proxy.example:3128: refused", "proxyconnect http://<redacted>@proxy.example:3128: refused"},
+		{"userinfo user only", "dial socks5://tok@10.0.0.1:1080", "dial socks5://<redacted>@10.0.0.1:1080"},
+		// Accepted false positives: the net errs toward masking, so these
+		// ordinary phrases lose their values. Pinned so the trade is a
+		// decision rather than a surprise.
+		{"false positive d=5", "retry d=5 attempts", "retry d=<redacted> attempts"},
+		{"false positive bearer prose", "the bearer of the message", "the bearer <redacted> the message"},
 		{
 			"auth.test struct dump",
 			"Authenticated as: &{https://x.slack.com/ Team user T1 U1   map[Set-Cookie:[uc=xoxd-FAKE%2Fv%3D; path=/; secure d=xoxd-FAKE2; path=/]]}",
@@ -44,6 +51,8 @@ func TestRedactLeavesOrdinaryLinesAlone(t *testing.T) {
 		"Failed to get DM info for id=D123: not_found",
 		"Cookie extract: found encrypted d cookie (prefix=v11, dbVersion=24, 120 bytes)",
 		"Ignoring env var tokens: they lack the xoxc/xoxd prefixes",
+		"Post \"https://slack.com/api/auth.test\": dial tcp: timeout",
+		"Open this URL manually: http://localhost:13080/path@x",
 	} {
 		if got := string(Redact([]byte(in))); got != in {
 			t.Errorf("Redact(%q) = %q, want it unchanged", in, got)
@@ -70,6 +79,35 @@ func TestRedactingWriterReportsCallerLength(t *testing.T) {
 	}
 	if string(in) != "x xoxc-1-2-3\n" {
 		t.Fatalf("Write modified the caller's buffer: %q", in)
+	}
+}
+
+// A token written across two Write calls must still be redacted: the
+// writer holds a partial line until its newline arrives.
+func TestRedactingWriterBuffersSplitLines(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewRedactingWriter(&buf)
+	_, _ = w.Write([]byte("cookie xoxd-FAKE"))
+	if buf.Len() != 0 {
+		t.Fatalf("partial line written early: %q", buf.String())
+	}
+	_, _ = w.Write([]byte("tail; next\nheld"))
+	if got := buf.String(); got != "cookie <redacted>; next\n" {
+		t.Fatalf("got %q", got)
+	}
+	_, _ = w.Write([]byte(" line\n"))
+	if got := buf.String(); got != "cookie <redacted>; next\nheld line\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A writer that never sends a newline cannot grow the buffer without bound.
+func TestRedactingWriterFlushesPastCap(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewRedactingWriter(&buf)
+	_, _ = w.Write(bytes.Repeat([]byte("a"), maxPending+1))
+	if buf.Len() != maxPending+1 {
+		t.Fatalf("wrote %d bytes, want %d", buf.Len(), maxPending+1)
 	}
 }
 
@@ -184,5 +222,104 @@ func TestOpenOverrideCreatesPrivateFile(t *testing.T) {
 	}
 	if mode := fi.Mode().Perm(); mode != 0o600 {
 		t.Errorf("override log mode = %o, want 600", mode)
+	}
+}
+
+// A symlink planted at the log path must not redirect the log or get its
+// target chmodded.
+func TestOpenRefusesSymlinkAtLogPath(t *testing.T) {
+	skipModeChecksOnWindows(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv(FileEnv, "")
+
+	target := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(target, []byte("untouched\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	if f, err := Open(path); err == nil {
+		f.Close()
+		t.Fatal("Open followed a symlink at the log path")
+	}
+
+	fi, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := fi.Mode().Perm(); mode != 0o644 {
+		t.Errorf("symlink target mode changed to %o", mode)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "untouched\n" {
+		t.Errorf("symlink target written to: %q", data)
+	}
+}
+
+// A symlinked default state directory is refused, and its target's mode is
+// left alone.
+func TestOpenRefusesSymlinkedStateDir(t *testing.T) {
+	skipModeChecksOnWindows(t)
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv(FileEnv, "")
+
+	elsewhere := t.TempDir()
+	if err := os.Chmod(elsewhere, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(state, "slack-mcp")); err != nil {
+		t.Fatal(err)
+	}
+
+	if f, err := Open(Path()); err == nil {
+		f.Close()
+		t.Fatal("Open accepted a symlinked state directory")
+	}
+	fi, err := os.Stat(elsewhere)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := fi.Mode().Perm(); mode != 0o755 {
+		t.Errorf("symlinked dir target mode changed to %o", mode)
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, FileName)); err == nil {
+		t.Error("log was created through the symlinked state directory")
+	}
+}
+
+// SLACK_MCP_LOG_FILE=/dev/null discards the log cleanly: a non-regular file
+// is used as it is, with no chmod attempted.
+func TestOpenAcceptsDevNull(t *testing.T) {
+	skipModeChecksOnWindows(t)
+	before, err := os.Stat(os.DevNull)
+	if err != nil {
+		t.Skip("no /dev/null")
+	}
+	t.Setenv(FileEnv, os.DevNull)
+
+	f, err := Open(Path())
+	if err != nil {
+		t.Fatalf("Open(/dev/null): %v", err)
+	}
+	if _, err := f.WriteString("discarded\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f.Close()
+
+	after, err := os.Stat(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Mode() != before.Mode() {
+		t.Errorf("/dev/null mode changed from %v to %v", before.Mode(), after.Mode())
 	}
 }
