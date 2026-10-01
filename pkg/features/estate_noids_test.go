@@ -33,6 +33,7 @@ func noIDsFixture(t *testing.T) func(params map[string]any) string {
 		seedActivity(ap, "D0123ABCD", "U0123ABCD", d) // DM to an unresolved user
 		seedActivity(ap, "C0999ZZZZ", "U0123ABCD", d) // conversation no map names
 		seedActivity(ap, "C0999ZZZZ", "U0777EXTL", d) // Slack Connect external
+		seedActivity(ap, "C0999ZZZZ", "U0888EXTM", d) // a second external
 	}
 	return func(params map[string]any) string {
 		return estateViewOut(t, ap, params)
@@ -106,5 +107,29 @@ func TestAboutReadingPlanOmitsStepsWithoutAName(t *testing.T) {
 	}
 	if !strings.Contains(out, "person='@mlopez'") {
 		t.Fatalf("top counterpart not named by handle:\n%s", out)
+	}
+}
+
+func TestAboutDeeperContinuesTheViewsExternalNumbering(t *testing.T) {
+	run := noIDsFixture(t)
+	out := run(map[string]any{"view": "about", "person": "schen", "deeper": true})
+	for _, want := range []string{"external user 1", "external user 2", "external user 3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "external user 4") {
+		t.Errorf("second hop restarted or re-numbered externals:\n%s", out)
+	}
+}
+
+func TestExternalNumberingIsIndependentPerResponse(t *testing.T) {
+	run := noIDsFixture(t)
+	a := run(map[string]any{"view": "person", "person": "schen"})
+	b := run(map[string]any{"view": "person", "person": "schen"})
+	for i, out := range []string{a, b} {
+		if !strings.Contains(out, "external user 1") || strings.Contains(out, "external user 4") {
+			t.Errorf("response %d numbering carried over or drifted:\n%s", i, out)
+		}
 	}
 }

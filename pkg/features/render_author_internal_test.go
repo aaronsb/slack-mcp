@@ -58,3 +58,50 @@ func TestUnresolvedDMRendersByKindNotByID(t *testing.T) {
 		t.Fatalf("missing conversation label = %q", got)
 	}
 }
+
+func TestFindDiscussionParticipantsAndUnreadNamesCarryNoIDs(t *testing.T) {
+	srv := slacktest.New(t)
+	ap := srv.Provider(t)
+	if _, err := ap.Provide(); err != nil {
+		t.Fatalf("Provide: %v", err)
+	}
+	srv.Quiesce(t)
+	r := newMessageRenderer(ap)
+
+	msgs := []slack.Message{
+		{Msg: slack.Msg{User: "U2"}},
+		{Msg: slack.Msg{User: "U0777EXTL"}},
+		{Msg: slack.Msg{User: "U0888EXTM"}},
+		{Msg: slack.Msg{User: "U0777EXTL"}},
+		{Msg: slack.Msg{Username: "Deploy Bot"}},
+	}
+	got := getUniqueParticipants(msgs, r)
+	if len(got) != 4 {
+		t.Fatalf("participants = %v, want 4 distinct", got)
+	}
+	for _, name := range got {
+		if slackID.MatchString(name) {
+			t.Errorf("participant %q carries a Slack ID", name)
+		}
+	}
+	if got[1] == got[2] {
+		t.Errorf("two externals collapsed: %v", got)
+	}
+
+	users := ap.ProvideUsersMap()
+	x := getUserName("U0777EXTL", users, &r.ext)
+	y := getUserName("U0888EXTM", users, &r.ext)
+	if x == y || slackID.MatchString(x) || slackID.MatchString(y) {
+		t.Errorf("getUserName = %q, %q", x, y)
+	}
+}
+
+func TestNilExternalNamerIsAProgrammingError(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a nil namer labelled an external instead of panicking")
+		}
+	}()
+	var ext *externalNamer
+	ext.label("U0777EXTL")
+}

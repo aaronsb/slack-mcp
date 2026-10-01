@@ -85,7 +85,6 @@ func getThreadContextImpl(ctx context.Context, params map[string]interface{}, th
 
 	// Process messages
 	messages := []map[string]interface{}{}
-	usersMap := apiProvider.ProvideUsersMap()
 	renderer := newMessageRenderer(apiProvider)
 
 	for _, msg := range replies {
@@ -114,7 +113,7 @@ func getThreadContextImpl(ctx context.Context, params map[string]interface{}, th
 			"messages": messages,
 			"threadMeta": map[string]interface{}{
 				"messageCount": len(messages),
-				"participants": getUniqueParticipants(replies, usersMap),
+				"participants": getUniqueParticipants(replies, renderer),
 			},
 		},
 		Message:     fmt.Sprintf("Found thread with %d messages", len(messages)),
@@ -190,21 +189,18 @@ func extractKeyPoints(text string) []string {
 	return points
 }
 
-func getUniqueParticipants(messages []slack.Message, usersMap map[string]slack.User) []string {
+func getUniqueParticipants(messages []slack.Message, r *messageRenderer) []string {
 	seen := map[string]bool{}
 	participants := []string{}
 
 	for _, msg := range messages {
-		if !seen[msg.User] {
-			seen[msg.User] = true
-			userName := msg.User
-			if user, ok := usersMap[msg.User]; ok {
-				userName = user.RealName
-				if userName == "" {
-					userName = user.Name
-				}
-			}
-			participants = append(participants, userName)
+		key := msg.User
+		if key == "" {
+			key = msg.Username
+		}
+		if !seen[key] {
+			seen[key] = true
+			participants = append(participants, r.authorName(msg))
 		}
 	}
 

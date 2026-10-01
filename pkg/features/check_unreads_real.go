@@ -146,7 +146,7 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				observeTraffic(apiProvider, im.ID, resp.Messages)
 
 				if len(resp.Messages) > 0 {
-					authorName := getUserName(info.User, usersMap)
+					authorName := getUserName(info.User, usersMap, &renderer.ext)
 
 					// Check if DM partner is a bot
 					authorIsBot := false

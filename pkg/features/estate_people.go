@@ -108,7 +108,9 @@ type externalNamer struct {
 
 func (e *externalNamer) label(id string) string {
 	if e == nil {
-		return externalUser
+		// A nil namer would silently merge distinct externals into one
+		// label; every call site owns a per-response namer.
+		panic("features: externalNamer.label on a nil namer")
 	}
 	if e.n == nil {
 		e.n = map[string]int{}
