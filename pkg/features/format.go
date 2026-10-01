@@ -530,6 +530,9 @@ func formatCatchUp(result *FeatureResult) string {
 			mime := str(f, "mimetype")
 			b.WriteString(fmt.Sprintf("📎 %s (%s, id=%s) — download fileId='%s'\n", name, mime, id, id))
 		}
+		if h := str(item, "handle"); h != "" {
+			b.WriteString(fmt.Sprintf("read: messages target='%s'\n", h))
+		}
 		b.WriteString("\n")
 	}
 
