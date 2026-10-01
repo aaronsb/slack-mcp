@@ -171,19 +171,33 @@ func parseCommands(raw interface{}) ([]playbook.Command, *FeatureResult) {
 				Message: fmt.Sprintf("Command %d is missing tool='inbox'|'messages'|'estate'.", i+1),
 			}
 		}
-		if tool == "batch" {
-			return nil, &FeatureResult{Success: false, Message: "batch may not contain batch."}
-		}
-		if _, ok := batchable[tool]; !ok {
-			return nil, &FeatureResult{
-				Success: false,
-				Message: fmt.Sprintf("Command %d: %q is not batchable — the executor admits only reads: inbox, messages, estate.", i+1, tool),
-			}
-		}
 		p, _ := m["params"].(map[string]interface{})
-		cmds = append(cmds, playbook.Command{Tool: tool, Params: p})
+		c := playbook.Command{Tool: tool, Params: p}
+		if refusal := admit(c); refusal != "" {
+			return nil, &FeatureResult{Success: false, Message: fmt.Sprintf("Command %d: %s", i+1, refusal)}
+		}
+		cmds = append(cmds, c)
 	}
 	return cmds, nil
+}
+
+// admit is the executor's admission rule, applied when a plan is validated
+// and again when a stored playbook runs (a hand-edited or version-skewed
+// playbooks.json bypasses validation). Only the read nouns are admitted,
+// and only as reads: a parameter that makes a read noun write — render=
+// writes a report file — stays out, so a batch never carries an effect.
+// Returns the refusal, or "" when the command is admitted.
+func admit(c playbook.Command) string {
+	if c.Tool == "batch" {
+		return "batch may not contain batch."
+	}
+	if _, ok := batchable[c.Tool]; !ok {
+		return fmt.Sprintf("%q is not batchable — the executor admits only reads: inbox, messages, estate.", c.Tool)
+	}
+	if _, ok := c.Params["render"]; ok {
+		return fmt.Sprintf("%s render= writes a report file, and batch admits reads only — run it as its own call.", c.Tool)
+	}
+	return ""
 }
 
 // executeBatch runs the commands in order and renders one document: each
@@ -193,15 +207,13 @@ func parseCommands(raw interface{}) ([]playbook.Command, *FeatureResult) {
 func executeBatch(ctx context.Context, ap *provider.ApiProvider, cmds []playbook.Command) string {
 	sections := make([]string, 0, len(cmds))
 	for _, c := range cmds {
-		f := batchable[c.Tool]
-		if f == nil {
-			// A stored playbook bypasses parseCommands, so a hand-edited or
-			// version-skewed playbooks.json can carry a tool the executor
-			// does not admit. It renders like any other failing item.
-			sections = append(sections, "`"+commandEcho(c)+"`\n\n**Error:** "+
-				fmt.Sprintf("%q is not batchable — the executor admits only reads: inbox, messages, estate.", c.Tool))
+		if refusal := admit(c); refusal != "" {
+			// A stored playbook bypasses parseCommands; a command the
+			// executor does not admit renders like any other failing item.
+			sections = append(sections, "`"+commandEcho(c)+"`\n\n**Error:** "+refusal)
 			continue
 		}
+		f := batchable[c.Tool]
 		p := make(map[string]interface{}, len(c.Params)+1)
 		for k, v := range c.Params {
 			p[k] = v

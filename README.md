@@ -6,7 +6,7 @@
 
 MCP server that gives AI agents access to your Slack workspaces using session tokens. No OAuth apps, no bot permissions, no admin approval required.
 
-Beyond reading and writing messages, it accumulates a durable picture of the workspace — every channel and user's state over time, departures kept as dated tombstones — and synthesizes a relationship graph from it on demand: `estate view='about' person='X'` answers "tell me about X" with their footprint, circle, and a ranked reading plan. The graph is never stored; it is computed per query from two small local ledgers that hold no message content ([design note](docs/design-notes/runtime-graph-synthesis.md)).
+Beyond reading and writing messages, it accumulates a durable picture of the workspace — every channel and user's state over time, departures kept as dated tombstones — and synthesizes a relationship graph from it on demand: `estate view='about' person='X'` answers "tell me about X" with their footprint, circle, and a ranked reading plan. The graph is never maintained as a store; it is computed per query from two small local ledgers that hold no message content ([design note](docs/design-notes/runtime-graph-synthesis.md)). Add `render='graph'` to draw one view as a static HTML page you open locally.
 
 ## How it works
 
@@ -134,7 +134,7 @@ The deployment is `local` unless you declare it. The server does not detect it: 
 |------|------|-------------|
 | `inbox` | noun | What needs you: `view='new'` (since your last dismiss), `'unreads'`, `'mentions'` |
 | `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` full Slack search syntax |
-| `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'` |
+| `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'`; `about`/`person` take `render='graph'` to also write a static HTML graph page (not in `batch`) |
 | `batch` | executor | Run a held plan of reads in one call: `commands=[{tool, params}...]`; playbooks via `save=`/`run=`/`list=`/`delete=` |
 | `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), or an emoji reaction |
 | `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
@@ -151,6 +151,7 @@ Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the
 - **Tokens stay local** — stored in `~/.config/slack-mcp/config.json` with `0600` permissions
 - **Ledgers hold no message content** — the durable estate ledger stores entity facts (names, lifecycle, tombstones); the attention ledger stores `{user, conversation, day}` encounters with a 90-day window; both live under XDG with `0600`, and deleting them deletes the graph
 - **Hour-level activity is recorded only for you** — colleagues bucket by day, by design
+- **Graph reports are local, private files** — `estate render='graph'` writes a self-contained HTML page to `$XDG_DATA_HOME/slack-mcp/reports/` (default `~/.local/share/slack-mcp/reports/`), directory `0700`, file `0600`, one per view and person, replaced on each render. A report holds relationship data — the same names and counts the view shows, never IDs or colleagues' hours — so treat it like the ledgers; delete the directory to remove them. The page loads nothing from the network (bundled Cytoscape.js, strict Content-Security-Policy), and nothing is served or opened for you
 - **No network traffic except Slack** — the binary connects only to `slack.com/api/*`
 - **No browser downloads** — uses your installed browser, never fetches binaries from CDNs
 
