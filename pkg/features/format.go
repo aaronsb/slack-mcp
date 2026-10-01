@@ -49,7 +49,7 @@ func formatResultBody(toolName string, result *FeatureResult) string {
 		return formatReact(result)
 	case "auth-setup":
 		return formatAuthSetup(result)
-	case "download-file":
+	case "download-file", "put":
 		return formatDownloadFile(result)
 	case "read":
 		return formatRead(result)

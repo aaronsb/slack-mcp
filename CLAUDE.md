@@ -36,6 +36,7 @@ make npm-publish NPM_TOKEN=... # Publish to npm
 | `mark-read` | verb | Fire read receipts — the one visibly-public read signal; refused at a quarantined destination, and never opens a DM |
 | `auth` | verb | Interactive token setup (localhost only) |
 | `download` | verb | Download a shared file into the exchange directory (`filename=` is a bare name, not a path; a taken name is saved as `name (n).ext` and the result says so) |
+| `put` | verb | Write a new file into the exchange directory for `say files=` to attach, for clients whose file tools cannot reach the server's filesystem: `name=` (bare name) and exactly one of `content=` (text) or `base64=` (standard alphabet, padding optional); at most 5 MiB; never overwrites (a taken name is saved as `name (n).ext`), never reads, lists, or deletes (ADR-012) |
 | `unlock` | verb | Open a local page (127.0.0.1, one-shot link, sent to the browser only) where the operator reviews and clears quarantines and the strike lock; the tool clears nothing, returns no link, and never reports what was cleared; refused on remote and SSE (ADR-013, #132) |
 
 Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the batch executor encodes composition, never effect, and admits only the read nouns (ADR-010). Every noun echoes its effective parameters and pages every capped list.

@@ -64,11 +64,11 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 | [006](006-observation-ledger.md) | Observation Ledger and Folded Caches | Proposed, amended by 007 | **Partial** — its mechanisms shipped inside ADR-007's estate; the attention ledger is not started |
 | [007](007-estate-ledger.md) | The Estate Ledger | Accepted | **Implemented** — #51–#57; running against a live workspace |
 | [008](008-relationship-views.md) | Relationship Views | Accepted, amended 2026-09-30 | Implemented — families/person/initiatives/convergence/about views, encounter observer, compiled executor (#62, #65, #66, stage 3 PR); graph reports via `render='graph'` on about/person, static 0600 files under `<data dir>/reports/` (#61) |
-| [009](009-tool-surface-recomposition.md) | Tool Surface Recomposition | Accepted | Implemented — shipped at v2.0.0; eight tools by the verb/noun/parameter assignment rule, pinned by `TestV2SurfaceIsExactlyEightTools`; superseded #49 |
+| [009](009-tool-surface-recomposition.md) | Tool Surface Recomposition | Accepted | Implemented — shipped at v2.0.0; eight tools by the verb/noun/parameter assignment rule, the registered surface (eleven with later ADRs) pinned by `TestRegisteredSurfaceIsExactlyElevenTools`; superseded #49 |
 | [010](010-batch-executor.md) | The Batch Executor | Accepted | One-shot read batches + saved playbooks + the frequency hint |
 | [011](011-time-flows-down-the-page.md) | Time Flows Down the Page | Accepted | Every rendered message list is oldest-first; fetches stay newest-first so caps keep the newest |
-| [012](012-exchange-directory.md) | The Exchange Directory | Accepted, amended 2026-09-30 | Implemented — `pkg/exchange`; `download` writes only into the exchange directory (no `destDir`); `say files=` (#92) reads only from it; graph reports (#61) stay outside it |
-| [013](013-outbound-safety.md) | Outbound Safety | Accepted, amended 2026-09-30, 2026-10-01 | Implemented — scanner `pkg/scanner`, state `pkg/safety`, CLI `cmd/slack-mcp`, wired into `say` (text, files, reactions) and `mark-read` by `pkg/features/safety_gate.go`; download records provenance for gate case 2; banner on the read nouns, server instructions, in-band approval for 2026-07-28 clients |
+| [012](012-exchange-directory.md) | The Exchange Directory | Accepted, amended 2026-09-30, 2026-10-01 | Implemented — `pkg/exchange`; `download` writes only into the exchange directory (no `destDir`); `put` creates new files in it and never reads, lists, overwrites, or deletes; `say files=` (#92) reads only from it; graph reports (#61) stay outside it |
+| [013](013-outbound-safety.md) | Outbound Safety | Accepted, amended 2026-09-30, 2026-10-01 | Implemented — scanner `pkg/scanner`, state `pkg/safety`, CLI `cmd/slack-mcp`, wired into `say` (text, files, reactions) and `mark-read` by `pkg/features/safety_gate.go`; download records provenance for gate case 2; `put` records none (the case-2 weakening is accepted in ADR-012's 2026-10-01 amendment); banner on the read nouns, server instructions, in-band approval for 2026-07-28 clients |
 | [014](014-identity-and-safety-posture.md) | Account Identity and Safety Posture | Accepted, amended 2026-10-01 | Implemented — `SLACK_MCP_IDENTITY` and `SLACK_MCP_SAFETY` read at startup; identity wording in the `say` description, server instructions, write results, and block notices; posture table applied by the quarantine file |
 
 ### Auth — how tokens are obtained
@@ -100,9 +100,9 @@ recomposition. The implementation files still carry the old names — `catchup.g
 Chrome DevTools Protocol via `go-rod/rod` — is absent; neither `rod` nor `chromedp` is in
 `go.mod`. Status `Draft` is accurate.
 
-**ADR-001 specifies ten tools.** Nine are registered — ADR-009's eight plus ADR-010's
-`batch` — and none carries an ADR-001 name. `CLAUDE.md` and the README document the current
-nine. ADR-001's tool list is superseded rather than in arrears; its status stays Proposed
+**ADR-001 specifies ten tools.** Eleven are registered — ADR-009's eight, ADR-010's
+`batch`, ADR-013's `unlock`, and ADR-012's `put` — and none carries an ADR-001 name.
+`CLAUDE.md` and the README document the current eleven. ADR-001's tool list is superseded rather than in arrears; its status stays Proposed
 because the rest of the decision (Go, session tokens, the fusion of two prior servers) is what
 the code implements.
 

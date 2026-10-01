@@ -190,7 +190,7 @@ func sayFilesHandler(ctx context.Context, params map[string]interface{}, names [
 			head = "The files could not be attached:"
 		}
 		return fail(head+"\n\n"+strings.Join(problems, "\n\n"),
-			nothingSent+" files= takes bare names inside the exchange directory ("+exchange.Locate().Path+"); copy a file in with your own file tools, then retry.")
+			nothingSent+" files= takes bare names inside the exchange directory ("+exchange.Locate().Path+"); copy a file in with your own file tools, or, if they cannot reach that directory, write it with put name= content= (or base64=), then retry.")
 	}
 
 	api, err := apiProvider.Provide()

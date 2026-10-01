@@ -447,7 +447,7 @@ func TestSayFilesRefusalsMakeZeroSlackCalls(t *testing.T) {
 	}
 	cases := []refusal{
 		{"bad name", map[string]any{"files": []any{"../etc/passwd"}}, []string{"is not a bare file name"}},
-		{"missing with hint", map[string]any{"files": []any{"report.pdf"}}, []string{"No file named report.pdf", "report-v2.pdf"}},
+		{"missing with hint", map[string]any{"files": []any{"report.pdf"}}, []string{"No file named report.pdf", "report-v2.pdf", "put name="}},
 		{"one of two missing", map[string]any{"files": []any{"ok.txt", "nope.txt"}}, []string{"1 of 2 files", "No file named nope.txt"}},
 		{"over per-file cap", map[string]any{"files": []any{"big.bin"}}, []string{"over the 8 byte limit"}},
 		{"over total cap", map[string]any{"files": []any{"mid1.bin", "mid2.bin"}}, []string{"over the 10 B limit", "mid1.bin: 6 B (6 bytes)", "mid2.bin: 6 B (6 bytes)"}},

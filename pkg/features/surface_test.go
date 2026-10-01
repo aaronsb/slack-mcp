@@ -130,19 +130,6 @@ func TestEstatePeopleViewServesTheDirectory(t *testing.T) {
 	}
 }
 
-func TestV2SurfaceIsExactlyEightTools(t *testing.T) {
-	want := []string{"inbox", "messages", "estate", "say", "dismiss", "mark-read", "auth", "download"}
-	tools := []*features.Feature{
-		features.Inbox, features.Messages, features.EstateViews, features.Say,
-		features.Dismiss, features.MarkAsRead, features.Auth, features.Download,
-	}
-	for i, f := range tools {
-		if f.Name != want[i] {
-			t.Fatalf("tool %d named %q, want %q", i, f.Name, want[i])
-		}
-	}
-}
-
 func TestMessagesSinceResolvesAPerson(t *testing.T) {
 	srv := slacktest.New(t)
 	var dm slack.Channel

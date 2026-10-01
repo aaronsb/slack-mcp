@@ -174,10 +174,53 @@ func (r *CreateResult) Notice() string {
 
 // Create makes a new file named name (a valid bare name) through the root,
 // with O_CREATE|O_EXCL at mode 0600. A taken name is suffixed "name (n).ext",
-// up to MaxCollisionAttempts names in all.
+// up to MaxCollisionAttempts names in all; past that it fails with a
+// *CollisionError.
 func (d *Dir) Create(name string) (*CreateResult, error) {
-	if err := ValidateName(name); err != nil {
+	var f *os.File
+	got, err := d.claim(name, func(cand string) error {
+		var err error
+		f, err = d.root.OpenFile(cand, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		return err
+	})
+	if err != nil {
 		return nil, err
+	}
+	return &CreateResult{File: f, Name: got, Requested: name}, nil
+}
+
+// CollisionError reports that a name and every suffixed name tried are
+// taken.
+type CollisionError struct {
+	Name string
+	// Tried counts the names tried, Name included; Skipped counts the
+	// suffixed names skipped as too long.
+	Tried, Skipped int
+	// Free is a suffixed name past the bound that was free, or "".
+	Free string
+}
+
+// Error words the failure for download's filename= parameter.
+func (e *CollisionError) Error() string { return e.Message("filename") }
+
+// Message words the failure for the parameter that names the file.
+func (e *CollisionError) Message(param string) string {
+	msg := fmt.Sprintf("%s is taken in the exchange directory, and so are the %d suffixed names tried", e.Name, e.Tried-1)
+	if e.Skipped > 0 {
+		msg += fmt.Sprintf(" (%d suffixed names were skipped as invalid, too long for the %d-byte limit)", e.Skipped, MaxNameBytes)
+	}
+	if e.Free != "" {
+		return msg + fmt.Sprintf("; pass %s=%q", param, e.Free)
+	}
+	return msg + fmt.Sprintf("; pass a different name with %s=", param)
+}
+
+// claim finds the first of name and its suffixed forms that place accepts.
+// place creates the candidate without replacing anything and fails with an
+// error matching fs.ErrExist when it is taken.
+func (d *Dir) claim(name string, place func(cand string) error) (string, error) {
+	if err := ValidateName(name); err != nil {
+		return "", err
 	}
 	tried, skipped := 0, 0
 	for i := 0; i < MaxCollisionAttempts; i++ {
@@ -190,24 +233,15 @@ func (d *Dir) Create(name string) (*CreateResult, error) {
 			}
 		}
 		tried++
-		f, err := d.root.OpenFile(cand, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		err := place(cand)
 		if err == nil {
-			return &CreateResult{File: f, Name: cand, Requested: name}, nil
+			return cand, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
-			return nil, fmt.Errorf("create %s in the exchange directory: %w", cand, err)
+			return "", fmt.Errorf("create %s in the exchange directory: %w", cand, err)
 		}
 	}
-	msg := fmt.Sprintf("%s is taken in the exchange directory, and so are the %d suffixed names tried", name, tried-1)
-	if skipped > 0 {
-		msg += fmt.Sprintf(" (%d suffixed names were skipped as invalid, too long for the %d-byte limit)", skipped, MaxNameBytes)
-	}
-	if free := d.freeName(name); free != "" {
-		msg += fmt.Sprintf("; pass filename=%q", free)
-	} else {
-		msg += "; pass a different name with filename="
-	}
-	return nil, errors.New(msg)
+	return "", &CollisionError{Name: name, Tried: tried, Skipped: skipped, Free: d.freeName(name)}
 }
 
 // freeName finds a suffixed name past the collision bound that is free now,
