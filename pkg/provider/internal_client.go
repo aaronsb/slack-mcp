@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -253,7 +254,12 @@ func (c *InternalClient) callInternalAPI(ctx context.Context, endpoint string, p
 		return fmt.Errorf("creating request: %w", err)
 	}
 
-	// Set headers to mimic browser
+	return c.send(req, result)
+}
+
+// send sets the browser-mimicking session headers every internal call
+// carries, performs the request, and decodes the JSON body into result.
+func (c *InternalClient) send(req *http.Request, result interface{}) error {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
@@ -262,29 +268,22 @@ func (c *InternalClient) callInternalAPI(ctx context.Context, endpoint string, p
 	req.Header.Set("Origin", "https://app.slack.com")
 	req.Header.Set("Referer", "https://app.slack.com/")
 
-	// Make request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("making request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Read response
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("reading response: %w", err)
 	}
-
-	// Check status
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 	}
-
-	// Parse JSON
 	if err := json.Unmarshal(body, result); err != nil {
 		return fmt.Errorf("parsing response: %w", err)
 	}
-
 	return nil
 }
 
@@ -372,39 +371,25 @@ func (c *InternalClient) PostInternalAPI(ctx context.Context, endpoint string, p
 		return fmt.Errorf("creating request: %w", err)
 	}
 
-	// Set headers
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.xoxcToken))
-	req.Header.Set("Cookie", fmt.Sprintf("d=%s", c.xoxdToken))
-	req.Header.Set("Origin", "https://app.slack.com")
-	req.Header.Set("Referer", "https://app.slack.com/")
+	return c.send(req, result)
+}
 
-	// Make request
-	resp, err := c.httpClient.Do(req)
+// PostFormInternalAPI calls an internal endpoint with a form-encoded POST
+// body, the shape the web client uses for endpoints such as drafts.create,
+// whose structured fields (blocks, destinations) travel as JSON-encoded
+// strings inside the form rather than as a JSON request body.
+//
+// A Slack-level failure arrives as 200 with ok=false; decode into a result
+// carrying `ok` and `error` to see it — only transport and HTTP failures
+// come back as err.
+func (c *InternalClient) PostFormInternalAPI(ctx context.Context, endpoint string, form url.Values, result interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return fmt.Errorf("making request: %w", err)
+		return fmt.Errorf("creating request: %w", err)
 	}
-	defer resp.Body.Close()
-
-	// Read response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
-	}
-
-	// Check status
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse JSON
-	if err := json.Unmarshal(body, result); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
-	}
-
-	return nil
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return c.send(req, result)
 }
 
 // ThreadViewResponse is Slack's own Threads view, from
