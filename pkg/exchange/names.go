@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -95,7 +96,7 @@ func SplitExt(name string) (stem, ext string) {
 }
 
 // Sanitize turns a Slack-supplied file name into a valid bare name: each
-// refused character becomes '_', trailing dots and spaces are dropped, a
+// refused character, control character, or Unicode format character becomes '_', trailing dots and spaces are dropped, a
 // device-name stem gets a leading '_', an over-long name is truncated at a
 // rune boundary keeping its extension, and an empty result falls back to
 // fallback (the file ID).
@@ -103,7 +104,10 @@ func Sanitize(name, fallback string) string {
 	name = strings.ToValidUTF8(name, "_")
 	var b strings.Builder
 	for _, r := range name {
-		if r < 0x20 || strings.ContainsRune(refusedChars, r) {
+		// Beyond the bare-name rule, Slack names also lose control
+		// characters (C0, DEL, C1) and format characters (Cf, including
+		// bidi overrides such as U+202E that disguise an extension).
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || strings.ContainsRune(refusedChars, r) {
 			b.WriteByte('_')
 			continue
 		}

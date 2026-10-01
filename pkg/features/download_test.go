@@ -133,3 +133,26 @@ func TestDownloadFailureLeavesNoFile(t *testing.T) {
 		t.Fatalf("partial file left behind: %v", err)
 	}
 }
+
+func TestDownloadRefusedExchangeDirMakesNoSlackCall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no mode check on Windows")
+	}
+	srv, ap := downloadServer(t, "report.pdf")
+	if err := os.MkdirAll(exchangeDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(exchangeDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := runTool(t, features.Download, ap, map[string]any{"fileId": "F1"})
+	if !strings.Contains(out, "chmod 700") {
+		t.Fatalf("refusal does not name the rule:\n%s", out)
+	}
+	if n := srv.Calls("files.info"); n != 0 {
+		t.Fatalf("refused exchange dir still made %d files.info calls", n)
+	}
+	if entries, _ := os.ReadDir(exchangeDir()); len(entries) != 0 {
+		t.Fatalf("something was written: %v", entries)
+	}
+}

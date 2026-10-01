@@ -30,12 +30,22 @@ type File struct {
 // ReadAll reads the file, bounded by the limit it was opened with. A file
 // that grew past the limit after the check is refused.
 func (f *File) ReadAll() ([]byte, error) {
-	b, err := io.ReadAll(io.LimitReader(f.File, f.limit+1))
+	b, err := readBounded(f.File, f.limit)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	}
+	return b, nil
+}
+
+// readBounded reads at most limit+1 bytes from r, so memory is bounded
+// whatever r holds, and refuses anything past limit.
+func readBounded(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(b)) > f.limit {
-		return nil, fmt.Errorf("%s grew past the %d byte limit while being read", f.Name, f.limit)
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("grew past the %d byte limit while being read", limit)
 	}
 	return b, nil
 }
@@ -85,6 +95,9 @@ func (d *Dir) Open(name string, limit int64) (*File, error) {
 	f, err := d.root.OpenFile(name, openReadFlags, 0)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
+			if lst, lerr := d.root.Lstat(name); lerr == nil && lst.Mode()&fs.ModeSymlink != 0 {
+				return nil, fmt.Errorf("%s is a symlink whose target does not exist in the exchange directory", name)
+			}
 			return nil, d.notFound(name)
 		}
 		return nil, fmt.Errorf("open %s in the exchange directory: %w", name, err)
@@ -124,7 +137,8 @@ func (d *Dir) ReadFile(name string, limit int64) ([]byte, error) {
 }
 
 // notFound builds the miss answer: entries that are regular files or
-// symlinks (as ReadDir reports them, unfollowed) with valid bare names,
+// symlinks (as ReadDir reports them, unfollowed; a symlink only when the
+// root can follow it) with valid bare names,
 // matching by stem under simple case folding, sorted by fold key then by
 // name, capped at MaxHintNames.
 func (d *Dir) notFound(name string) *NotFoundError {
@@ -154,6 +168,13 @@ func (d *Dir) notFound(name string) *NotFoundError {
 		n := ent.Name()
 		if ValidateName(n) != nil {
 			continue
+		}
+		// A symlink that is dangling or leaves the root cannot be read,
+		// so it is not offered.
+		if t&fs.ModeSymlink != 0 {
+			if _, err := d.root.Stat(n); err != nil {
+				continue
+			}
 		}
 		stem, _ := SplitExt(n)
 		if strings.Contains(FoldKey(n), reqStemKey) || strings.Contains(reqKey, FoldKey(stem)) {

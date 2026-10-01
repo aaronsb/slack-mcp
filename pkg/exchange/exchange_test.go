@@ -13,7 +13,12 @@ import (
 // test touches the real home directory. It returns home.
 func isolate(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
+	// Resolved, so a temp dir under a symlinked /tmp (macOS /var) does not
+	// read as a symlinked default path.
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
@@ -249,7 +254,7 @@ func TestReadFileAndChecks(t *testing.T) {
 	if err != nil || string(b) != "hello" {
 		t.Fatalf("ReadFile = %q, %v", b, err)
 	}
-	if _, err := d.ReadFile("notes.txt", 3); err == nil || !strings.Contains(err.Error(), "limit") {
+	if _, err := d.ReadFile("notes.txt", 3); err == nil || !strings.Contains(err.Error(), "notes.txt is 5 bytes, over the 3 byte limit") {
 		t.Fatalf("size cap: %v", err)
 	}
 	if err := os.Mkdir(filepath.Join(d.Path(), "sub"), 0o700); err != nil {
@@ -360,5 +365,135 @@ func TestFoldKeyMatchesEqualFold(t *testing.T) {
 		if !strings.EqualFold(pair[0], pair[1]) || FoldKey(pair[0]) != FoldKey(pair[1]) {
 			t.Errorf("FoldKey(%q) = %q, FoldKey(%q) = %q", pair[0], FoldKey(pair[0]), pair[1], FoldKey(pair[1]))
 		}
+	}
+}
+
+func TestDefaultPathExemptionRequiresAPlainDefault(t *testing.T) {
+	home := isolate(t)
+	def := DefaultPath()
+	if err := os.MkdirAll(filepath.Dir(def), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ target, rule string }{
+		{filepath.Join(home, ".ssh"), "dot-directory"},
+		{filepath.Join(home, "Downloads"), "downloads"},
+	} {
+		t.Run(filepath.Base(tc.target), func(t *testing.T) {
+			if err := os.MkdirAll(tc.target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			os.Remove(def)
+			if err := os.Symlink(tc.target, def); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			t.Setenv(EnvOverride, tc.target)
+			if _, err := Open(); err == nil || !strings.Contains(err.Error(), tc.rule) {
+				t.Fatalf("default linked to %s, override %s: %v", tc.target, tc.target, err)
+			}
+		})
+	}
+}
+
+func TestDefaultPathExemptionRefusesASymlinkedAncestor(t *testing.T) {
+	home := isolate(t)
+	hidden := filepath.Join(home, ".hidden")
+	if err := os.MkdirAll(filepath.Join(hidden, "exchange"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Dir(DefaultPath())
+	if err := os.MkdirAll(filepath.Dir(data), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(hidden, data); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv(EnvOverride, filepath.Join(hidden, "exchange"))
+	if _, err := Open(); err == nil {
+		t.Fatalf("override reached through a symlinked data directory was exempted")
+	}
+}
+
+func TestOverrideUnderSymlinkedAncestorIntoDotDirIsRefused(t *testing.T) {
+	home := isolate(t)
+	if err := os.MkdirAll(filepath.Join(home, ".secret", "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, ".secret"), filepath.Join(home, "work")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv(EnvOverride, filepath.Join(home, "work", "x"))
+	if _, err := Open(); err == nil || !strings.Contains(err.Error(), "dot-directory") {
+		t.Fatalf("~/work/x via ~/work -> ~/.secret: %v", err)
+	}
+}
+
+func TestOverrideRefusedWhenGuardDirsAreNotAbsolute(t *testing.T) {
+	home := isolate(t)
+	ok := filepath.Join(home, "slack-exchange")
+	if err := os.Mkdir(ok, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvOverride, ok)
+	for _, env := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv(env, "relative/dir")
+			if _, err := Open(); err == nil || !strings.Contains(err.Error(), "cannot be checked") {
+				t.Fatalf("%s relative: %v", env, err)
+			}
+		})
+	}
+}
+
+// infinite never ends; it counts what was taken from it.
+type infinite struct{ n int64 }
+
+func (r *infinite) Read(p []byte) (int, error) {
+	r.n += int64(len(p))
+	return len(p), nil
+}
+
+func TestReadIsBoundedInMemory(t *testing.T) {
+	r := &infinite{}
+	_, err := readBounded(r, 1024)
+	if err == nil || !strings.Contains(err.Error(), "1024 byte limit") {
+		t.Fatalf("unbounded source: %v", err)
+	}
+	// io.ReadAll may ask for more than it receives, but the LimitReader
+	// passes on at most limit+1 bytes.
+	if r.n > 1025 {
+		t.Fatalf("read %d bytes from the source for a 1024-byte limit", r.n)
+	}
+}
+
+func TestFileGrowingAfterTheCheckIsRefused(t *testing.T) {
+	isolate(t)
+	d := mustOpen(t)
+	writeFile(t, d, "grow.txt", "abc")
+	f, err := d.Open("grow.txt", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := os.WriteFile(filepath.Join(d.Path(), "grow.txt"), []byte(strings.Repeat("x", 4096)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ReadAll(); err == nil || !strings.Contains(err.Error(), "grew past the 5 byte limit") {
+		t.Fatalf("grown file: %v", err)
+	}
+}
+
+func TestDanglingSymlinkIsReportedAndNotOffered(t *testing.T) {
+	isolate(t)
+	d := mustOpen(t)
+	writeFile(t, d, "gonex.txt", "x")
+	if err := os.Symlink("missing.txt", filepath.Join(d.Path(), "gone.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := d.Open("gone.txt", 100); err == nil || !strings.Contains(err.Error(), "symlink whose target does not exist") {
+		t.Fatalf("dangling symlink: %v", err)
+	}
+	var nf *NotFoundError
+	if _, err := d.Open("gone.pdf", 100); !errors.As(err, &nf) || fmt.Sprint(nf.Matches) != "[gonex.txt]" {
+		t.Fatalf("hint offered the dangling link: %v", err)
 	}
 }

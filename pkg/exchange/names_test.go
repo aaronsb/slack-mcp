@@ -54,6 +54,10 @@ func TestSanitize(t *testing.T) {
 		{"...", "F123"},
 		{"  ", "F123"},
 		{".env", ".env"},
+		{"invoice\u202Efdp.exe", "invoice_fdp.exe"},
+		{"a\u200Db.txt", "a_b.txt"},
+		{"x\u0085y\u009F.txt", "x_y_.txt"},
+		{"del\x7f.txt", "del_.txt"},
 	} {
 		if got := Sanitize(tc.in, "F123"); got != tc.want {
 			t.Errorf("Sanitize(%q) = %q, want %q", tc.in, got, tc.want)

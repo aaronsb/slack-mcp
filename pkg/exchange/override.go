@@ -25,54 +25,56 @@ func checkOverride(p string) error {
 	}
 	ovChain := chain(resolve(p))
 
+	// Every comparison below needs an absolute home, data, and config
+	// directory. Without one the guard cannot run, so the override is
+	// refused rather than half-checked.
 	home := absOrEmpty(homeDir())
 	data := absOrEmpty(paths.DataDir())
 	config := absOrEmpty(paths.ConfigDir())
+	switch {
+	case home == "":
+		return refuse("cannot be checked: the home directory is unknown or not absolute")
+	case data == "":
+		return refuse("cannot be checked: the data directory is not absolute (check XDG_DATA_HOME)")
+	case config == "":
+		return refuse("cannot be checked: the config directory is not absolute (check XDG_CONFIG_HOME)")
+	}
 
-	// The default exchange path named explicitly is the directory the server
-	// would use anyway. ADR-012 carves it out of the data-directory rule; the
-	// carve-out covers the dot-directory rule too, since the default sits in
-	// ~/.local/share.
-	if data != "" && sameFile(DefaultPath(), ov) {
+	if isDefaultPath(ov) {
 		return nil
 	}
 	if sameFile(home, ov) {
 		return refuse("is your home directory")
 	}
 	for _, x := range []struct{ dir, label string }{{data, "data"}, {config, "config"}} {
-		if x.dir == "" {
-			continue
-		}
 		for _, a := range chain(resolve(x.dir))[1:] {
 			if sameFile(a, ov) {
 				return refuse("is an ancestor of the " + x.label + " directory (" + x.dir + ")")
 			}
 		}
 	}
-	if data != "" && within(ovChain, data) {
+	if within(ovChain, data) {
 		return refuse("is the data directory or inside it (" + data + "); only the default exchange path is allowed there")
 	}
-	if config != "" && within(ovChain, config) {
+	if within(ovChain, config) {
 		return refuse("is the config directory or inside it (" + config + ")")
 	}
-	if home != "" {
-		if hi, err := os.Stat(home); err == nil {
-			for _, a := range ovChain {
-				ai, err := os.Stat(a)
-				if err != nil || !os.SameFile(ai, hi) {
-					continue
-				}
-				rel, err := filepath.Rel(a, ovChain[0])
-				if err != nil {
-					break
-				}
-				for _, c := range strings.Split(rel, string(filepath.Separator)) {
-					if strings.HasPrefix(c, ".") && c != "." {
-						return refuse("is inside a dot-directory under your home directory (" + c + ")")
-					}
-				}
+	if hi, err := os.Stat(home); err == nil {
+		for _, a := range ovChain {
+			ai, err := os.Stat(a)
+			if err != nil || !os.SameFile(ai, hi) {
+				continue
+			}
+			rel, err := filepath.Rel(a, ovChain[0])
+			if err != nil {
 				break
 			}
+			for _, c := range strings.Split(rel, string(filepath.Separator)) {
+				if strings.HasPrefix(c, ".") && c != "." {
+					return refuse("is inside a dot-directory under your home directory (" + c + ")")
+				}
+			}
+			break
 		}
 	}
 	for _, u := range userDirs(home) {
@@ -81,6 +83,25 @@ func checkOverride(p string) error {
 		}
 	}
 	return nil
+}
+
+// isDefaultPath reports whether the override is the default exchange path,
+// the directory the server would use anyway. ADR-012 carves it out of the
+// data-directory rule, and this carve-out covers the whole guard since the
+// default sits under ~/.local/share. It holds only when the default path has
+// no symlink in any component and is a plain directory: a default path that
+// is, or passes through, a link to ~/.ssh must not exempt an override that
+// names ~/.ssh.
+func isDefaultPath(ov fs.FileInfo) bool {
+	def := filepath.Clean(DefaultPath())
+	if r, err := filepath.EvalSymlinks(def); err != nil || r != def {
+		return false
+	}
+	lst, err := os.Lstat(def)
+	if err != nil || !lst.IsDir() || lst.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+		return false
+	}
+	return os.SameFile(lst, ov)
 }
 
 // homeDir is $HOME (or the platform equivalent), or "" when unknown.

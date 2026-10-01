@@ -78,6 +78,11 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("exchange directory %s refused: %s", e.Path, e.Rule)
 }
 
+// afterLstat, when set, runs between the Lstat of the directory and the
+// OpenRoot, so tests can swap the directory in that window. Nil in
+// production.
+var afterLstat func(path string)
+
 // Open locates and verifies the exchange directory and opens it as a root.
 // The default directory is created at 0700 on first use; an override must
 // already exist.
@@ -107,9 +112,6 @@ func open(loc Location) (*Dir, error) {
 
 	lst, err := os.Lstat(p)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && loc.Override {
-			return nil, refuse("it does not exist; the server does not create a directory " + EnvOverride + " names")
-		}
 		return nil, refuse(err.Error())
 	}
 	switch {
@@ -121,6 +123,9 @@ func open(loc Location) (*Dir, error) {
 		return nil, refuse("it is not a directory")
 	}
 
+	if afterLstat != nil {
+		afterLstat(p)
+	}
 	root, err := os.OpenRoot(p)
 	if err != nil {
 		return nil, refuse(err.Error())
@@ -174,14 +179,17 @@ func (d *Dir) Create(name string) (*CreateResult, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
+	tried, skipped := 0, 0
 	for i := 0; i < MaxCollisionAttempts; i++ {
 		cand := name
 		if i > 0 {
 			cand = Suffixed(name, i)
 			if ValidateName(cand) != nil {
+				skipped++
 				continue
 			}
 		}
+		tried++
 		f, err := d.root.OpenFile(cand, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
 			return &CreateResult{File: f, Name: cand, Requested: name}, nil
@@ -190,9 +198,14 @@ func (d *Dir) Create(name string) (*CreateResult, error) {
 			return nil, fmt.Errorf("create %s in the exchange directory: %w", cand, err)
 		}
 	}
-	msg := fmt.Sprintf("%s and %d suffixed names are taken in the exchange directory", name, MaxCollisionAttempts-1)
+	msg := fmt.Sprintf("%s is taken in the exchange directory, and so are the %d suffixed names tried", name, tried-1)
+	if skipped > 0 {
+		msg += fmt.Sprintf(" (%d suffixed names were skipped as invalid, too long for the %d-byte limit)", skipped, MaxNameBytes)
+	}
 	if free := d.freeName(name); free != "" {
 		msg += fmt.Sprintf("; pass filename=%q", free)
+	} else {
+		msg += "; pass a different filename="
 	}
 	return nil, errors.New(msg)
 }

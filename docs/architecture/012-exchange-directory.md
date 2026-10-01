@@ -372,6 +372,8 @@ client's job, as above. The operator may revisit this.
   for a file that moves between conversations.
 - Some filesystems report a link count of 1 for every file, which
   disables the hard-link rule on them.
+- On macOS an ACL can grant other users access that the mode bits do
+  not show, so a 0700 directory with an ACL entry passes the mode check.
 - On Windows the override guard is only the refusal list. It misses
   `%APPDATA%`, including the Startup folder, and folders OneDrive has
   redirected. OneDrive placeholder files surface as `ModeIrregular` and

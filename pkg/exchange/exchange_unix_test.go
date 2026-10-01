@@ -67,3 +67,25 @@ func TestFIFODoesNotHangTheRead(t *testing.T) {
 		t.Fatal("opening a FIFO blocked")
 	}
 }
+
+func TestDirectorySwappedBeforeOpenRootIsRefused(t *testing.T) {
+	isolate(t)
+	d := mustOpen(t)
+	p := d.Path()
+	d.Close()
+
+	afterLstat = func(path string) {
+		if err := os.Rename(path, path+".old"); err != nil {
+			t.Errorf("rename: %v", err)
+		}
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Errorf("mkdir: %v", err)
+		}
+	}
+	t.Cleanup(func() { afterLstat = nil })
+
+	_, err := Open()
+	if err == nil || !strings.Contains(err.Error(), "changed between the check and the open") {
+		t.Fatalf("swapped directory at %s: %v", p, err)
+	}
+}
