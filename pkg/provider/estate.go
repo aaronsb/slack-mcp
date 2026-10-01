@@ -46,9 +46,21 @@ func (ap *ApiProvider) est() *estate.Store {
 	return ap.estate
 }
 
+// isClosed reports whether Shutdown has run.
+func (ap *ApiProvider) isClosed() bool {
+	ap.estateMu.RLock()
+	defer ap.estateMu.RUnlock()
+	return ap.closed
+}
+
 func (ap *ApiProvider) openEstate() {
 	if ap.selfTeamID == "" {
 		log.Printf("Estate ledger disabled: no team identity captured")
+		return
+	}
+	ap.ledgerOpenMu.Lock()
+	defer ap.ledgerOpenMu.Unlock()
+	if ap.isClosed() {
 		return
 	}
 	st, err := estate.Open(ap.selfTeamID)
@@ -57,11 +69,6 @@ func (ap *ApiProvider) openEstate() {
 		return
 	}
 	ap.estateMu.Lock()
-	if ap.closed {
-		ap.estateMu.Unlock()
-		st.Close()
-		return
-	}
 	ap.estate = st
 	ap.estateMu.Unlock()
 	if st.ReadOnly() {

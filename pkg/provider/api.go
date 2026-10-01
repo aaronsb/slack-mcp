@@ -68,8 +68,13 @@ type ApiProvider struct {
 	// under the same pointer guard.
 	attention *estate.AttentionStore
 	estateMu  sync.RWMutex
-	// closed is set by Shutdown under estateMu. A boot still running then
-	// closes the ledger it just opened instead of leaking it.
+	// closed is set by Shutdown under ledgerOpenMu and estateMu. A ledger
+	// open holds ledgerOpenMu from its closed check through the assignment,
+	// so Shutdown either sees the opened ledger and closes it, or the open
+	// sees closed and never takes the flock. Without it a boot racing an
+	// auth hot-swap could take the flock after Shutdown and leave the new
+	// provider read-only (#108).
+	ledgerOpenMu        sync.Mutex
 	closed              bool
 	estateSweepInterval time.Duration
 
@@ -230,9 +235,11 @@ func (ap *ApiProvider) Shutdown() {
 		if ap.store != nil {
 			ap.store.Stop()
 		}
+		ap.ledgerOpenMu.Lock()
 		ap.estateMu.Lock()
 		ap.closed = true
 		ap.estateMu.Unlock()
+		ap.ledgerOpenMu.Unlock()
 		if st := ap.attn(); st != nil {
 			if err := st.Close(); err != nil {
 				log.Printf("Attention ledger close: %v", err)
