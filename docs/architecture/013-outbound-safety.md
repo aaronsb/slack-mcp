@@ -50,9 +50,12 @@ never listed to the agent. Under Trusted destinations.
 
 Amendment (2026-10-01): zlib. The scanner also inflates zlib streams
 found at any offset, under gzip's attempt cap, header accounting, and
-budget, so text in PDF `FlateDecode` streams and PNG `zTXt`, `iTXt`,
-and `IDAT` chunks is read. Occurrences past the attempt cap make the
-field unscannable. Under Decoding.
+budget, so text in PDF `FlateDecode` streams and PNG `zTXt` and `iTXt`
+chunks is read. Pixel data is never inflated: PNG `IDAT`, PDF image
+streams, and the bytes of JPEG, GIF, and WebP files get no inflate
+attempt, so an image costs about its file size whatever its resolution.
+Occurrences past the attempt cap make the field unscannable. Under
+Decoding.
 
 ## Context
 
@@ -260,16 +263,49 @@ through the full pattern set and the decoders again.
   on the same terms as gzip: glued streams are found, and an attempt
   that fails (a bad block, a bad Adler-32 checksum, a missing trailer)
   still has whatever it inflated scanned. PDF content and object
-  streams (`FlateDecode`) and PNG `zTXt`, `iTXt`, and `IDAT` chunks are
-  zlib streams, and the text in them is otherwise opaque.
+  streams (`FlateDecode`) and PNG `zTXt` and `iTXt` chunks are zlib
+  streams, and the text in them is otherwise opaque. Images and PDFs
+  limit where attempts start (Formats, below).
 
 Each gzip or zlib attempt counts the header bytes it reads, as well as
 its output, against the budget. A buffer starts at most 1024 attempts,
 gzip and zlib together, so a buffer of repeated headers costs bounded
-work. A buffer with more header occurrences than that makes its field
-unscannable, since a stream past the cap would go unread; `78 5e` is
-`x^` in text, so a message can reach the cap, and is refused rather
-than passed.
+work. A buffer with more occurrences where an attempt would start than
+that makes its field unscannable, since a stream past the cap would go
+unread; `78 5e` is `x^` in text, so a message can reach the cap, and is
+refused rather than passed.
+
+**Formats.** Pixel data is never inflated. A buffer, a file's bytes or
+any decoded output, is recognized by its first bytes, and its format
+decides where inflate attempts start. Matching and the base64, hex, and
+URL decoders run on every buffer, whatever its format.
+
+- **PNG**, by its 8-byte signature `89 50 4e 47 0d 0a 1a 0a`. The
+  scanner walks the chunk table by each chunk's length, never past the
+  end of the buffer. Attempts start only at the compressed text of a
+  `zTXt` chunk, and of an `iTXt` chunk whose compression flag is set;
+  `tEXt` is plain text and is matched as it stands. `IDAT` and `fdAT`
+  (pixel data), `iCCP` (a color profile), and every other chunk get no
+  attempt. A chunk whose length runs past the end of the buffer ends
+  the walk as malformed, and the scanner falls back to starting
+  attempts at every gzip and zlib header in the buffer, except inside
+  the data of an `IDAT` or `fdAT` chunk the walk parsed before it
+  failed.
+- **JPEG** (`ff d8 ff`), **GIF** (`GIF87a`, `GIF89a`), **WebP**
+  (`RIFF`, four bytes, `WEBP`). No inflate attempt starts anywhere in
+  the buffer. These formats carry no zlib text worth inflating.
+- **PDF**, by `%PDF-` within its first 1024 bytes. Attempts start at
+  every header as in any buffer, except inside the data of a stream the
+  scanner skips: from the end of the line holding the `stream` keyword
+  to the next `endstream`. A stream is skipped when its dictionary
+  holds `/Subtype /Image` (an image XObject or its soft mask), or a
+  `/Filter`, by name or in an array, of `/DCTDecode`, `/JPXDecode`,
+  `/CCITTFaxDecode`, or `/JBIG2Decode`. The dictionary is found
+  lexically: the nearest `>>` within 4 KiB before `stream` and its
+  matching `<<`, nesting counted, whitespace between name and value
+  optional. A dictionary not found that way leaves the stream
+  inflated, as in any buffer.
+- **Anything else** starts attempts at every header, as above.
 
 There is no precedence between decoders. A span more than one decoder
 recognizes (every hex run is also a base64 run) is decoded by each, in a
@@ -307,14 +343,12 @@ cookies it captured, and blocks on them, correctly. The budget is sized
 for these files: at 8 MiB, under 3 MiB of base64 would already be
 unscannable.
 
-Zlib costs the inflated size of every stream. A PNG's `IDAT` inflates
-to its filtered pixel rows, width times height times bytes per pixel,
-so a 1920x1080 RGBA screenshot costs about 8 MiB. A 3840x2160 one costs
-about 31.6 MiB, nearly the whole budget before its pixel rows are
-decoded in turn, and is likely refused as unscannable. A PDF pays for every
-`FlateDecode` stream, embedded images and fonts included. Inflating
-`IDAT` reads bytes hidden in pixel data, not text drawn as pixels, which
-no decoder reads.
+Zlib costs the inflated size of each stream inflated. An image of any
+resolution costs a scan of its bytes, about its file size, plus the
+inflated size of its PNG text chunks, which is small. A PDF costs its
+inflated non-image streams: page content, object streams, and embedded
+fonts. An image is therefore scannable at any resolution, and a PDF
+reaches the budget only through its text and fonts.
 
 No model is in the loop. The patterns are compiled into the binary, and
 the same input gives the same answer. A match on any class is a
@@ -884,8 +918,10 @@ text or file names.
   enough matches and the strike lock engages. ADR-014's soft posture
   raises the count, and the clear path ends the freeze.
 - A large compressed upload can exhaust the decode budget and be refused
-  as unscannable. A 4K PNG screenshot can, and so can a PDF with
-  large embedded images.
+  as unscannable: a large gzip file, or a PDF whose
+  text and font streams inflate past the budget. Images cost about
+  their file size and are not inflated, so resolution does not reach
+  the budget.
 - The notice tells a requester their request was caught.
 - Gated calls wait on the operator, and the operator learns of them
   only from the log or `slack-mcp approve`. Unattended, they wait up to
@@ -901,7 +937,9 @@ text or file names.
   secret split across calls, a format no pattern names, a zip
   container (`.zip`, `.docx`, `.xlsx`, `.pptx`, and other Office
   documents), which the scanner does not open, a raw deflate stream
-  with no zlib or gzip header, which it does not inflate, text drawn in
+  with no zlib or gzip header, which it does not inflate, bytes hidden
+  in compressed pixel data (PNG `IDAT`, a PDF image stream), which it
+  does not inflate, text drawn in
   an image, which it does not OCR, or text a PDF draws through a font
   with a custom encoding, which inflates to glyph codes rather than
   characters. The layers raise the cost; they do not make exfiltration
