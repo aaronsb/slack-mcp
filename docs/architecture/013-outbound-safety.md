@@ -144,7 +144,10 @@ Quarantine state is an append-only JSON-lines file per workspace, keyed
 by team ID as the estate store is (`estate.Open(teamID)`), in the data
 directory at mode 0600. Each entry records:
 
-- when, and the kind: a block, a warning, or a clear;
+- when, and the kind: a block or a clear. A block entry carries the
+  posture and whether it quarantined; a soft-posture first block is
+  `posture=soft, quarantined=false`. Strikes are counted from block
+  entries;
 - the destination, by ID and by the name it had then;
 - the tool call: the tool and its non-content parameters (destination,
   thread, file count and sizes), with the text and each file name
@@ -159,10 +162,11 @@ the file's last byte is not one, then appends its entry in one write.
 A crash mid-entry therefore never merges into the next entry.
 
 **Reading.** The server reads the file on every gated call and every
-read that renders the banner. It keeps the size and identity (device
-and inode on Unix, file index on Windows) of its last read, and reads on
-from its last offset. A file that shrank or was replaced is read again
-from offset 0 and the state rebuilt. So a CLI clear, an approval, a
+read that renders the banner. It keeps the size, modification time, and
+identity (device and inode on Unix, file index on Windows) of its last
+read, and reads on from its last offset. A file that shrank, was
+replaced, or was modified in place without growing is read again from
+offset 0 and the state rebuilt. So a CLI clear, an approval, a
 block written by another server process on the same data directory, or
 an operator's edit of the file applies at once, and quarantines and
 strikes are shared by every process using that directory.
@@ -183,7 +187,8 @@ startup on every credential path and keeps what it returns, adding the
 and with it the quarantine file, is known when they are built.
 Without credentials there is no quarantine file until `auth` completes;
 when `auth` loads a workspace, the server switches to that workspace's
-file.
+file and rebuilds the tool descriptions. The server instructions keep
+what they said at startup until the server restarts.
 
 ### What the operator and the agent see
 
@@ -298,14 +303,19 @@ live in their own file beside the quarantine file, at mode 0600, are
 read on every gated call, and expire 24 hours after issue, approved or
 not; content held for case 1 is deleted on expiry. A repeat of the same
 call while its request is pending names the same ID. Nothing notifies
-the operator of a new request beyond the log line.
+the operator of a new request beyond the log line. After a denial, a
+repeat of the call creates a new request.
+
+A call that hits case 1 and case 2 together gets one pending request
+covering both, and one approval answers both.
 
 One approval yields exactly one send, through either path:
 
 - For case 1 or 2, an approval through elicitation lets the current
   call proceed; an approval through the CLI lets the next call with the
   same destination and content hash through. Either consumes the
-  request. Changed content is a new request.
+  request; when two calls race to consume it, the first wins and the
+  others are refused as unapproved. Changed content is a new request.
 - For case 3, an approval appends the clear entry and lets nothing
   through.
 
@@ -314,7 +324,10 @@ The operator answers with `slack-mcp approve <id>` or
 pending. For case 1 the CLI shows the full text and file names, not a
 hash. `approve`, `deny`, and `quarantine clear` require an interactive
 terminal on stdin and ask the operator to type back the request ID, or
-the destination for a clear. That is defense in depth: `script` or
+the destination for a clear. The CLI finds the workspace's files by
+running `auth.test` with the configured tokens and keying by the team
+ID it returns, and applies ADR-014's `.env` allowlist as the server
+does. The terminal requirement is defense in depth: `script` or
 `expect` can supply a terminal and the typing. The boundary is the
 client's permission configuration (Risks). The tool output names the ID
 and says the operator must approve it; it does not print the command.
@@ -340,14 +353,12 @@ and any session on SSE. For an earlier client, mcp-go would fulfill an
 input-required result itself by issuing `elicitation/create` and waiting
 on the outer request's context, with no deadline the server can set. An
 unattended agent must never hang on a prompt nobody answers, so the
-server never returns that result to an earlier client. SSE serves
-several sessions; the request state is bound to the session where the
-transport identifies one.
+server never returns that result to an earlier client. SSE sessions
+are never asked, so no request state is issued there.
 
 The request state carries an HMAC under a key the server process holds
-in memory. It binds the destination, the content hash, the gate case,
-the pending ID, the session where known, and an expiry ten minutes after
-issue. The state is single-use: the server consumes the pending request
+in memory. It binds the destination, the content hash, the set of gate
+cases, the pending ID, and an expiry ten minutes after issue. The state is single-use: the server consumes the pending request
 when it honors an accepted retry, so a replayed state finds nothing to
 approve. A state from another call, past its expiry, or from before a
 restart fails verification and counts as no answer; the CLI path
@@ -406,6 +417,11 @@ client to answer at all. MCP sampling is not used as a guard.
   of this server's reach. Unattended deployments should deny the
   client's reads of `~/.ssh`, `~/.aws`, `~/.gnupg`, and similar at the
   client.
+- **Configuration routes.** `.env` can no longer move the data or
+  config directory (ADR-014's allowlist). The client environment still
+  can, and today's code also honors `SLACK_MCP_PROXY` with
+  `SLACK_MCP_SERVER_CA_INSECURE`, which routes token-bearing requests
+  through an unverified proxy; that is tracked as #119.
 - **The server's own state.** The quarantine, pending, and provenance
   files are in the data directory, and the `slack-mcp` binary is on the
   path. An agent with unrestricted file or shell access can edit or
@@ -415,7 +431,8 @@ client to answer at all. MCP sampling is not used as a guard.
   subcommands.
 - **The server instructions are static.** They are built once at
   startup and read by the client when it connects, so a quarantine set
-  later reaches the agent through the banner only.
+  later, or a workspace loaded by `auth` mid-session, reaches the agent
+  through the banner and the rebuilt tool descriptions only.
 - **Origin is asserted, not observed.** The block result says the
   request came from Slack content. The server cannot see that; it is a
   policy statement, since the operator does not ask for secrets in

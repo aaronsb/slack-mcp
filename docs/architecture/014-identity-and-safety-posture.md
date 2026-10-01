@@ -6,8 +6,9 @@ Accepted
 
 Sets the notice wording and the escalation that ADR-013 leaves to it.
 Adds two environment settings beside `SLACK_MCP_DEPLOYMENT` and follows
-its rule: declared in the MCP client config, never detected. Closes the
-`.env` route to every security-relevant setting. Lands with ADR-013.
+its rule: declared in the MCP client config, never detected. Limits
+`.env` to an allowlist of settings with no security effect. Lands with
+ADR-013.
 
 ## Context
 
@@ -32,6 +33,15 @@ the deployment.
 The server also loads a `.env` file from its working directory at
 startup, filling any variable the environment left unset. An agent with
 file tools can write that file, and the next restart would read it.
+Through it the agent could set the tokens, `XDG_CONFIG_HOME` (a
+different config file, so a different account and a fresh quarantine
+file), `XDG_DATA_HOME` (an empty data directory, where a missing
+quarantine file erases every quarantine and the strike lock),
+`XDG_DOWNLOAD_DIR`, the exchange-directory override, the SSE host and
+key, or `SLACK_MCP_PROXY` with `SLACK_MCP_SERVER_CA_INSECURE`, which
+sends token-bearing requests through a proxy with TLS verification off.
+That last route exists in today's code whatever this ADR decides, and is
+tracked as #119.
 
 ## Decision
 
@@ -51,14 +61,27 @@ unambiguously. Its default is `human` because session tokens normally
 come from a person's login, and treating a person's account as the
 agent's own is the costlier mistake.
 
-### Security settings come only from the client's environment
+### `.env` may set only an allowlist
 
-`SLACK_MCP_SAFETY`, `SLACK_MCP_IDENTITY`, `SLACK_MCP_EXCHANGE_DIR`,
-`SLACK_MCP_DEPLOYMENT`, `SLACK_MCP_IDLE_TIMEOUT`,
-`SLACK_MCP_SSE_API_KEY`, and `SLACK_MCP_HOST` are taken only from the
-process environment the MCP client sets. The server snapshots those keys
-before it loads `.env`, and refuses to start if `.env` supplies any of
-them, naming the key. Other variables may still come from `.env`.
+Settings come from the process environment the MCP client sets. `.env`
+may supply only keys on an explicit allowlist of settings with no
+security effect:
+
+| Key | Effect | Why it is allowed |
+|---|---|---|
+| `SLACK_MCP_PERSONALITY` | the label in the server's name | display text only; sanitized like `{name}` below |
+| `SLACK_MCP_NO_BROWSER` | `auth` prints its URL instead of opening a browser | it can only withhold an action |
+
+`SLACK_MCP_PORT` is not on the list: moving the SSE server off the port
+the client expects frees that port for another local process, which
+would then receive the client's API key.
+
+The server records which keys the process environment set before it
+loads `.env`. Any key in `.env` that is not on the allowlist and not
+already set by the client refuses startup, naming the key. A key the
+client environment already sets is untouched, since `.env` never
+overrides. A new setting is excluded from `.env` unless added to the
+allowlist. The CLI subcommands of ADR-013 apply the same rule.
 
 ### Identity: whose account this is
 
@@ -66,10 +89,14 @@ them, naming the key. Other variables may still come from `.env`.
 Tool descriptions and server instructions are built before the provider
 boots and before the users cache loads, so the handle is the name
 available when they are written. Before use it is stripped of control
-characters, capped in length, and quoted; that
-reduces the chance a crafted handle is read as an instruction, and does
-not remove it. Without credentials, the wording below is used with
-"this account's owner" in place of `{name}` until `auth` completes.
+characters, capped in length, and quoted; that reduces the chance a
+crafted handle is read as an instruction, and does not remove it.
+
+Without credentials, the wording below is used with "this account's
+owner" in place of `{name}`. When `auth` completes mid-session, tool
+descriptions are rebuilt with `{name}`. The server instructions keep
+the generic wording, and the quarantine list from startup, until the
+server restarts.
 
 `human`: the account belongs to a person.
 
@@ -105,13 +132,15 @@ gets a notice.
 | | `strict` | `soft` |
 |---|---|---|
 | 1st block, anywhere | destination quarantined, notice posted | warning in the result, no quarantine |
-| 2nd block | destination quarantined, notice posted; strike lock | that destination quarantined, notice posted; the first block's destination stays open |
-| 3rd block | (already locked) | strike lock |
+| 2nd block | destination quarantined, notice posted; strike lock | that destination quarantined, notice posted, including when it is the first block's destination; otherwise the first block's destination stays open |
+| 3rd block | (already locked) | that destination quarantined, notice posted; then the strike lock |
 | Gated: external destination | yes | yes |
 | Gated: cross-conversation file move | yes | no; a warning in the result |
 | Gated: lifting a quarantine or the lock | yes | yes |
 
-Every block counts a strike in both postures.
+Every block counts a strike in both postures. A soft first block is
+recorded as a block entry marked `posture=soft, quarantined=false`, so
+the strike count, taken from block entries, includes it.
 
 `strict` suits an unattended agent or a dedicated account. `soft` suits
 an attended assistant on the operator's own account.
@@ -124,7 +153,8 @@ an attended assistant on the operator's own account.
   notice reads correctly from either kind of account.
 - An attended operator can run with fewer interruptions without
   lowering what the scanner blocks.
-- No file the agent can write changes the server's security settings.
+- No file the agent can write through `.env` changes a setting with a
+  security effect.
 
 ### Negative
 
@@ -133,8 +163,9 @@ an attended assistant on the operator's own account.
 - `soft` lets a first match through without closing the conversation,
   and lets a downloaded file move between conversations with a warning
   only.
-- An operator who kept these settings in `.env` must move them to the
-  client config before the server will start.
+- An operator who kept any setting outside the allowlist in `.env`,
+  tokens included, must move it to the client config before the server
+  will start.
 - The identity wording uses the handle, not the display name a reader
   in Slack sees.
 
@@ -146,8 +177,11 @@ an attended assistant on the operator's own account.
 - The handle is text the account holder chose, placed in descriptions
   and instructions. Sanitizing it reduces what it can say; a short
   handle can still read as words.
-- The `.env` guard covers the named keys. A future security-relevant
-  setting has to join the list, or `.env` can set it.
+- A new setting is excluded from `.env` unless added to the allowlist.
+  Adding one is a review decision about its security effect.
+- Until #119 lands, a client environment that sets `SLACK_MCP_PROXY`
+  with `SLACK_MCP_SERVER_CA_INSECURE` still sends tokens through an
+  unverified proxy; the allowlist only keeps `.env` from doing it.
 - The client's own config file is outside this server's control. An
   agent that can write it can change every setting here.
 
@@ -173,9 +207,11 @@ guard reopens the route in Context.
   configuration.
 - **Letting `.env` override and logging it**: a log line after the fact
   does not stop the restart that applies the change.
-- **Dropping `.env` support entirely**: it also carries non-security
-  settings operators use; refusing the security keys closes the route
-  without that break.
+- **A denylist of security keys**: the first version of this decision.
+  It missed the XDG directories, the tokens, and the proxy settings,
+  and every setting added later would start out permitted.
+- **Dropping `.env` support entirely**: the allowlist keeps the two
+  harmless settings working at no cost to the boundary.
 - **The display name from the users cache**: not loaded when
   descriptions and instructions are built.
 
@@ -185,6 +221,7 @@ guard reopens the route in Context.
   escalation and notice this sets.
 - ADR-012: the exchange-directory override, one of the settings kept out
   of `.env`.
+- Issue #119: the proxy and insecure-CA route.
 - ADR-009: `say` and its description, which carry the identity wording.
 - `SLACK_MCP_DEPLOYMENT` in `pkg/lifecycle`: the declared-not-detected
   rule and the refusal on an unknown value.

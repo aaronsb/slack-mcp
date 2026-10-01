@@ -97,9 +97,9 @@ not depend on it.
 The override is operator configuration, taken only from the process
 environment the MCP client sets. Injected content cannot set that
 environment, and ADR-014 refuses to start when a `.env` file supplies
-this or any other security-relevant setting, so the threat this ADR
-addresses cannot move the directory through configuration. The override checks catch an operator pointing it somewhere
-that makes bare names dangerous. They run on every file operation, like
+any key outside its allowlist, so the threat this ADR addresses cannot
+move the directory through configuration. The override checks catch an
+operator pointing it somewhere that makes bare names dangerous. They run on every file operation, like
 the checks above.
 
 They compare by file identity, not by string. Each path is resolved
