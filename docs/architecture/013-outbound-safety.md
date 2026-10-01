@@ -421,7 +421,8 @@ client to answer at all. MCP sampling is not used as a guard.
   config directory (ADR-014's allowlist). The client environment still
   can, and today's code also honors `SLACK_MCP_PROXY` with
   `SLACK_MCP_SERVER_CA_INSECURE`, which routes token-bearing requests
-  through an unverified proxy; that is tracked as #119.
+  through an unverified proxy; ADR-014's `.env` allowlist closes the
+  `.env` path to those settings.
 - **The server's own state.** The quarantine, pending, and provenance
   files are in the data directory, and the `slack-mcp` binary is on the
   path. An agent with unrestricted file or shell access can edit or

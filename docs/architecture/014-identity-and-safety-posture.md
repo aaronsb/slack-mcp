@@ -40,8 +40,7 @@ quarantine file erases every quarantine and the strike lock),
 `XDG_DOWNLOAD_DIR`, the exchange-directory override, the SSE host and
 key, or `SLACK_MCP_PROXY` with `SLACK_MCP_SERVER_CA_INSECURE`, which
 sends token-bearing requests through a proxy with TLS verification off.
-That last route exists in today's code whatever this ADR decides, and is
-tracked as #119.
+That last route exists in code that predates this ADR.
 
 ## Decision
 
@@ -179,7 +178,7 @@ an attended assistant on the operator's own account.
   handle can still read as words.
 - A new setting is excluded from `.env` unless added to the allowlist.
   Adding one is a review decision about its security effect.
-- Until #119 lands, a client environment that sets `SLACK_MCP_PROXY`
+- A client environment that sets `SLACK_MCP_PROXY`
   with `SLACK_MCP_SERVER_CA_INSECURE` still sends tokens through an
   unverified proxy; the allowlist only keeps `.env` from doing it.
 - The client's own config file is outside this server's control. An
@@ -221,7 +220,6 @@ guard reopens the route in Context.
   escalation and notice this sets.
 - ADR-012: the exchange-directory override, one of the settings kept out
   of `.env`.
-- Issue #119: the proxy and insecure-CA route.
 - ADR-009: `say` and its description, which carry the identity wording.
 - `SLACK_MCP_DEPLOYMENT` in `pkg/lifecycle`: the declared-not-detected
   rule and the refusal on an unknown value.
