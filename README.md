@@ -165,6 +165,8 @@ Two settings in your MCP client config shape this (ADR-014); `.env` cannot set t
 
 A block posts the notice into the quarantined conversation, never to a destination outside your organization and never to a person with no DM. Blocks, pending requests, and sends trust let through are logged as `outbound-safety: BLOCKED`, `PENDING`, and `TRUSTED` lines (destination, IDs, class, counts; never content). When state needs you, `inbox`, `messages`, `estate`, and `batch` results open with a banner.
 
+A block that cannot be written to the quarantine file holds every `say` and `mark-read` in that server process and issues a lift request; approving it releases the hold, otherwise a restart does. A download whose provenance cannot be recorded is deleted and fails. Reaction names must be emoji names (`[a-z0-9_+'-]`, optionally `::skin-tone-2`…`6`).
+
 You answer from a terminal:
 
 ```bash

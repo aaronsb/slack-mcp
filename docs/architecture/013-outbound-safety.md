@@ -82,6 +82,15 @@ sections below carry the rules.
 - Accepted limits: the false positives the patterns imply by design,
   and a small crafted PDF whose image stream exempts its zlib data.
 
+Amendment (2026-10-01, wiring, #131): two failures the text left open.
+A block the quarantine file cannot record (a lock timeout, a failed
+append) leaves an in-process hold that refuses every `say` and
+`mark-read`, and issues a lift request (case 3); approving it lifts the
+hold, and when no request can be issued the hold lasts until the server
+restarts. A download whose provenance cannot be recorded is deleted and
+fails, so no unrecorded file skips gate case 2. Under The strike lock and
+The approval gate.
+
 ## Context
 
 The agent this server serves can run for hours, and reading other
@@ -630,6 +639,11 @@ lock engages: every `say` and `mark-read` is refused, to anyone, until
 the operator clears it. The count comes from the file, so a restart does
 not reset it. Reads keep working.
 
+A block the file cannot record is still refused, and its strike is not in
+the file, so the server holds every `say` and `mark-read` in its own
+process instead and issues a lift request. Approving that request lifts
+the hold; when no request could be issued, a restart does.
+
 ### Layer 4: the tool result
 
 A block returns a result that says, in this order:
@@ -721,7 +735,9 @@ server hashes each file and looks it up by hash, so a rename or copy
 inside the exchange directory keeps its provenance. Attaching it to any
 conversation it was already shared in is not a move. A file with no
 record, one the operator placed or one edited after download, gets the
-scanner only.
+scanner only. A download whose record cannot be written is deleted and
+the download fails, and a provenance file that cannot be read counts every
+attachment as moved.
 
 #### Pending requests
 
