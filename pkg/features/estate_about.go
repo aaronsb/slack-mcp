@@ -80,7 +80,7 @@ func aboutView(ctx context.Context, ap *provider.ApiProvider, person string, day
 			}
 			people = append(people, row.ID)
 		}
-		ids, labels := resolveByID(ap, people)
+		ids, labels := resolveByID(ap, people, data.Person.ext)
 		labels[data.Person.ID] = data.Person.Label
 		if data.Person.Handle != "" {
 			ids[data.Person.ID] = data.Person.Handle

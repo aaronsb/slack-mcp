@@ -33,6 +33,9 @@ type messageRenderer struct {
 	users   map[string]slack.User
 	selfID  string
 	resolve func(kind text.TagKind, id, label string) (string, bool)
+	// ext numbers unnamed externals for the life of this renderer (one
+	// response).
+	ext externalNamer
 }
 
 func newMessageRenderer(ap *provider.ApiProvider) *messageRenderer {
@@ -80,7 +83,7 @@ func (r *messageRenderer) RenderText(s string) string {
 // blocks-only announcement usually carries, then the raw ID.
 func (r *messageRenderer) authorName(m slack.Message) string {
 	if m.User != "" {
-		return r.AuthorByID(m.User)
+		return r.authorByID(m.User, m.Username)
 	}
 	if m.Username != "" {
 		return m.Username + " (app)"
@@ -96,6 +99,12 @@ func (r *messageRenderer) authorName(m slack.Message) string {
 // The unknown-ID form matches userLabel so every view labels the same
 // person the same way.
 func (r *messageRenderer) AuthorByID(id string) string {
+	return r.authorByID(id, "")
+}
+
+// authorByID is AuthorByID with the message's own username as a last
+// named source before an unnamed external is numbered.
+func (r *messageRenderer) authorByID(id, username string) string {
 	if u, ok := r.users[id]; ok {
 		name := displayNameFor(u)
 		if id == r.selfID {
@@ -118,7 +127,10 @@ func (r *messageRenderer) AuthorByID(id string) string {
 			return name
 		}
 	}
-	return externalUser
+	if username != "" {
+		return username
+	}
+	return r.ext.label(id)
 }
 
 // flattenBlocks renders Block Kit content as plain text. User and channel

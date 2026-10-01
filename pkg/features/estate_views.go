@@ -400,6 +400,7 @@ func familiesData(apiProvider *provider.ApiProvider, search, person string, limi
 	data.Families = fams
 	data.Shown = len(fams)
 
+	ext := &externalNamer{}
 	// Resolve creator names once through the shared chain: users map, then
 	// the estate fold with a departed marker, then the labelled-unknown
 	// fallback — every view renders an unknown user the same way.
@@ -411,7 +412,7 @@ func familiesData(apiProvider *provider.ApiProvider, search, person string, limi
 			if _, done := data.CreatorNames[c.Creator]; done {
 				continue
 			}
-			data.CreatorNames[c.Creator] = userLabel(apiProvider, c.Creator)
+			data.CreatorNames[c.Creator] = userLabel(apiProvider, c.Creator, ext)
 		}
 	}
 	return data

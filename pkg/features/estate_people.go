@@ -26,6 +26,9 @@ type convInfo struct {
 	IsIM  bool
 	// Counterpart is the other user's ID for IM conversations.
 	Counterpart string
+	// Unresolved marks a DM whose counterpart has no known name; labelFor
+	// renders it by kind, never by the user ID.
+	Unresolved bool
 }
 
 func convLabels(ap *provider.ApiProvider) map[string]convInfo {
@@ -34,11 +37,11 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 	for _, ch := range ap.GetCachedChannels() {
 		switch {
 		case ch.IsIM:
-			label := ch.User
+			info := convInfo{Label: unresolvedDM, IsIM: true, Counterpart: ch.User, Unresolved: true}
 			if u, ok := users[ch.User]; ok {
-				label = "@" + displayName(u)
+				info = convInfo{Label: "DM @" + displayName(u), IsIM: true, Counterpart: ch.User}
 			}
-			out[ch.ID] = convInfo{Label: "DM " + label, IsIM: true, Counterpart: ch.User}
+			out[ch.ID] = info
 		case ch.IsMpIM:
 			out[ch.ID] = convInfo{Label: groupName(ch.Name, nil)}
 		case ch.Name != "":
@@ -55,13 +58,13 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 		p := rec.Props
 		switch {
 		case p.IsIM:
-			label := p.User
+			info := convInfo{Label: unresolvedDM, IsIM: true, Counterpart: p.User, Unresolved: true}
 			if rec, ok := ap.EstateUser(p.User); ok {
 				if name := estateUserName(rec); name != "" {
-					label = "@" + name
+					info = convInfo{Label: "DM @" + name, IsIM: true, Counterpart: p.User}
 				}
 			}
-			out[id] = convInfo{Label: "DM " + label, IsIM: true, Counterpart: p.User}
+			out[id] = info
 		case p.Name != "":
 			label := "#" + p.Name
 			if rec.Gone != nil {
@@ -89,10 +92,31 @@ func labelFor(labels map[string]convInfo, conv string) string {
 	switch {
 	case !ok:
 		return unnamedConversation
-	case info.IsIM && info.Counterpart != "" && info.Label == "DM "+info.Counterpart:
+	case info.Unresolved:
 		return unresolvedDM
 	}
 	return info.Label
+}
+
+// externalNamer labels people who have no name anywhere ("external user 1",
+// "external user 2"): numbered on first sight, so two externals in one
+// response stay distinct while the number reveals nothing about the ID.
+// One namer lives for one response or view; the zero value is ready.
+type externalNamer struct {
+	n map[string]int
+}
+
+func (e *externalNamer) label(id string) string {
+	if e == nil {
+		return externalUser
+	}
+	if e.n == nil {
+		e.n = map[string]int{}
+	}
+	if _, ok := e.n[id]; !ok {
+		e.n[id] = len(e.n) + 1
+	}
+	return fmt.Sprintf("%s %d", externalUser, e.n[id])
 }
 
 // readTarget is what a reading-plan step may pass to messages target=:
@@ -103,10 +127,10 @@ func readTarget(labels map[string]convInfo, conv string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	label := labelFor(labels, conv)
-	if label == unresolvedDM {
+	if info.Unresolved {
 		return "", false
 	}
+	label := labelFor(labels, conv)
 	if info.IsIM {
 		return strings.TrimPrefix(label, "DM "), true
 	}
@@ -131,7 +155,7 @@ func userHandle(ap *provider.ApiProvider, id string) string {
 	return ""
 }
 
-func userLabel(ap *provider.ApiProvider, id string) string {
+func userLabel(ap *provider.ApiProvider, id string, ext *externalNamer) string {
 	if u, ok := ap.ProvideUsersMap()[id]; ok {
 		name := displayName(u)
 		if u.Deleted {
@@ -149,7 +173,7 @@ func userLabel(ap *provider.ApiProvider, id string) string {
 	}
 	// Slack Connect externals are in neither the users map nor the estate;
 	// the ID is internal, so they render by kind.
-	return externalUser
+	return ext.label(id)
 }
 
 func sinceDay(days int) string {
@@ -261,10 +285,13 @@ type personViewData struct {
 	// WindowEncounters is how many observed encounters back this view, so
 	// a thin ranking is distinguishable from a quiet person.
 	WindowEncounters int
+	// ext numbers the unnamed externals in this view; the about view's
+	// second hop continues the same numbering.
+	ext *externalNamer
 }
 
 func personView(ctx context.Context, ap *provider.ApiProvider, person string, days int) *personViewData {
-	data := &personViewData{Days: days}
+	data := &personViewData{Days: days, ext: &externalNamer{}}
 	ids, labels, misses := resolvePeople(ap, []string{person})
 	if len(misses) > 0 {
 		data.Miss = &misses[0]
@@ -371,7 +398,7 @@ func personView(ctx context.Context, ap *provider.ApiProvider, person string, da
 		return data.Counterparts[i].ID < data.Counterparts[j].ID
 	})
 	for _, row := range data.Counterparts {
-		data.Names[row.ID] = userLabel(ap, row.ID)
+		data.Names[row.ID] = userLabel(ap, row.ID, data.ext)
 	}
 
 	// Founder facts from the estate.
@@ -439,6 +466,7 @@ type initiativesViewData struct {
 
 func initiativesView(ap *provider.ApiProvider, days int) *initiativesViewData {
 	data := &initiativesViewData{Days: days, Names: map[string]string{}}
+	ext := &externalNamer{}
 	since := sinceDay(days)
 	plane := ap.AttentionByConversation()
 	data.Labels = convLabels(ap)
@@ -495,7 +523,7 @@ func initiativesView(ap *provider.ApiProvider, days int) *initiativesViewData {
 	for _, row := range byCreator {
 		sort.Slice(row.Channels, func(i, j int) bool { return row.Channels[i].ActiveDays > row.Channels[j].ActiveDays })
 		data.Rows = append(data.Rows, *row)
-		data.Names[row.Creator] = userLabel(ap, row.Creator)
+		data.Names[row.Creator] = userLabel(ap, row.Creator, ext)
 	}
 	sort.Slice(data.Rows, func(i, j int) bool {
 		if data.Rows[i].TotalActiveDay != data.Rows[j].TotalActiveDay {
@@ -541,12 +569,12 @@ func convergenceView(ctx context.Context, ap *provider.ApiProvider, people []str
 // itself produced (a counterpart row), bypassing the name ladder: an
 // unswept estate cannot fail on its own IDs. The handle is empty when none
 // is known, which only means no search can be compiled for that person.
-func resolveByID(ap *provider.ApiProvider, userIDs []string) (map[string]string, map[string]string) {
+func resolveByID(ap *provider.ApiProvider, userIDs []string, ext *externalNamer) (map[string]string, map[string]string) {
 	ids := map[string]string{}
 	labels := map[string]string{}
 	for _, id := range userIDs {
 		ids[id] = userHandle(ap, id)
-		labels[id] = userLabel(ap, id)
+		labels[id] = userLabel(ap, id, ext)
 	}
 	return ids, labels
 }

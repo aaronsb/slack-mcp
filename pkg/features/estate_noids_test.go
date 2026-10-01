@@ -22,12 +22,15 @@ func noIDsFixture(t *testing.T) func(params map[string]any) string {
 	)
 	var eng slack.Channel
 	eng.ID, eng.Name, eng.IsChannel, eng.IsMember = "C0123ABCD", "eng", true, true
-	srv.SeedChannels(eng)
+	var dm slack.Channel
+	dm.ID, dm.IsIM, dm.User = "D0123ABCD", true, "U0555NONE" // counterpart in no map
+	srv.SeedChannels(eng, dm)
 	ap := bootedProvider(t, srv)
 
 	for _, d := range []int{1, 2, 3} {
 		seedActivity(ap, "C0123ABCD", "U0123ABCD", d)
 		seedActivity(ap, "C0123ABCD", "U0456EFGH", d)
+		seedActivity(ap, "D0123ABCD", "U0123ABCD", d) // DM to an unresolved user
 		seedActivity(ap, "C0999ZZZZ", "U0123ABCD", d) // conversation no map names
 		seedActivity(ap, "C0999ZZZZ", "U0777EXTL", d) // Slack Connect external
 	}
@@ -50,6 +53,31 @@ func TestAboutAndPersonNeverPrintSlackIDs(t *testing.T) {
 		if !strings.Contains(out, "unnamed conversation") {
 			t.Errorf("%v: unlabelled conversation not rendered by kind:\n%s", params, out)
 		}
+	}
+}
+
+func TestEstateViewsNeverPrintSlackIDs(t *testing.T) {
+	run := noIDsFixture(t)
+	for _, params := range []map[string]any{
+		{"view": "convergence", "people": "schen,mlopez"},
+		{"view": "initiatives"},
+		{"view": "people", "person": "chen"},
+		{"view": "channels"},
+		{"view": "families"},
+		{"view": "families", "person": "schen"},
+	} {
+		out := run(params)
+		if m := idShaped.FindString(out); m != "" {
+			t.Errorf("%v prints Slack ID %q:\n%s", params, m, out)
+		}
+	}
+}
+
+func TestUnresolvedDMIsLabelledByKind(t *testing.T) {
+	run := noIDsFixture(t)
+	out := run(map[string]any{"view": "person", "person": "schen"})
+	if !strings.Contains(out, "DM (unresolved user)") {
+		t.Fatalf("unresolved DM not labelled by kind:\n%s", out)
 	}
 }
 

@@ -101,9 +101,6 @@ func (b *graphBuilder) createdNode(label string, detail ...string) string {
 
 // personNode adds a person keyed by user ID, labelled as the view names them.
 func (b *graphBuilder) personNode(id, label string, detail ...string) string {
-	if label == "external ("+id+")" {
-		label = externalUser
-	}
 	if label == "" {
 		label = "unresolved user"
 	}

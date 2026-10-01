@@ -62,11 +62,11 @@ func samplePerson() *personViewData {
 		Peak:        2,
 		Labels: map[string]convInfo{
 			"C0ENG": {Label: "#eng"},
-			"D0DM":  {Label: "DM U0AAA", IsIM: true, Counterpart: "U0AAA"},
+			"D0DM":  {Label: "DM (unresolved user)", IsIM: true, Counterpart: "U0AAA", Unresolved: true},
 		},
 		Names: map[string]string{
 			"U0AAA": "Aaron Bockelie",
-			"U0EXT": "external (U0EXT)",
+			"U0EXT": "external user 1",
 		},
 	}
 }
@@ -142,7 +142,7 @@ func TestPersonGraphNeverCarriesIDsOrHours(t *testing.T) {
 
 	graphNode(t, g, "unnamed conversation")
 	graphNode(t, g, "DM (unresolved user)")
-	graphNode(t, g, "external user")
+	graphNode(t, g, "external user 1")
 
 	b, _ := json.Marshal(g)
 	for _, hourish := range []string{"parallel", "concurrent", "hour"} {
