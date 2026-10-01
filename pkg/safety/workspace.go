@@ -18,10 +18,11 @@ const (
 	QuarantineFile = "quarantine.jsonl"
 	TrustFile      = "trust.jsonl"
 	PendingFile    = "pending.jsonl"
+	ProvenanceFile = "provenance.jsonl"
 )
 
-// Workspace is one workspace's safety state: the quarantine, trust, and
-// pending-request files, read under one posture.
+// Workspace is one workspace's safety state: the quarantine, trust,
+// pending-request, and provenance files, read under one posture.
 type Workspace struct {
 	TeamID     string
 	Dir        string
@@ -30,6 +31,7 @@ type Workspace struct {
 	Quarantine *QuarantineStore
 	Trust      *TrustStore
 	Pending    *PendingStore
+	Provenance *ProvenanceStore
 }
 
 // Dir is the workspace's directory: the estate ledger's, keyed by team ID
@@ -89,6 +91,7 @@ func OpenDir(dir string, org Org, p Posture) (*Workspace, error) {
 		Quarantine: newQuarantineStore(filepath.Join(dir, QuarantineFile), p, org.UserID),
 		Trust:      newTrustStore(filepath.Join(dir, TrustFile), p),
 		Pending:    newPendingStore(filepath.Join(dir, PendingFile)),
+		Provenance: newProvenanceStore(filepath.Join(dir, ProvenanceFile)),
 	}, nil
 }
 

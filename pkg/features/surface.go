@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/aaronsb/slack-mcp/pkg/handle"
+	"github.com/aaronsb/slack-mcp/pkg/provider"
 )
 
 // The v2 tool surface (ADR-009): eight tools by the assignment rule — verb
@@ -304,7 +305,8 @@ var Say = &Feature{
 }
 
 func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
-	if refusal := preWriteLocal(ctx); refusal != nil {
+	ap, _ := params["_provider"].(*provider.ApiProvider)
+	if refusal := preWriteLocal(ctx, ap, "say"); refusal != nil {
 		return refusal, nil
 	}
 

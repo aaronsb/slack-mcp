@@ -222,7 +222,9 @@ func sayFilesHandler(ctx context.Context, params map[string]interface{}, names [
 	}
 
 	ts := shareTS(ctx, api, ids[0], channelID)
-	return sayFilesResult(dest, out, ids, ts), nil
+	res := sayFilesResult(dest, out, ids, ts)
+	res.Guidance = strings.Join(append([]string{fmt.Sprintf("The files were %s.", sentPhrase(apiProvider))}, out.Warnings...), "\n")
+	return res, nil
 }
 
 // shareFiles uploads every file and completes them together, so they

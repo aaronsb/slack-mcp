@@ -73,7 +73,7 @@ func SetPreSendForTest(fn func(PreSendSeen) string) func() {
 // restore func.
 func SetPreWriteLocalForTest(fn func() string) func() {
 	prev := preWriteLocal
-	preWriteLocal = func(context.Context) *FeatureResult {
+	preWriteLocal = func(context.Context, *provider.ApiProvider, string) *FeatureResult {
 		if msg := fn(); msg != "" {
 			return &FeatureResult{Success: false, Message: msg}
 		}

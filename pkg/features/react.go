@@ -71,14 +71,32 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 		}, nil
 	}
 
-	// A reaction is a write: route by prefix, a person only exactly (ADR-005)
-	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy, "to")
+	// A reaction is a write: route by prefix, a person only exactly
+	// (ADR-005), then through preSend like any say (ADR-013). A reaction
+	// lands on a message that exists, so a person with no DM has nothing
+	// to react to and no DM is opened for one.
+	dest, terr := resolveWriteDestination(ctx, apiProvider, channel, "to")
 	if terr != nil {
 		return terr.result(), nil
+	}
+	if dest.ConvID == "" {
+		return &FeatureResult{
+			Success: false,
+			Message: fmt.Sprintf("There is no DM with %s, so there is no message there to react to. Nothing was sent.", dest.Name),
+		}, nil
 	}
 
 	// Normalize emoji name - strip colons if provided
 	emojiName := strings.Trim(emoji, ":")
+
+	out := &outbound{Emoji: emojiName, Remove: remove, MessageTs: messageTs}
+	if refusal := preSend(ctx, apiProvider, dest, out); refusal != nil {
+		return refusal, nil
+	}
+	channelID, terr := openDestination(ctx, apiProvider, dest)
+	if terr != nil {
+		return terr.result(), nil
+	}
 
 	ref := slack.NewRefToMessage(channelID, messageTs)
 

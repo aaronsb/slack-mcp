@@ -347,9 +347,10 @@ func TestReactPartialNameFailsWithNoWrite(t *testing.T) {
 }
 
 func TestReactExactHandleStillResolves(t *testing.T) {
-	srv := writeTargetServer(t)
+	srv, _ := ambiguityServer(t)
+	ap := bootedProvider(t, srv)
 	res, err := features.React.Handler(context.Background(), map[string]any{
-		"_provider": srv.Provider(t), "channel": "@alan",
+		"_provider": ap, "channel": "@alice",
 		"messageTs": "1786752114.508819", "emoji": "tada",
 	})
 	if err != nil || !res.Success {
@@ -357,6 +358,22 @@ func TestReactExactHandleStillResolves(t *testing.T) {
 	}
 	if srv.Calls("reactions.add") != 1 {
 		t.Errorf("want one reaction, got %d", srv.Calls("reactions.add"))
+	}
+}
+
+// A reaction lands on a message that exists: a person with no DM has none,
+// so the reaction is refused and no DM is opened for it (ADR-013).
+func TestReactToAPersonWithNoDMIsRefused(t *testing.T) {
+	srv := writeTargetServer(t)
+	res, err := features.React.Handler(context.Background(), map[string]any{
+		"_provider": srv.Provider(t), "channel": "@alan",
+		"messageTs": "1786752114.508819", "emoji": "tada",
+	})
+	if err != nil || res.Success || !strings.Contains(res.Message, "There is no DM with @alan") {
+		t.Fatalf("want a no-DM refusal: %v %+v", err, res)
+	}
+	if srv.Calls("reactions.add") != 0 || srv.Calls("conversations.open") != 0 {
+		t.Errorf("reactions.add %d, conversations.open %d; want none", srv.Calls("reactions.add"), srv.Calls("conversations.open"))
 	}
 }
 
