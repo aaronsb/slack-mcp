@@ -425,10 +425,18 @@ func Thread(channel, threadTs, latestReply string, replyCount, unread int) map[s
 	root["latest_reply"] = latestReply
 	root["subscribed"] = true
 
+	// unread_replies is the unread reply messages themselves, not a count.
+	replies := make([]any, unread)
+	for i := range replies {
+		r := Message("U1", "on it", latestReply)
+		r["thread_ts"] = threadTs
+		r["parent_user_id"] = "U2"
+		replies[i] = r
+	}
 	return map[string]any{
 		"root_msg":       root,
 		"latest_replies": []any{Message("U1", "on it", latestReply)},
-		"unread_replies": unread,
+		"unread_replies": replies,
 	}
 }
 
@@ -439,8 +447,8 @@ func ThreadView(threads ...any) map[string]any {
 	total := 0
 	for _, t := range threads {
 		if m, ok := t.(map[string]any); ok {
-			if n, ok := m["unread_replies"].(int); ok {
-				total += n
+			if r, ok := m["unread_replies"].([]any); ok {
+				total += len(r)
 			}
 		}
 	}

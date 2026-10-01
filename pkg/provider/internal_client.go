@@ -427,7 +427,11 @@ type ThreadViewResponse struct {
 			LatestReply string `json:"latest_reply"`
 			Subscribed  bool   `json:"subscribed"`
 		} `json:"root_msg"`
-		UnreadReplies int `json:"unread_replies"`
+		// UnreadReplies is the unread reply messages themselves; the count
+		// is its length.
+		UnreadReplies []struct {
+			TS string `json:"ts"`
+		} `json:"unread_replies"`
 	} `json:"threads"`
 }
 
