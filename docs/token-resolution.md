@@ -14,8 +14,8 @@ flowchart TD
     SubCmd -->|no| Flags[Parse flags<br>-t stdio or sse]
     Flags --> LogSetup{Transport?}
 
-    LogSetup -->|stdio| LogFile[Redirect logs to<br>/tmp/slack-mcp.log]
-    LogSetup -->|sse| LogStdout[Keep logs on stdout]
+    LogSetup -->|stdio| LogFile[Redirect logs to<br>~/.local/state/slack-mcp/slack-mcp.log<br>0600, or SLACK_MCP_LOG_FILE]
+    LogSetup -->|sse| LogStdout[Keep logs on stderr]
 
     LogFile --> DotEnv{".env sets only<br>PERSONALITY / NO_BROWSER<br>or keys already set?"}
     LogStdout --> DotEnv

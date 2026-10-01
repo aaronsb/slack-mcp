@@ -17,7 +17,7 @@ var ListUsers = &Feature{
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "Search query — matches against display name, username, or email prefix",
+				"description": "Search query — matches against display name, real name, or username",
 			},
 			"includesBots": map[string]interface{}{
 				"type":        "boolean",

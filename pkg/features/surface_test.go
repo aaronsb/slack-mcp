@@ -212,3 +212,66 @@ func TestSinceModeAcceptsAnInboxHandle(t *testing.T) {
 		t.Fatalf("handle target did not reach the conversation:\n%s", out)
 	}
 }
+
+func TestFiltersAloneAreASearch(t *testing.T) {
+	srv := slacktest.New(t)
+	var q string
+	srv.Handle("search.messages", func(r *http.Request) any {
+		_ = r.ParseForm()
+		q = r.Form.Get("query")
+		return map[string]any{"ok": true, "messages": map[string]any{"total": 0, "matches": []any{}}}
+	})
+	ap := bootedProvider(t, srv)
+	out := runTool(t, features.Messages, ap, map[string]any{"from": []any{"sarah"}, "after": "2026-09-01"})
+	if q != "after:2026-09-01 from:@schen" {
+		t.Errorf("query sent: %q", q)
+	}
+	if strings.Contains(out, `""`) || !strings.Contains(out, "Nothing matched the filters") || !strings.Contains(out, "from=[sarah]") {
+		t.Errorf("render:\n%s", out)
+	}
+}
+
+func TestTargetWithFiltersIsRefused(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.Handle("search.messages", func(*http.Request) any {
+		return map[string]any{"ok": true, "messages": map[string]any{"total": 0, "matches": []any{}}}
+	})
+	ap := bootedProvider(t, srv)
+	for _, p := range []map[string]any{
+		{"target": "#eng", "from": []any{"sarah"}},
+		{"target": "#eng", "query": "x", "has": []any{"link"}},
+	} {
+		out := runTool(t, features.Messages, ap, p)
+		if !strings.Contains(out, "cannot be combined") || !strings.Contains(out, "in='#channel'") {
+			t.Errorf("not refused:\n%s", out)
+		}
+	}
+	if srv.Calls("search.messages") != 0 {
+		t.Errorf("a refused call searched")
+	}
+}
+
+func TestFiltersOnlyEchoIsClean(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(channel("C1", "engineering"))
+	srv.Handle("search.messages", func(*http.Request) any {
+		return map[string]any{"ok": true, "messages": map[string]any{"total": 0, "matches": []any{}}}
+	})
+	ap := bootedProvider(t, srv)
+	out := runTool(t, features.Messages, ap, map[string]any{"after": "7d", "in": []any{"#engineering"}, "thread": false, "has": []any{}})
+	if !strings.Contains(out, "`messages after=7d in=[#engineering]`") {
+		t.Errorf("echo:\n%s", out)
+	}
+}
+
+func TestTargetWithQueryIsRefused(t *testing.T) {
+	srv := slacktest.New(t)
+	ap := bootedProvider(t, srv)
+	out := runTool(t, features.Messages, ap, map[string]any{"target": "#eng", "query": "x"})
+	if !strings.Contains(out, "cannot be combined") || !strings.Contains(out, "in='#channel'") {
+		t.Errorf("not refused:\n%s", out)
+	}
+	if srv.Calls("search.messages") != 0 {
+		t.Errorf("searched")
+	}
+}

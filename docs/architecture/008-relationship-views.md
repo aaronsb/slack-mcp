@@ -186,11 +186,11 @@ A new `estate` tool with a `view` parameter:
 
 | View | Question it answers whole | Joins |
 |---|---|---|
-| `about` | "tell me about X" for any seed — person, channel, family, or topic; the entry-point view that composes the others | seed resolution ⋈ one-hop ego network ⋈ frontier communities |
+| `about` | "tell me about X" for any seed — person, channel, family, or topic; the entry-point view that composes the others | seed resolution ⋈ one-hop ego network ⋈ families |
 | `families` | "what happened with this engagement" — phase sequence, drivers, span; works day one, estate only | stem ⋈ lifecycle ⋈ creator |
 | `initiatives` | "what moved this week" and its inverse, the stalled channel whose creator went quiet | creator ⋈ ACTIVE_IN ⋈ strip overlap |
 | `person` | one footprint — strips, created channels, and ranked counterparts ("top talkers", from DM-encounter density plus channel co-occurrence); for the departed, the knowledge-risk query only remember-then-tombstone affords | created ⋈ ACTIVE_IN ⋈ DM_WITH ⋈ COUNTERPART ⋈ estate record |
-| `convergence` | given a set of people, the conversation-window clusters where their strips co-occur, ranked by density above each person's baseline (so a shared #all-hands is noise and a suddenly-dense deal channel is signal) | ACTIVE_IN ⋈ ACTIVE_IN across users |
+| `convergence` | given a set of people, the conversation-window clusters where their strips co-occur, ranked by co-active days, with each person's baseline (active days in the window across all conversations) printed beside the clusters so a shared #all-hands reads as noise; baseline-relative ranking is not implemented | ACTIVE_IN ⋈ ACTIVE_IN across users |
 
 Every view returns handles for drill-down and declares its coverage: the
 activity dimension carries the attention ledger's ninety-day horizon, and a
@@ -210,14 +210,13 @@ ADR-003 decided grows by exactly one read.
 
 ### `about`: breadth on the server, depth in the agent, judgment with the human
 
-The flagship view is ego-network extraction with community detection over
-the frontier. Given a seed, `about` resolves it through the ladder
-(candidates with evidence on a miss, as everywhere), expands **one hop**
-from the folds — channels created, families touched, strips, counterparts,
-member overlaps, each edge weighted by co-active days, volume, and recency,
-each carrying provenance — and clusters the frontier into communities:
-groups of neighbors dense with *each other*, not just with the seed (the
-convergence motif's n-way generalization).
+The flagship view is ego-network extraction. Given a seed, `about` resolves
+it through the ladder (candidates with evidence on a miss, as everywhere)
+and expands **one hop** from the folds — channels created, families touched,
+strips, counterparts, each carrying provenance. Clustering the frontier into
+communities (groups of neighbors dense with *each other*, not just with the
+seed; the convergence motif's n-way generalization) is intended and not yet
+built; brokerage motifs (#64) depend on it.
 
 The payload is a **ranked reading plan**, not raw edges: drill-down handles
 in rank order, each with the evidence that ranked it and the question it
