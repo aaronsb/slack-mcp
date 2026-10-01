@@ -548,3 +548,36 @@ func TestAroundBareWordReadsTheChannel(t *testing.T) {
 		}
 	}
 }
+
+// Slack answers channel_not_found when the account is not in the channel;
+// mark-read says so by name instead of passing the raw code through.
+func TestMarkReadInAChannelYouAreNotInSaysSo(t *testing.T) {
+	srv := slacktest.New(t)
+	var outside slack.Channel
+	outside.ID, outside.Name, outside.IsChannel = "C9", "seasonal", true
+	srv.SeedChannels(outside)
+	ap := bootedProvider(t, srv)
+
+	res := markRead(t, ap, map[string]any{"channel": "#seasonal"})
+	if res.Success {
+		t.Fatalf("marked a channel the account is not in: %s", res.Message)
+	}
+	if !strings.Contains(res.Message, "You are not a member of #seasonal") || strings.Contains(res.Message, "channel_not_found") {
+		t.Errorf("message = %q, want the membership reason by name", res.Message)
+	}
+}
+
+// A group DM is named by its people on the write path too, never by
+// Slack's mpdm-… wire name.
+func TestMarkReadNamesAGroupDMByItsPeople(t *testing.T) {
+	srv, _ := ambiguityServer(t)
+	ap := bootedProvider(t, srv)
+
+	res := markRead(t, ap, map[string]any{"channel": "mpdm-alice--bockeliea-1"})
+	if !res.Success {
+		t.Fatalf("should mark: %s", res.Message)
+	}
+	if res.Message != "Marked group: alice, bockeliea as read" {
+		t.Errorf("message = %q, want the group named by its people", res.Message)
+	}
+}

@@ -382,7 +382,17 @@ func defaultFixture(r *http.Request, method, selfURL string, channels []slack.Ch
 		// that wants threads passes ThreadView(Thread(...)) explicitly.
 		return ThreadView()
 
-	case "conversations.mark", "chat.postMessage", "reactions.add", "reactions.remove":
+	case "conversations.mark":
+		// Slack refuses a read marker in a channel the caller is not in.
+		_ = r.ParseForm()
+		for _, ch := range channels {
+			if ch.ID == r.Form.Get("channel") && ch.IsChannel && !ch.IsMember {
+				return map[string]any{"ok": false, "error": "channel_not_found"}
+			}
+		}
+		return map[string]any{"ok": true}
+
+	case "chat.postMessage", "reactions.add", "reactions.remove":
 		return map[string]any{"ok": true, "ts": "1786752114.508819", "channel": "C1"}
 
 	default:
