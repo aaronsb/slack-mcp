@@ -23,6 +23,11 @@ Reads.
 Amendment (2026-10-01): one `say files=` call reads at most 1 GiB in all
 (500 MiB per file), checked from the handles' `Stat` before any read.
 
+Amendment (2026-10-01): `put` writes a new file into the exchange
+directory from content the call carries, for clients whose file tools
+cannot reach the server's host. It never reads, lists, overwrites, or
+deletes. Inline file content on `say` and fetching a URL stay rejected.
+
 ## Context
 
 Three features move bytes between the local disk and Slack. `download`
@@ -226,15 +231,16 @@ call through `say`, a verb that posts to Slack.
 
 A sandboxed client that cannot see the server's filesystem has no
 direct way to list the exchange directory in v1, only the enumeration
-above. If one is needed, a read-only listing is a view or parameter on a
+above; `put` writes into it and does not list it. If one is needed, a read-only listing is a view or parameter on a
 noun under ADR-009, not a verb, and is deferred.
 
 ### Writes
 
-`download` creates its file through the root with `O_EXCL` at mode
-0600.
+`download` and `put` create their files through the root with `O_EXCL`
+at mode 0600.
 
-A caller's `filename` is validated before any Slack call. A malformed
+A caller's `filename` is validated before any Slack call, and `put`'s
+`name` before anything else. A malformed
 one is refused, not sanitized: a name that fails the bare-name rule is
 the shape of an attempt to reach outside the directory, and silently
 repairing it would hide that.
@@ -257,7 +263,8 @@ server tries a suffix before the extension, where the extension is what
 | `archive.tar.gz` | `archive.tar (1).gz` |
 
 It tries the name and up to 99 suffixes, 100 attempts in all, then
-fails naming the collision and suggesting a `filename=` that is free. A
+fails naming the collision and suggesting a `filename=` (for `put`, a
+`name=`) that is free. A
 suffixed name that would exceed the length limit truncates the stem.
 
 The output reports the name used and the absolute path. A suffixed name
@@ -287,7 +294,13 @@ already provides, under its own file permissions and its own prompts.
 A server tool for those would duplicate the client's capability under
 the server's broader filesystem access, and would move the decision to
 touch a file outside the exchange directory from the client's prompt to
-a parameter on this server. The surface stays at nine tools.
+a parameter on this server.
+
+The exception is a client whose file tools cannot reach the server's
+host: a code sandbox on another machine, or a server in the remote
+deployment. For it the client's job cannot be done, so `put` writes a
+new file from bytes the call carries (amendment 2026-10-01). It touches
+nothing outside the exchange directory and nothing already in it.
 
 ADR-009's verb test (a capability is its own tool only if invoking it
 changes the world) does not decide this: copying and deleting files do
@@ -327,6 +340,109 @@ the reason under Writes.
 Unchanged: renaming or deleting a file in the exchange directory is the
 client's job, as above. The operator may revisit this.
 
+## Amendment (2026-10-01): put
+
+A client whose code sandbox runs on another machine generates a file
+there, a chart image for instance. Its file tools cannot reach the
+server's host, so the file never reaches the exchange directory and
+`say files=` can never attach it. The server in the remote deployment
+puts every client in the same position.
+
+Before: getting a file into the exchange directory was the client's job
+alone, and the only server tool that wrote there was `download`, which
+writes what Slack serves. After: `put` writes a new file from content
+the call carries.
+
+### What `put` does
+
+- `name` is checked by the bare-name rule before anything else. A
+  malformed name is refused, not sanitized, for the reason under
+  Writes, and nothing is created.
+- It takes exactly one of `content`, UTF-8 text written as given, or
+  `base64`, the standard alphabet with padding optional and line breaks
+  ignored. A payload in the URL-safe alphabet is refused by name rather
+  than guessed at, and invalid base64 is refused. Both, or neither, is
+  refused.
+- The decoded content is at most 5 MiB and not empty, checked before the
+  directory is opened. The content travels through the model as tool
+  call tokens, a third larger as base64; a larger file is the client's
+  or the operator's to move.
+- The file is created through the root with `O_CREATE|O_EXCL` at 0600,
+  suffixed when the name is taken, with the rename stated as under
+  Writes. A failed write or close removes the name and says nothing was
+  kept; when the removal fails too, the result says the partial file is
+  still there.
+- The result gives the name used, the byte count, the display path, and
+  the next call, `say to='<destination>' files=['<name>']`.
+- It makes no Slack call. It still answers with setup guidance before
+  credentials exist, as every tool but `auth` does: its only use is to
+  feed `say`, which needs them.
+- It is a verb under ADR-009, since it changes the world, and `batch`
+  refuses it, admitting only the read nouns (ADR-010).
+
+It is not restricted by deployment or transport the way `unlock` is: a
+file written on the server's host is the point, not a hazard.
+
+### What `put` does not do
+
+- **Read.** It returns no bytes. A read would give a client that cannot
+  see the server's filesystem a route to every file in the directory,
+  downloads and the operator's own files included, under no client
+  prompt.
+- **List.** Listing stays deferred as under Reads, and belongs on a
+  noun, not on a verb that writes.
+- **Overwrite.** A taken name is always suffixed. Replacing a file would
+  let injected text swap the bytes of a file the operator or a download
+  placed, between the time it was checked and the time it is sent.
+- **Delete.** Removing files stays the client's and the operator's job.
+  A delete would let injected text destroy files no prompt covers.
+- **Take a path.** `name` is a file parameter like any other, bound by
+  the bare-name rule.
+- **Fetch a URL.** Fetching would make the server an HTTP client for an
+  address the agent read in untrusted text: server-side request forgery
+  against loopback and the local network, the server's own SSE port and
+  `unlock` page among them, and bytes that never passed through the
+  agent's context.
+
+### Inline content on `say` stays rejected
+
+The operator rejected `files=[{name, base64}]` on `say`. Inline content
+would make `say` a one-call conduit that carries arbitrary
+agent-composed bytes straight to Slack, with no artifact at rest and no
+second step. `put` leaves a named file on the operator's disk first, and
+the send stays a separate `say` call that names the file and faces every
+check ADR-013 runs.
+
+### Threats
+
+- Injected text can now cause a file to be written in the exchange
+  directory. The write is bounded: the directory is 0700 and the
+  user's; the call names a file and cannot name a place; `O_EXCL` means
+  it never replaces anything; the file is 0600 with no execute bit; one
+  call writes at most 5 MiB; and nothing in the server executes a file
+  from the directory, and only `say` reads one.
+- A planted file reaches Slack only through a `say` that names it, and
+  that call runs the strike lock, the local checks, the destination's
+  quarantine, the secret scanner, which reads each file's name and
+  bytes, and the approval gate (ADR-013).
+- `put` records no provenance. Gate case 2 looks attachments up by the
+  SHA-256 of their bytes, so a `put` file whose bytes equal a recorded
+  download matches that record and is gated as a move. Bytes that differ
+  have no record and get the scanner only, as an operator-placed file
+  does; case 1 still gates an external destination. Content the agent
+  read in one conversation can therefore reach another as a `put` file
+  without approval, but the agent could already send that content as
+  `say text=`, which case 2 never covers, and ADR-013 accepts that a
+  one-byte edit defeats case 2. `put` opens no route around case 2 that
+  text did not already have.
+- An injected `put` can take a name first, so a later `download` of the
+  same name is saved suffixed. The download states the rename and
+  reports the name used; an agent that attaches the name it expected
+  instead sends the planted file, which still faces the checks above.
+- Files accumulate faster: nothing removes what `put` writes, and
+  repeated calls are bounded only by the call rate. The directory is the
+  operator's to clean.
+
 ## Consequences
 
 ### Positive
@@ -342,8 +458,9 @@ client's job, as above. The operator may revisit this.
 
 - `download` callers that pass `destDir` break, and files no longer land
   in `~/Downloads`. The release notes call it out.
-- Uploading a file takes two steps when it lives elsewhere: copy it in,
-  then `say files=`.
+- Uploading a file takes two steps when it lives elsewhere: copy it in
+  (or, from a client that cannot reach the directory, `put` it), then
+  `say files=`.
 - A file hard-linked into the exchange directory is refused on read
   while its other name exists.
 - Files accumulate. Nothing is deleted automatically; the directory is
@@ -353,9 +470,10 @@ client's job, as above. The operator may revisit this.
 - When the server runs on a different host from the client (the
   experimental remote deployment, or SSE bound to a non-loopback host),
   the exchange directory is on the server's host and the agent's file
-  tools are on the client's. The agent cannot put files in or take them
-  out; the operator transfers them, and the paths `download` reports
-  name the server's host, which the output states. Accepted for v1.
+  tools are on the client's. The agent can write a file in with `put`
+  (up to 5 MiB) but cannot take one out; the operator transfers
+  downloads, and the paths `download` reports name the server's host,
+  which the output states. Accepted for v1.
 
 ### Risks
 
@@ -403,12 +521,18 @@ second breaking change.
 - **Absolute paths within allowed roots** (`SLACK_MCP_UPLOAD_ROOTS`):
   configuration nobody sets, so the default decides, and a broad default
   such as `$HOME` minus dot-directories is the denylist again.
-- **File content inline as base64**: no filesystem boundary to defend,
-  but multi-megabyte payloads cost tokens and hit message limits, and the
-  agent still has to read the file with its own tools first.
+- **File content inline as base64 on `say`**: no filesystem boundary to
+  defend, but multi-megabyte payloads cost tokens and hit message limits,
+  and the agent still has to read the file with its own tools first.
+  Rejected again in the 2026-10-01 amendment on the operator's ground
+  that it makes `say` a one-call conduit for agent-composed bytes. Inline
+  base64 is how `put` takes binary content, capped at 5 MiB.
 - **A `manage_exchange` tool** (list, read, write, delete), as Confluence
   ADR-502 has: rejected for the reasons under "Getting files in and out
-  is the client's job".
+  is the client's job". `put` is its write half alone, create-only; list,
+  read, and delete stay rejected.
+- **`put` fetching a URL**: rejected in the 2026-10-01 amendment, for
+  the reason stated there.
 - **`os.Root` alone, without the directory checks**: `os.Root` bounds
   names inside the directory but not the directory itself. A symlinked
   or group-writable exchange directory, or one that is `~/.ssh`, passes
