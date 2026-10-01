@@ -238,7 +238,18 @@ func estateViewsHandler(ctx context.Context, params map[string]interface{}) (*Fe
 		res, err := ListChannels.Handler(ctx, params)
 		if err == nil && res != nil {
 			res.RenderAs = "estate view='channels'"
-			res.Echo = echoLine("estate", "view='channels'", params, "search", "filter", "includeArchived", "includeDeleted", "limit")
+			// A search with no filter looks across every channel; say so.
+			echoed := params
+			if f, _ := params["filter"].(string); f == "" {
+				if q, _ := params["search"].(string); strings.TrimSpace(q) != "" {
+					echoed = make(map[string]interface{}, len(params)+1)
+					for k, v := range params {
+						echoed[k] = v
+					}
+					echoed["filter"] = "all"
+				}
+			}
+			res.Echo = echoLine("estate", "view='channels'", echoed, "search", "filter", "includeArchived", "includeDeleted", "limit")
 		}
 		return res, err
 

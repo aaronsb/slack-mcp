@@ -2,6 +2,7 @@ package features_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -296,5 +297,21 @@ func TestChannelListingNamesAGroupDMByItsPeople(t *testing.T) {
 	channels := dataOf(t, res)["channels"].([]map[string]interface{})
 	if len(channels) != 1 || channels[0]["displayName"] != "group: alice, bockeliea" {
 		t.Errorf("group DM listed as %+v", channels)
+	}
+}
+
+// A search with no filter widens to every channel, and the echo says so.
+func TestChannelSearchEchoesTheEffectiveFilter(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedChannels(channel("C1", "deploy-alpha"))
+	ap := bootedProvider(t, srv)
+
+	out := runTool(t, features.EstateViews, ap, map[string]any{"view": "channels", "search": "deploy"})
+	if !strings.Contains(out, "`estate view='channels' filter=all search=deploy`") {
+		t.Errorf("echo does not state the effective filter:\n%s", out)
+	}
+	out = runTool(t, features.EstateViews, ap, map[string]any{"view": "channels", "search": "deploy", "filter": "member"})
+	if !strings.Contains(out, "`estate view='channels' filter=member search=deploy`") {
+		t.Errorf("echo lost the explicit filter:\n%s", out)
 	}
 }
