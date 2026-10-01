@@ -16,6 +16,10 @@ Amended 2026-09-30: a missing name answers with the matching names, and
 an explicit `filename=` that is taken is suffixed like a Slack-supplied
 one. ADR-013 adds the outbound checks this ADR handed on.
 
+Amendment (2026-09-30, follow-up): the missing-name answer's order,
+tie-break, cap (20), candidate set, and count line are fixed under
+Reads.
+
 ## Context
 
 Three features move bytes between the local disk and Slack. `download`
@@ -185,9 +189,29 @@ extension as defined under Writes, so the stem of `.env` is `.env` and
 no valid name has an empty stem. Names are compared under Unicode simple
 case folding, the folding `strings.EqualFold` uses. A name matches when
 it contains the requested name's stem, or when its own stem is contained
-in the requested name. Matches are listed alphabetically, capped, with
-the count of all matches. The call still makes zero Slack calls and
-posts nothing; the agent retries with a listed name.
+in the requested name. The call still makes zero Slack calls and posts
+nothing; the agent retries with a listed name.
+
+The candidates are the directory's entries that are regular files or
+symlinks, as `ReadDir` reports them without following links, and whose
+names pass the bare-name rule; a name the agent could not pass back is
+never offered. Matches are sorted by a fold key, each rune replaced by
+the least rune of its `unicode.SimpleFold` orbit, so names that
+`strings.EqualFold` calls equal get the same key. Keys compare by byte
+order; names with equal keys (`Report.pdf`, `report.pdf`) compare by the
+byte order of the names themselves. The first 20 are listed, under a
+count line:
+
+```
+No file named budget.xlsx is in the exchange directory. 3 names match:
+No file named budget.xlsx is in the exchange directory. 47 names match; the first 20 by name:
+No file named budget.xlsx is in the exchange directory, and no name matches it.
+```
+
+The first form is used when the list is complete, the second when it is
+capped. Each missing name in a `say files=` call gets its own count line
+and list, capped separately. A directory that cannot be listed gives the
+plain miss and names the listing error.
 
 The answer is a correction aid, but an agent can enumerate the
 directory with it by varying the requested name: a one-letter stem
@@ -276,7 +300,8 @@ above carry the amended rules.
 
 Before: the names closest to the one requested, by an unstated
 distance. After: the names that match it by stem under the rule in
-Reads, in alphabetical order, capped, with the count of all matches. A
+Reads, sorted by fold key, the first 20 listed under a count of all
+matches. A
 match rule the agent can predict is one it can act on; a distance
 ranking was a second guess at what the agent meant. The rule also lets
 the agent enumerate the directory, as Reads states.
