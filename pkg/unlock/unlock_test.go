@@ -377,13 +377,88 @@ func TestHeldWritesOfferTheStrikeRow(t *testing.T) {
 	}
 }
 
+// racing lands a block just before each clear, as one landing between the
+// page's staleness check and the write would.
+type racing struct {
+	*safety.QuarantineStore
+	t  *testing.T
+	ws *safety.Workspace
+}
+
+func (r racing) Clear(k safety.Key, by, pendingID string, now time.Time) (bool, error) {
+	blockOn(r.t, r.ws, chanDest("C9", "#late"))
+	return r.QuarantineStore.Clear(k, by, pendingID, now)
+}
+
+func (r racing) ClearKeysAt(ks []safety.Key, by string, at safety.Place, now time.Time) (bool, []bool, error) {
+	blockOn(r.t, r.ws, chanDest("C9", "#late"))
+	return r.QuarantineStore.ClearKeysAt(ks, by, at, now)
+}
+
+// A block landing after the page's check but before its write: the write
+// applies nothing and the page shows the new state.
+func TestBlockBetweenCheckAndClearAppliesNothing(t *testing.T) {
+	ws := locked(t)
+	in := start(t, racing{ws.Quarantine, t, ws})
+	_, page := get(t, in.URL())
+	code, body := post(t, in, self(in), form(page, "clear", "#a"))
+	if code != http.StatusOK || !strings.Contains(body, "The locks changed") {
+		t.Fatalf("POST %d: %s", code, body)
+	}
+	if _, ok := ws.Quarantine.State().IsQuarantined("C1"); !ok {
+		t.Fatal("cleared against a state the operator never saw")
+	}
+	select {
+	case <-in.Done():
+		t.Fatal("the page closed without applying anything")
+	default:
+	}
+}
+
+// Row IDs name keys, not positions: a page whose rows come back in another
+// order with no change to the file still clears the key the operator
+// checked.
+type reordering struct {
+	*safety.QuarantineStore
+	loads *int
+}
+
+func (r reordering) State() safety.QuarantineState {
+	st := r.QuarantineStore.State()
+	*r.loads++
+	if *r.loads > 1 {
+		for i, j := 0, len(st.Conversations)-1; i < j; i, j = i+1, j-1 {
+			st.Conversations[i], st.Conversations[j] = st.Conversations[j], st.Conversations[i]
+		}
+	}
+	return st
+}
+
+func TestRowIDsFollowKeysNotOrder(t *testing.T) {
+	ws := locked(t)
+	blockOn(t, ws, chanDest("C7", "#b"))
+	loads := 0
+	in := start(t, reordering{ws.Quarantine, &loads})
+	_, page := get(t, in.URL()) // #a then #b
+	if code, body := post(t, in, self(in), form(page, "clear", "#a")); code != http.StatusOK || !strings.Contains(body, "Cleared 1.") {
+		t.Fatalf("POST %d: %s", code, body)
+	}
+	st := ws.Quarantine.State()
+	if _, ok := st.IsQuarantined("C1"); ok {
+		t.Fatal("#a, the checked row, is still quarantined")
+	}
+	if _, ok := st.IsQuarantined("C7"); !ok {
+		t.Fatal("#b, which moved into #a's position, was cleared")
+	}
+}
+
 type unreadable struct{}
 
 func (unreadable) State() safety.QuarantineState {
 	return safety.QuarantineState{Err: errors.New("permission denied")}
 }
-func (unreadable) Clear(safety.Key, string, string, time.Time) (bool, error) {
-	return false, errors.New("unreachable")
+func (unreadable) ClearKeysAt([]safety.Key, string, safety.Place, time.Time) (bool, []bool, error) {
+	return false, nil, errors.New("unreachable")
 }
 
 func TestUnreadableStateOffersOnlyDone(t *testing.T) {

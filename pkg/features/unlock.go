@@ -52,7 +52,8 @@ func WithSSE(ctx context.Context, sse bool) context.Context {
 	return context.WithValue(ctx, sseKey{}, sse)
 }
 
-func onSSE(ctx context.Context) bool {
+// OnSSE reports whether ctx is a call on the SSE transport (WithSSE).
+func OnSSE(ctx context.Context) bool {
 	sse, _ := ctx.Value(sseKey{}).(bool)
 	return sse
 }
@@ -67,7 +68,7 @@ func unlockHandler(ctx context.Context, params map[string]interface{}) (*Feature
 			Message: "unlock is unavailable on a remote deployment: the page would open on the server's host, not the operator's. " + cliClears,
 		}, nil
 	}
-	if onSSE(ctx) {
+	if OnSSE(ctx) {
 		return &FeatureResult{
 			Success: false,
 			Message: "unlock is unavailable over SSE: the server's host need not be the operator's. " + cliClears,
@@ -127,8 +128,9 @@ func unlockHandler(ctx context.Context, params map[string]interface{}) (*Feature
 
 	return &FeatureResult{
 		Success: true,
-		Message: "Opened the clearing page in your browser.",
+		Message: "Opened the clearing page in the operator's browser.",
 		Guidance: "The page is the operator's: they check what to clear and press Clear or Done, and either closes it. " +
+			"If no page appeared, they can use slack-mcp quarantine list, then slack-mcp quarantine clear <who>, in a terminal. " +
 			"This result does not say what they cleared; your next say or mark-read runs every check again.",
 	}, nil
 }

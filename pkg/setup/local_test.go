@@ -3,6 +3,8 @@ package setup
 import (
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"runtime"
 	"testing"
 )
 
@@ -50,5 +52,25 @@ func TestIsLoopbackOrigin(t *testing.T) {
 		if got := IsLoopbackOrigin(origin, 51837); got != want {
 			t.Errorf("%q: %v, want %v", origin, got, want)
 		}
+	}
+}
+
+// A launcher that starts and then fails (xdg-open on a desktop with no
+// handler) is a failed launch, not an open page.
+func TestOpenBrowserURLReportsAFailedLauncher(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses the POSIX true and false commands")
+	}
+	t.Setenv(NoBrowserEnv, "")
+	prev := browserCommand
+	t.Cleanup(func() { browserCommand = prev })
+
+	browserCommand = func(string) *exec.Cmd { return exec.Command("false") }
+	if err := OpenBrowserURL("http://127.0.0.1:1/x"); err == nil {
+		t.Fatal("a launcher that exited non-zero was reported as an open page")
+	}
+	browserCommand = func(string) *exec.Cmd { return exec.Command("true") }
+	if err := OpenBrowserURL("http://127.0.0.1:1/x"); err != nil {
+		t.Fatalf("a launcher that exited zero was reported as failed: %v", err)
 	}
 }

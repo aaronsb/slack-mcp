@@ -143,3 +143,16 @@ func TestClipKeepsWholeCharacters(t *testing.T) {
 		t.Errorf("clip = %q, want the split character dropped", got)
 	}
 }
+
+// Every tool call is marked with its transport, so unlock can refuse on SSE.
+func TestCallContextMarksSSE(t *testing.T) {
+	s := NewSemanticMCPServer(nil)
+	var req mcp.CallToolRequest
+	if features.OnSSE(s.callContext(context.Background(), req)) {
+		t.Fatal("a stdio call was marked SSE")
+	}
+	s.ServeSSE("127.0.0.1:0")
+	if !features.OnSSE(s.callContext(context.Background(), req)) {
+		t.Fatal("an SSE call was not marked SSE")
+	}
+}

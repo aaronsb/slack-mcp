@@ -38,10 +38,11 @@ const maxForm = 8 << 10
 // Chromium and Firefox send "Origin: null", which the check refuses.
 const ReferrerPolicy = "same-origin"
 
-// Store is the quarantine state the page reads and clears.
+// Store is the quarantine state the page reads and clears. ClearKeysAt
+// applies nothing when the file has moved past the place the page read.
 type Store interface {
 	State() safety.QuarantineState
-	Clear(target safety.Key, by, pendingID string, now time.Time) (bool, error)
+	ClearKeysAt(targets []safety.Key, by string, at safety.Place, now time.Time) (moved bool, cleared []bool, err error)
 }
 
 // Options are what the caller supplies: how to name a key and describe a
@@ -154,6 +155,8 @@ type view struct {
 	At      string
 	Changed bool
 	Result  string
+
+	place safety.Place
 }
 
 func (in *Instance) serve(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +205,16 @@ func (in *Instance) serve(w http.ResponseWriter, r *http.Request) {
 		in.render(w, cur)
 		return
 	}
-	v := view{Result: in.answer(form, cur)}
+	result, moved := in.answer(form, cur)
+	if moved {
+		// A block or clear landed between the check above and the write.
+		cur = in.list()
+		cur.Changed = true
+		in.timer.Reset(in.opts.Idle)
+		in.render(w, cur)
+		return
+	}
+	v := view{Result: result}
 	in.closed = true
 	in.timer.Stop()
 	close(in.done)
@@ -223,7 +235,8 @@ func (in *Instance) rowID(k safety.Key) string {
 func (in *Instance) list() view {
 	st := in.store.State()
 	held := in.opts.Held()
-	v := view{At: fmt.Sprintf("%d.%d.%t", st.Position.Epoch, st.Position.Line, held)}
+	v := view{place: st.Place()}
+	v.At = fmt.Sprintf("%d.%s.%t", v.place.Line, v.place.Prefix, held)
 	if st.Err != nil {
 		v.Unreadable = "The safety state cannot be read, so every message and read receipt is refused. Nothing here can clear it until the state is readable again; running slack-mcp quarantine list in a terminal names the error."
 		return v
@@ -287,11 +300,12 @@ func disambiguate(st safety.QuarantineState, rows []row) {
 }
 
 // answer applies the form to the rows of cur: Clear clears the checked
-// rows, Done nothing.
-func (in *Instance) answer(form map[string][]string, cur view) string {
+// rows, Done nothing. moved: the file changed since cur was read, and
+// nothing was applied.
+func (in *Instance) answer(form map[string][]string, cur view) (result string, moved bool) {
 	if first(form["action"]) != "clear" {
 		log.Printf("outbound-safety: clearing page closed without clearing")
-		return "Closed without clearing anything. You can close this tab."
+		return "Closed without clearing anything. You can close this tab.", false
 	}
 	byID := map[string]safety.Key{}
 	if cur.Lock != nil {
@@ -300,7 +314,7 @@ func (in *Instance) answer(form map[string][]string, cur view) string {
 	for _, r := range cur.Rows {
 		byID[r.ID] = r.Key
 	}
-	checked, cleared, failed := 0, 0, 0
+	var keys []safety.Key
 	seen := map[string]bool{}
 	for _, id := range form["row"] {
 		k, ok := byID[id]
@@ -308,28 +322,31 @@ func (in *Instance) answer(form map[string][]string, cur view) string {
 			continue
 		}
 		seen[id] = true
-		checked++
-		ok, err := in.store.Clear(k, safety.ByWeb, "", in.opts.Now())
-		switch {
-		case err != nil:
-			failed++
-			log.Printf("outbound-safety: CLEAR %s %s failed by=web: %v", k.Kind, k.ID, err)
-		case ok || k.Kind == safety.KeyStrikes:
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return "Nothing was checked, so nothing was cleared. This page is closed; you can close this tab.", false
+	}
+	moved, ok, err := in.store.ClearKeysAt(keys, safety.ByWeb, cur.place, in.opts.Now())
+	if err != nil {
+		log.Printf("outbound-safety: CLEAR by=web failed: %v", err)
+		return "Nothing could be cleared; running slack-mcp quarantine list in a terminal shows why. This page is closed; you can close this tab.", false
+	}
+	if moved {
+		return "", true
+	}
+	cleared := 0
+	for i, k := range keys {
+		if ok[i] || k.Kind == safety.KeyStrikes {
 			cleared++
 			log.Printf("outbound-safety: CLEARED %s %s (%s) by=web", k.Kind, k.Name, k.ID)
 		}
 	}
 	msg := fmt.Sprintf("Cleared %d.", cleared)
-	switch {
-	case checked == 0:
-		msg = "Nothing was checked, so nothing was cleared."
-	case cleared == 0 && failed == 0:
+	if cleared == 0 {
 		msg = "Nothing needed clearing: what you checked was already clear."
 	}
-	if failed > 0 {
-		msg += fmt.Sprintf(" %d could not be cleared; running slack-mcp quarantine list in a terminal shows why.", failed)
-	}
-	return msg + " This page is closed; you can close this tab."
+	return msg + " This page is closed; you can close this tab.", false
 }
 
 func first(v []string) string {

@@ -362,6 +362,18 @@ const NoBrowserEnv = "SLACK_MCP_NO_BROWSER"
 // ErrNoBrowser is OpenBrowserURL's error when SLACK_MCP_NO_BROWSER is set.
 var ErrNoBrowser = errors.New("browser launch suppressed by " + NoBrowserEnv)
 
+// browserCommand is the platform's launcher for url; tests replace it.
+var browserCommand = func(url string) *exec.Cmd {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url)
+	case "windows":
+		return exec.Command("cmd", "/c", "start", url)
+	default:
+		return exec.Command("xdg-open", url)
+	}
+}
+
 // OpenBrowserURL opens the default browser to the given URL. It writes
 // nothing itself: on stdio the server's stdout is the JSON-RPC stream, so
 // the caller decides where a failure goes.
@@ -370,19 +382,26 @@ func OpenBrowserURL(url string) error {
 		return ErrNoBrowser
 	}
 
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
+	cmd := browserCommand(url)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("could not open a browser: %w", err)
 	}
-	// Reap the launcher; xdg-open and open exit once the browser has it.
-	go func() { _ = cmd.Wait() }()
+	// The launchers (xdg-open, open, cmd /c start) exit as soon as they
+	// have handed the URL on, and xdg-open with no handler exits non-zero
+	// after starting fine. Wait that long for the verdict; a launcher still
+	// running then has become the browser, which counts as opened.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("could not open a browser: %w", err)
+		}
+	case <-time.After(launcherWait):
+	}
 	return nil
 }
+
+// launcherWait bounds how long OpenBrowserURL waits for the launcher's
+// exit status.
+const launcherWait = 2 * time.Second

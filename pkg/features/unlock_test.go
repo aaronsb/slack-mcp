@@ -74,6 +74,9 @@ func TestUnlockOpensAPageTheOperatorClearsOn(t *testing.T) {
 	if strings.Contains(res.Message, "#eng") || strings.Contains(strings.ToLower(res.Message+res.Guidance), "cleared ") {
 		t.Fatalf("result reports the state or an outcome: %+v", res)
 	}
+	// Worded for the agent, with the CLI fallback when no page appeared.
+	wantIn(t, res.Message, "the operator's browser")
+	wantIn(t, res.Guidance, "If no page appeared", "slack-mcp quarantine list")
 
 	_, body := fetch(t, *link)
 	wantIn(t, body, "#eng", "A Slack token in the message text, sending to #eng")

@@ -171,8 +171,7 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature, handle st
 		params["_provider"] = p
 
 		// Execute feature
-		ctx = features.WithSSE(ctx, s.sse.Load())
-		result, err := feature.Handler(features.WithElicitation(ctx, s.elicitation(ctx, request)), params)
+		result, err := feature.Handler(s.callContext(ctx, request), params)
 		if err != nil {
 			if bannered[feature.Name] {
 				if banner := features.SafetyBanner(p); banner != "" {
@@ -200,6 +199,14 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature, handle st
 
 	// Register the tool
 	s.server.AddTool(mcp.NewTool(feature.Name, toolOptions...), handler)
+}
+
+// callContext is what a tool handler runs under: whether this call came
+// over SSE, whose host need not be the operator's, and its elicitation
+// facts.
+func (s *SemanticMCPServer) callContext(ctx context.Context, request mcp.CallToolRequest) context.Context {
+	ctx = features.WithSSE(ctx, s.sse.Load())
+	return features.WithElicitation(ctx, s.elicitation(ctx, request))
 }
 
 // elicitation reports whether the current request's client can be asked
