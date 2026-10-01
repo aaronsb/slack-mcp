@@ -92,20 +92,31 @@ func OpenDir(dir string, org Org, p Posture) (*Workspace, error) {
 	}, nil
 }
 
-// Approve answers a pending request from the CLI. For case 1 or 2 it marks
-// the request approved, and the next call with the same destination and
-// content goes through once (ConsumeApproved). For case 3 it appends a clear
-// for each lifted key and lets nothing through. The lookup, the clears, and
-// the approval run under the pending file's lock, so a concurrent deny or
-// approve cannot interleave.
-func (w *Workspace) Approve(id string, now time.Time) (Request, error) {
-	return w.Pending.resolve(id, kindApprove, AnswerCLI, now, func(r Request) error {
+// Approve answers the request shown from the CLI, refusing with ErrChanged
+// when the request under its ID is no longer the one shown (Fingerprint).
+// For case 1 or 2 it marks the request approved, and the next call with the
+// same destination and content goes through once (ConsumeApproved). For
+// case 3 it appends a clear for each lifted key and lets nothing through.
+// The lookup, the clears, and the approval run under the pending file's
+// lock, so a concurrent deny or approve cannot interleave.
+//
+// A lift writes its approve line only after every clear succeeds. A clear
+// that fails partway leaves the earlier keys cleared and the request
+// pending, and a retry completes the lift: a clear of a key no longer in
+// force writes nothing. The reverse order could mark a lift applied whose
+// keys stay quarantined, with no request left to retry.
+func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
+	same := sameAs(shown)
+	return w.Pending.resolve(shown.ID, kindApprove, AnswerCLI, now, func(r Request) error {
+		if err := same(r); err != nil {
+			return err
+		}
 		if r.Status != StatusPending {
 			return fmt.Errorf("%w: %s", ErrNotPending, r.Status)
 		}
 		if r.IsLift() {
 			for _, k := range r.Lift {
-				if _, err := w.Quarantine.Clear(k, ByApproval, id, now); err != nil {
+				if _, err := w.Quarantine.Clear(k, ByApproval, r.ID, now); err != nil {
 					return err
 				}
 			}

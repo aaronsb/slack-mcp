@@ -50,7 +50,8 @@ func summary(r safety.Request) string {
 }
 
 // answer approves or denies a request after showing it in full: for case 1
-// the text and file names, not a hash.
+// the text and file names, not a hash. The answer carries the request shown,
+// so it is refused if another request holds the ID by the time it lands.
 func (c *safetyCLI) answer(id string, approve bool) int {
 	now := c.now()
 	r, ok := c.ws.Pending.Lookup(id, now)
@@ -77,13 +78,13 @@ func (c *safetyCLI) answer(id string, approve bool) int {
 		return 1
 	}
 	if !approve {
-		if _, err := c.ws.Pending.Deny(id, safety.AnswerCLI, now); err != nil {
+		if _, err := c.ws.Pending.Deny(r, safety.AnswerCLI, now); err != nil {
 			return c.fail("%v", err)
 		}
 		fmt.Fprintf(c.stdout, "Denied %s.\n", id)
 		return 0
 	}
-	if _, err := c.ws.Approve(id, now); err != nil {
+	if _, err := c.ws.Approve(r, now); err != nil {
 		return c.fail("%v", err)
 	}
 	if r.IsLift() {

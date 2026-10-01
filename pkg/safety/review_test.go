@@ -157,7 +157,7 @@ func TestBindingByPersonSurvivesDMOpen(t *testing.T) {
 	now := time.Now()
 	person := Destination{Kind: DestPerson, Name: "@dana", Members: []Key{Person("U1", "@dana")}}
 	r, _, _ := w.Pending.Create(Request{Cases: []Case{CaseExternal}, Tool: "say", Destination: person, ContentHash: "h"}, now)
-	if _, err := w.Approve(r.ID, now); err != nil {
+	if _, err := w.Approve(r, now); err != nil {
 		t.Fatal(err)
 	}
 	// The DM now exists; the next call reaches it by conversation ID.
@@ -175,7 +175,7 @@ func TestGateOrderConsumeApprovedBeforeCreate(t *testing.T) {
 	now := time.Now()
 	req := externalReq("hi")
 	r, _, _ := w.Pending.Create(req, now)
-	w.Approve(r.ID, now)
+	w.Approve(r, now)
 	b := BindingFor(req.Destination, req.ContentHash, req.Cases)
 
 	gate := func() (passed bool, id string) {
@@ -199,7 +199,7 @@ func TestGateOrderConsumeApprovedBeforeCreate(t *testing.T) {
 
 	// The wrong order: Create first issues a new request beside the approval.
 	r2, _, _ := w.Pending.Create(externalReq("other"), now)
-	w.Approve(r2.ID, now)
+	w.Approve(r2, now)
 	nr, created, _ := w.Pending.Create(externalReq("other"), now)
 	if !created || nr.ID == r2.ID {
 		t.Fatal("Create reused an approved request")
@@ -211,11 +211,138 @@ func TestApproveRefusesResolvedLiftWithoutClearing(t *testing.T) {
 	now := time.Now()
 	block(t, w, channel("C1", "#a"))
 	lift, _, _ := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"), Lift: []Key{Conversation("C1", "#a")}}, now)
-	w.Pending.Deny(lift.ID, AnswerCLI, now)
-	if _, err := w.Approve(lift.ID, now); !errors.Is(err, ErrNotPending) {
+	w.Pending.Deny(lift, AnswerCLI, now)
+	if _, err := w.Approve(lift, now); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("approved a denied lift: %v", err)
 	}
 	if _, q := w.Quarantine.State().IsQuarantined("C1"); !q {
 		t.Fatal("a refused approval cleared the quarantine")
+	}
+}
+
+// shownEarlier is what an operator saw under r's ID before it expired and
+// the ID was issued again for other content.
+func shownEarlier(r Request) Request {
+	r.Created = r.Created.Add(-PendingTTL)
+	r.ContentHash = HashContent([]byte("what the operator read"))
+	return r
+}
+
+func TestAnswerRefusesRequestChangedSinceShown(t *testing.T) {
+	w := openTest(t, Strict)
+	now := time.Now()
+	r, _, _ := w.Pending.Create(externalReq("hi"), now)
+	if _, err := w.Approve(shownEarlier(r), now); !errors.Is(err, ErrChanged) {
+		t.Fatalf("approve of an unseen request: %v", err)
+	}
+	if _, err := w.Pending.Deny(shownEarlier(r), AnswerCLI, now); !errors.Is(err, ErrChanged) {
+		t.Fatalf("deny of an unseen request: %v", err)
+	}
+	if got, _ := w.Pending.Lookup(r.ID, now); got.Status != StatusPending {
+		t.Fatalf("refused answer changed the request: %s", got.Status)
+	}
+	shown, _ := w.Pending.Lookup(r.ID, now)
+	if _, err := w.Approve(shown, now); err != nil {
+		t.Fatalf("approve of the request shown: %v", err)
+	}
+	if _, err := w.Pending.Deny(shown, AnswerCLI, now); err != nil {
+		t.Fatalf("deny of the approved request shown: %v", err)
+	}
+}
+
+func TestApproveRefusesLiftChangedSinceShown(t *testing.T) {
+	w := openTest(t, Strict)
+	now := time.Now()
+	block(t, w, channel("C1", "#a"))
+	lift, _, _ := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"), Lift: []Key{Conversation("C1", "#a")}}, now)
+	stale := lift
+	stale.Lift = []Key{StrikesKey}
+	if _, err := w.Approve(stale, now); !errors.Is(err, ErrChanged) {
+		t.Fatalf("approved a lift set never shown: %v", err)
+	}
+	if _, q := w.Quarantine.State().IsQuarantined("C1"); !q {
+		t.Fatal("a refused approval cleared the quarantine")
+	}
+}
+
+func TestExpiredIDNotIssuedAgainWithinTTL(t *testing.T) {
+	w := openTest(t, Strict)
+	t0 := time.Now()
+	r, _, _ := w.Pending.Create(externalReq("held text"), t0)
+	later := t0.Add(PendingTTL)
+	if n, err := w.Pending.Expire(later); n != 1 || err != nil {
+		t.Fatalf("expire: %d %v", n, err)
+	}
+	w2, _ := OpenDir(w.Dir, testOrg, Strict)
+	w2.Pending.mu.Lock()
+	w2.Pending.refreshLocked()
+	_, retired := w2.Pending.retired[r.ID]
+	w2.Pending.mu.Unlock()
+	if !retired {
+		t.Fatal("expired ID not held in the file")
+	}
+	if _, ok := w2.Pending.Lookup(r.ID, later); ok {
+		t.Fatal("a retired ID looks up as a request")
+	}
+
+	// Every ID but the retired one in use: newID must not fall back on it.
+	s := w2.Pending
+	for _, a := range idAlphabet {
+		for _, b := range idAlphabet {
+			for _, c := range idAlphabet {
+				if id := "p" + string([]rune{a, b, c}); id != r.ID {
+					s.reqs[id] = &Request{ID: id}
+				}
+			}
+		}
+	}
+	if id, err := s.newID(); err == nil {
+		t.Fatalf("issued %s with only a retired ID free", id)
+	}
+
+	if _, err := w.Pending.Expire(later.Add(PendingTTL)); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(w.Dir, PendingFile))
+	if bytes.Contains(raw, []byte(r.ID)) {
+		t.Fatal("retired ID kept past its window")
+	}
+}
+
+func TestLiftClearFailureLeavesRequestToRetry(t *testing.T) {
+	w := openTest(t, Strict)
+	now := time.Now()
+	block(t, w, channel("C1", "#a"))
+	block(t, w, channel("C2", "#b"))
+	lift, _, _ := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"),
+		Lift: []Key{Conversation("C1", "#a"), Conversation("C2", "#b")}}, now)
+
+	aside := qpath(w) + ".aside"
+	os.Rename(qpath(w), aside)
+	os.Mkdir(qpath(w), 0o700)
+	if _, err := w.Approve(lift, now); err == nil {
+		t.Fatal("approve with an unreadable quarantine file reported nothing")
+	}
+	if got, _ := w.Pending.Lookup(lift.ID, now); got.Status != StatusPending {
+		t.Fatalf("failed lift written as %s", got.Status)
+	}
+	os.Remove(qpath(w))
+	os.Rename(aside, qpath(w))
+
+	// A lift that cleared its first key before failing: the retry finishes it.
+	if _, err := w.Quarantine.Clear(Conversation("C1", "#a"), ByApproval, lift.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Approve(lift, now); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	st := w.Quarantine.State()
+	for _, id := range []string{"C1", "C2"} {
+		if _, q := st.IsQuarantined(id); q {
+			t.Fatalf("retry left %s quarantined", id)
+		}
+	}
+	if got, _ := w.Pending.Lookup(lift.ID, now); got.Status != StatusConsumed {
+		t.Fatalf("retried lift %s", got.Status)
 	}
 }

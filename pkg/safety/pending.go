@@ -2,10 +2,13 @@ package safety
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"sync"
 	"time"
 )
@@ -92,6 +95,22 @@ func (r Request) sameCall(o Request) bool {
 	return r.ContentHash == o.ContentHash
 }
 
+// Fingerprint names what the operator is shown of a request: its ID, issue
+// time, tool, gate cases, destination binding, content hash, and lift set.
+// Approve and Deny compare it under the pending lock, so an ID that expired
+// and was issued again between display and confirmation answers nothing.
+func (r Request) Fingerprint() string {
+	lift := make([]string, len(r.Lift))
+	for i, k := range r.Lift {
+		lift[i] = slotKey(k)
+	}
+	sort.Strings(lift)
+	raw, _ := json.Marshal([]any{r.ID, r.Created.UTC().Format(time.RFC3339Nano), r.Tool,
+		normCases(r.Cases), r.Destination.BindingID(), r.ContentHash, lift})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
 func sameKeys(a, b []Key) bool {
 	set := func(ks []Key) map[string]bool {
 		m := map[string]bool{}
@@ -118,6 +137,7 @@ const (
 	kindApprove = "approve"
 	kindDeny    = "deny"
 	kindConsume = "consume"
+	kindRetire  = "retire" // an expired request's ID, held so it is not issued again
 )
 
 type pendingLine struct {
@@ -133,6 +153,7 @@ var (
 	ErrNoRequest  = errors.New("no such request (it may have expired)")
 	ErrNotPending = errors.New("request is no longer pending")
 	ErrMismatch   = errors.New("request does not match this call")
+	ErrChanged    = errors.New("request changed since it was shown; nothing changed, list it again")
 )
 
 // PendingStore is one workspace's pending-request file and its fold.
@@ -142,6 +163,14 @@ type PendingStore struct {
 	reqs  map[string]*Request
 	order []string
 	raw   map[string][][]byte // each request's lines, for compaction
+	// retired holds each retire line by ID: the time the request expired
+	// and the line, for compaction.
+	retired map[string]retiredID
+}
+
+type retiredID struct {
+	at  time.Time
+	raw []byte
 }
 
 func newPendingStore(path string) *PendingStore {
@@ -154,6 +183,7 @@ func (s *PendingStore) reset() {
 	s.reqs = map[string]*Request{}
 	s.order = nil
 	s.raw = map[string][][]byte{}
+	s.retired = map[string]retiredID{}
 }
 
 func (s *PendingStore) apply(raw []byte) error {
@@ -174,6 +204,13 @@ func (s *PendingStore) apply(raw []byte) error {
 		s.reqs[r.ID] = &r
 		s.raw[r.ID] = nil
 		keep(r.ID)
+		return nil
+	}
+	if l.Kind == kindRetire {
+		if l.ID == "" {
+			return errors.New("retire line without an ID")
+		}
+		s.retired[l.ID] = retiredID{at: l.Time, raw: append([]byte(nil), raw...)}
 		return nil
 	}
 	r, ok := s.reqs[l.ID]
@@ -335,7 +372,8 @@ func (s *PendingStore) Create(req Request, now time.Time) (Request, bool, error)
 
 const idAlphabet = "23456789abcdefghjkmnpqrstuvwxyz"
 
-// newID returns "p" and three characters, unused in the file.
+// newID returns "p" and three characters, unused in the file: not a
+// request's ID, nor one retired within PendingTTL.
 func (s *PendingStore) newID() (string, error) {
 	for range 1000 {
 		b := []byte{'p', 0, 0, 0}
@@ -346,7 +384,9 @@ func (s *PendingStore) newID() (string, error) {
 			}
 			b[i] = idAlphabet[n.Int64()]
 		}
-		if _, used := s.reqs[string(b)]; !used {
+		_, used := s.reqs[string(b)]
+		_, retired := s.retired[string(b)]
+		if !used && !retired {
 			return string(b), nil
 		}
 	}
@@ -391,9 +431,22 @@ func (s *PendingStore) resolve(id, kind, by string, now time.Time, check func(Re
 	return out, err
 }
 
-// Deny marks a request denied. A repeat of the call then issues a new one.
-func (s *PendingStore) Deny(id, by string, now time.Time) (Request, error) {
-	return s.resolve(id, kindDeny, by, now, nil)
+// Deny marks the request shown denied, refusing with ErrChanged when the
+// request under its ID is no longer the one shown (Fingerprint). A repeat
+// of the call then issues a new one.
+func (s *PendingStore) Deny(shown Request, by string, now time.Time) (Request, error) {
+	return s.resolve(shown.ID, kindDeny, by, now, sameAs(shown))
+}
+
+// sameAs is the check that the request under an ID is still the one shown.
+func sameAs(shown Request) func(Request) error {
+	want := shown.Fingerprint()
+	return func(r Request) error {
+		if r.Fingerprint() != want {
+			return ErrChanged
+		}
+		return nil
+	}
 }
 
 // Consume uses request id for one send: the elicitation path, where the
@@ -445,8 +498,9 @@ func (s *PendingStore) ConsumeApproved(b Binding, now time.Time) (Request, bool,
 }
 
 // Expire drops every request whose 24 hours have run out, with the content
-// held for it, by rewriting the file without them. It returns how many were
-// dropped. Create runs it on every issue, and the CLI on every approve and
+// held for it, by rewriting the file without them; each leaves a retire line
+// naming only its ID, kept PendingTTL so newID does not issue the ID again
+// while an operator may still hold it. It returns how many were dropped. Create runs it on every issue, and the CLI on every approve and
 // deny, so held content does not outlive its request for long.
 func (s *PendingStore) Expire(now time.Time) (int, error) {
 	s.mu.Lock()
@@ -467,16 +521,34 @@ func (s *PendingStore) Expire(now time.Time) (int, error) {
 // expireLocked does Expire's work; the caller holds the mutex and the lock
 // and has refreshed.
 func (s *PendingStore) expireLocked(now time.Time) (int, error) {
-	dropped := 0
+	dropped, aged := 0, 0
 	var keep [][]byte
+	ids := make([]string, 0, len(s.retired))
+	for id := range s.retired {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if !now.Before(s.retired[id].at.Add(PendingTTL)) {
+			aged++
+			continue
+		}
+		keep = append(keep, s.retired[id].raw)
+	}
 	for _, id := range s.order {
-		if !now.Before(s.reqs[id].Expires) {
+		r := s.reqs[id]
+		if !now.Before(r.Expires) {
+			raw, err := json.Marshal(pendingLine{Time: r.Expires.UTC(), Kind: kindRetire, ID: id})
+			if err != nil {
+				return 0, err
+			}
+			keep = append(keep, raw)
 			dropped++
 			continue
 		}
 		keep = append(keep, s.raw[id]...)
 	}
-	if dropped == 0 {
+	if dropped == 0 && aged == 0 {
 		return 0, nil
 	}
 	if err := s.j.rewrite(keep); err != nil {

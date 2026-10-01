@@ -390,7 +390,7 @@ func TestPendingCreateRepeatAndDeny(t *testing.T) {
 	if !created || r3.ID == r1.ID {
 		t.Fatal("changed content reused the ID")
 	}
-	if _, err := w.Pending.Deny(r1.ID, AnswerCLI, now); err != nil {
+	if _, err := w.Pending.Deny(r1, AnswerCLI, now); err != nil {
 		t.Fatal(err)
 	}
 	r4, created, _ := w.Pending.Create(externalReq("hi"), now)
@@ -418,7 +418,7 @@ func TestPendingCLIApprovalSingleUse(t *testing.T) {
 	w := openTest(t, Strict)
 	now := time.Now()
 	r, _, _ := w.Pending.Create(externalReq("hi"), now)
-	if _, err := w.Approve(r.ID, now); err != nil {
+	if _, err := w.Approve(r, now); err != nil {
 		t.Fatal(err)
 	}
 	b := Binding{DestinationID: "C1", ContentHash: HashContent([]byte("hi")), Cases: []Case{CaseExternal}}
@@ -431,7 +431,7 @@ func TestPendingCLIApprovalSingleUse(t *testing.T) {
 	if _, ok, _ := w.Pending.ConsumeApproved(b, now); ok {
 		t.Fatal("one approval let two sends through")
 	}
-	if _, err := w.Approve(r.ID, now); !errors.Is(err, ErrNotPending) {
+	if _, err := w.Approve(r, now); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("re-approve: %v", err)
 	}
 }
@@ -479,7 +479,7 @@ func TestPendingExpiry(t *testing.T) {
 	if !ok || got.Status != StatusExpired || got.Text != "" {
 		t.Fatalf("expired lookup: %+v", got)
 	}
-	if _, err := w.Approve(r.ID, later); !errors.Is(err, ErrNotPending) {
+	if _, err := w.Approve(r, later); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("approved an expired request: %v", err)
 	}
 	bind := Binding{DestinationID: "C1", ContentHash: r.ContentHash, Cases: r.Cases}
@@ -521,7 +521,7 @@ func TestPendingLiftApprovalClears(t *testing.T) {
 		t.Fatal(err)
 	}
 	lock, _, _ := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C5", "#e"), Lift: []Key{StrikesKey}}, now)
-	if _, err := w.Approve(lift.ID, now); err != nil {
+	if _, err := w.Approve(lift, now); err != nil {
 		t.Fatal(err)
 	}
 	st := w.Quarantine.State()
@@ -539,7 +539,7 @@ func TestPendingLiftApprovalClears(t *testing.T) {
 	if _, err := w.Pending.Consume(lift.ID, Binding{DestinationID: "C1"}, AnswerCLI, now); err == nil {
 		t.Fatal("lift consumed as a send")
 	}
-	w.Approve(lock.ID, now)
+	w.Approve(lock, now)
 	if w.Quarantine.State().LockEngaged() {
 		t.Fatal("strike lift did not clear the lock")
 	}

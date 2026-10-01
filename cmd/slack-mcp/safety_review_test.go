@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,6 +38,20 @@ func TestTermSafe(t *testing.T) {
 	}
 	if termSafe("héllo #général") != "héllo #général" {
 		t.Fatal("printable UTF-8 altered")
+	}
+}
+
+func TestTermSafeEscapesBidiAndZeroWidth(t *testing.T) {
+	for _, r := range []rune{0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
+		0x2066, 0x2067, 0x2068, 0x2069, 0xfeff} {
+		in := "send to #ok" + string(r) + "tsil"
+		got := termSafe(in)
+		if strings.ContainsRune(got, r) || !strings.Contains(got, fmt.Sprintf(`\u%04x`, r)) {
+			t.Fatalf("U+%04X not escaped: %q", r, got)
+		}
+	}
+	if termSafe("שלום עליכם") != "שלום עליכם" {
+		t.Fatal("right-to-left text altered")
 	}
 }
 

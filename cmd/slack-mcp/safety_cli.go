@@ -262,7 +262,9 @@ func matchKey(arg string, ks []safety.Key) (safety.Key, bool) {
 // termSafe escapes control characters before text reaches the operator's
 // terminal: C0 controls other than newline and tab, DEL, C1 controls, and
 // bytes that are not UTF-8, so text an agent supplied cannot move the
-// cursor, retitle the window, or write the clipboard (OSC 52).
+// cursor, retitle the window, or write the clipboard (OSC 52); and
+// bidirectional and zero-width formatting characters, so it cannot reorder
+// or hide what the operator reads before approving.
 func termSafe(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
@@ -274,7 +276,7 @@ func termSafe(s string) string {
 			b.WriteRune(r)
 		case r < 0x20 || r == 0x7f:
 			fmt.Fprintf(&b, "\\x%02x", r)
-		case r >= 0x80 && r <= 0x9f:
+		case r >= 0x80 && r <= 0x9f, invisibleFormat(r):
 			fmt.Fprintf(&b, "\\u%04x", r)
 		default:
 			b.WriteString(s[i : i+size])
@@ -282,6 +284,14 @@ func termSafe(s string) string {
 		i += size
 	}
 	return b.String()
+}
+
+// invisibleFormat reports the bidi controls (U+061C, U+200E-200F,
+// U+202A-202E, U+2066-2069) and zero-width characters (U+200B-200D,
+// U+FEFF) termSafe escapes.
+func invisibleFormat(r rune) bool {
+	return r == 0x061c || (r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) ||
+		(r >= 0x2066 && r <= 0x2069) || r == 0xfeff
 }
 
 // termSafeAll escapes each string.
