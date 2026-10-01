@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -64,5 +67,36 @@ func TestApprovalFormIsInputRequired(t *testing.T) {
 	in, ok := res.InputRequests[approvalKey]
 	if !ok || in.Elicitation == nil || in.Elicitation.Message != "Approve pending pabc?" {
 		t.Fatalf("input request %+v", res.InputRequests)
+	}
+}
+
+// Each distinct client answer is logged once, naming what decided the
+// approval form, so a live check can see why a client was not offered it.
+func TestClientApprovalCapabilityIsLoggedOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	s := NewSemanticMCPServer(nil)
+	ctx := server.WithRequestProtocolInfo(context.Background(), &server.RequestProtocolInfo{
+		Modern: true, ProtocolVersion: mcp.ProtocolVersion20260728,
+		ClientInfo:         &mcp.Implementation{Name: "desk\nfake: line", Version: "1.0"},
+		ClientCapabilities: &mcp.ClientCapabilities{Elicitation: &mcp.ElicitationCapability{}},
+	})
+	var req mcp.CallToolRequest
+	s.elicitation(ctx, req)
+	s.elicitation(ctx, req)
+	s.elicitation(context.Background(), req)
+
+	out := buf.String()
+	if n := strings.Count(out, "client: "); n != 2 {
+		t.Fatalf("logged %d client lines, want one per distinct answer:\n%s", n, out)
+	}
+	if !strings.Contains(out, `name="desk\nfake: line" version="1.0" protocol=`+mcp.ProtocolVersion20260728+" elicitation=true sse=false approval-form=true") {
+		t.Errorf("modern client line wrong or unquoted:\n%s", out)
+	}
+	if !strings.Contains(out, "protocol=legacy elicitation=false sse=false approval-form=false") {
+		t.Errorf("legacy line missing:\n%s", out)
 	}
 }

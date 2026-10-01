@@ -255,3 +255,31 @@ func TestListChannelsIncludeDeletedListsGoneChannels(t *testing.T) {
 		t.Fatalf("no dated interval: %+v", entry)
 	}
 }
+
+// A search widens to every channel only when no filter was given; an
+// explicit filter=member holds, since the echo states it as effective.
+func TestChannelSearchHonorsAnExplicitFilter(t *testing.T) {
+	srv := slacktest.New(t)
+	joined := channel("C1", "deploy-alpha")
+	var other slack.Channel
+	other.ID, other.Name, other.IsChannel = "C2", "deploy-beta", true
+	srv.SeedChannels(joined, other)
+	ap := bootedProvider(t, srv)
+
+	names := func(res *features.FeatureResult) []string {
+		var out []string
+		for _, c := range dataOf(t, res)["channels"].([]map[string]interface{}) {
+			out = append(out, c["name"].(string))
+		}
+		return out
+	}
+
+	got := names(listChannels(t, ap, map[string]any{"search": "deploy", "filter": "member"}))
+	if len(got) != 1 || got[0] != "deploy-alpha" {
+		t.Errorf("filter=member search=deploy listed %v, want [deploy-alpha]", got)
+	}
+	got = names(listChannels(t, ap, map[string]any{"search": "deploy"}))
+	if len(got) != 2 {
+		t.Errorf("search=deploy without a filter listed %v, want both channels", got)
+	}
+}

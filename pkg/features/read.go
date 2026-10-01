@@ -8,6 +8,7 @@ import (
 
 	"github.com/aaronsb/slack-mcp/pkg/handle"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 )
 
@@ -81,6 +82,23 @@ func readHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 	// A handle is unambiguous by construction, so it needs no resolution.
 	if ref, err := handle.Decode(target); err == nil {
 		return readRef(ctx, apiProvider, api, ref, limit)
+	}
+
+	// '@' names a person: the read-policy ladder, as since= uses, so '@me'
+	// is the self-DM rather than every conversation containing "me". A read
+	// never opens a DM.
+	if strings.HasPrefix(target, "@") {
+		dest, terr := locateTarget(ctx, apiProvider, target, provider.ReadPolicy, "target")
+		if terr != nil {
+			return terr.result(), nil
+		}
+		if dest.ConvID == "" {
+			return &FeatureResult{
+				Success: false,
+				Message: fmt.Sprintf("There is no DM with %s yet, so there is nothing to read.", dest.Name),
+			}, nil
+		}
+		return readRef(ctx, apiProvider, api, handle.Ref{Kind: handle.KindConversation, Channel: dest.ConvID}, limit)
 	}
 
 	return resolveAndRead(ctx, apiProvider, api, target, limit)
@@ -395,7 +413,7 @@ func matchConversations(apiProvider *provider.ApiProvider, needles []string) []c
 			label, kind = "@"+displayName(u), "dm"
 			names = []string{u.Name, u.RealName, u.Profile.DisplayName}
 		case ch.IsMpIM:
-			label, kind = groupName(ch.Name, nil), "group"
+			label, kind = text.GroupDMName(ch.Name, nil), "group"
 			names = []string{ch.Name}
 		default:
 			if ch.Name == "" {
@@ -530,7 +548,7 @@ func conversationLabel(apiProvider *provider.ApiProvider, channelID string) (str
 				return "@" + displayName(u), true
 			}
 		case ch.IsMpIM:
-			return groupName(ch.Name, nil), true
+			return text.GroupDMName(ch.Name, nil), true
 		case ch.Name != "":
 			return "#" + ch.Name, true
 		}

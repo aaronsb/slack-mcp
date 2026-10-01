@@ -42,6 +42,7 @@ func startServerOut(t *testing.T, out *os.File, env ...string) (*exec.Cmd, *os.F
 		"HOME="+home,
 		"XDG_CONFIG_HOME="+home+"/.config",
 		"XDG_DATA_HOME="+home+"/.local/share",
+		"XDG_STATE_HOME="+home+"/.local/state",
 		"SLACK_MCP_XOXC_TOKEN=",
 		"SLACK_MCP_XOXD_TOKEN=",
 		"SLACK_MCP_IDLE_TIMEOUT=",

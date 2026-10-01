@@ -258,6 +258,7 @@ func TestOpenOverrideCreatesPrivateFile(t *testing.T) {
 	skipModeChecksOnWindows(t)
 	path := filepath.Join(t.TempDir(), "nested", "custom.log")
 	t.Setenv(FileEnv, path)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	f, err := Open(Path())
 	if err != nil {
@@ -353,6 +354,7 @@ func TestOpenAcceptsDevNull(t *testing.T) {
 		t.Skip("no /dev/null")
 	}
 	t.Setenv(FileEnv, os.DevNull)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	f, err := Open(Path())
 	if err != nil {

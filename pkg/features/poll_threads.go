@@ -2,6 +2,7 @@ package features
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/handle"
@@ -49,6 +50,12 @@ func tickThreads(
 		// The conversation half of the tick still stands; say the thread half
 		// did not rather than reporting a complete tick.
 		t.threadFeedFailed = true
+		if err != nil {
+			// A non-200 error carries the body; the head is enough to name it.
+			log.Printf("poll: thread feed unreadable: %s", truncate(err.Error(), 160))
+		} else {
+			log.Printf("poll: thread feed unreadable: error=%s", view.Error)
+		}
 	} else {
 		for _, entry := range view.Threads {
 			root := entry.RootMsg
@@ -68,7 +75,7 @@ func tickThreads(
 			t.events = append(t.events, threadEvent(
 				root.Channel, root.ThreadTS, root.LatestReply,
 				preview(t.rm.RenderText(root.Text)),
-				root.ReplyCount, entry.UnreadReplies,
+				root.ReplyCount, len(entry.UnreadReplies),
 				naming(conversation{ID: root.Channel, Kind: "channel"}),
 				t.rm.AuthorByID(root.User)))
 		}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,8 @@ type SemanticMCPServer struct {
 	// sse is set once the server serves SSE, whose sessions are never
 	// asked for an approval in-band (ADR-013, Elicitation).
 	sse atomic.Bool
+	// clients holds the client lines noteClient has logged.
+	clients sync.Map
 }
 
 // Option configures the server at construction.
@@ -200,18 +203,19 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature, handle st
 // in its own capabilities, and never on SSE. An earlier client would have
 // mcp-go wait on an elicitation nobody may answer, so it gets the CLI path.
 func (s *SemanticMCPServer) elicitation(ctx context.Context, request mcp.CallToolRequest) features.Elicitation {
-	if s.sse.Load() {
-		return features.Elicitation{}
-	}
 	info := server.RequestProtocolInfoFromContext(ctx)
-	if info == nil || !info.Modern || info.ProtocolVersion < mcp.ProtocolVersion20260728 {
-		return features.Elicitation{}
+	var caps *mcp.ClientCapabilities
+	if info != nil {
+		caps = info.ClientCapabilities
 	}
-	caps := info.ClientCapabilities
 	if caps == nil {
 		caps = request.Params.Meta.ClientCapabilities()
 	}
-	if caps == nil || caps.Elicitation == nil {
+	modern := info != nil && info.Modern && info.ProtocolVersion >= mcp.ProtocolVersion20260728
+	declared := caps != nil && caps.Elicitation != nil
+	sse := s.sse.Load()
+	s.noteClient(ctx, info, modern, declared, sse)
+	if sse || !modern || !declared {
 		return features.Elicitation{}
 	}
 	e := features.Elicitation{Offer: true}
@@ -224,6 +228,34 @@ func (s *SemanticMCPServer) elicitation(ctx context.Context, request mcp.CallToo
 		}
 	}
 	return e
+}
+
+// noteClient logs, once per distinct answer, what a client's requests say
+// about in-band approval: its name and version, the protocol a request
+// declared, whether it declared elicitation, and whether the approval form
+// is offered. Without it a live check cannot tell which condition kept the
+// form from a client.
+func (s *SemanticMCPServer) noteClient(ctx context.Context, info *server.RequestProtocolInfo, modern, declared, sse bool) {
+	var client mcp.Implementation
+	protocol := "legacy"
+	if info != nil {
+		if info.ClientInfo != nil {
+			client = *info.ClientInfo
+		}
+		if info.ProtocolVersion != "" {
+			protocol = info.ProtocolVersion
+		}
+	}
+	if client.Name == "" {
+		if cs, ok := server.ClientSessionFromContext(ctx).(server.SessionWithClientInfo); ok {
+			client = cs.GetClientInfo()
+		}
+	}
+	line := fmt.Sprintf("client: name=%q version=%q protocol=%s elicitation=%t sse=%t approval-form=%t",
+		client.Name, client.Version, protocol, declared, sse, modern && declared && !sse)
+	if _, seen := s.clients.LoadOrStore(line, true); !seen {
+		log.Print(line)
+	}
 }
 
 // approvalForm is the input-required result asking the operator to answer

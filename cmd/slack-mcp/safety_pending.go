@@ -32,7 +32,10 @@ func (c *safetyCLI) pendingList() int {
 
 func summary(r safety.Request) string {
 	d := r.Destination
-	s := fmt.Sprintf("%s to %s (%s)", termSafe(r.Tool), termSafe(d.Name), termSafe(d.ID()))
+	s := fmt.Sprintf("%s to %s", termSafe(r.Tool), termSafe(d.Name))
+	if id := d.ID(); id != "" {
+		s += fmt.Sprintf(" (%s)", termSafe(id))
+	}
 	if r.FileCount > 0 {
 		s += fmt.Sprintf(" files=%d", r.FileCount)
 	}
