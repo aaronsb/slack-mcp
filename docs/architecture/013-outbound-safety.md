@@ -48,13 +48,12 @@ or case 3, and quarantine wins over it. Added at an approval (`soft`
 only) or with `slack-mcp trust add`; stored beside the quarantine file;
 never listed to the agent. Under Trusted destinations.
 
-Amendment (2026-10-01): zlib. The scanner also inflates zlib streams
-found at any offset, under gzip's attempt cap, header accounting, and
-budget, so text in PDF `FlateDecode` streams and PNG `zTXt` and `iTXt`
-chunks is read. Pixel data is never inflated: PNG `IDAT`, PDF image
-streams, and the bytes of JPEG, GIF, and WebP files get no inflate
-attempt, so an image costs about its file size whatever its resolution.
-Occurrences past the attempt cap make the field unscannable. Under
+Amendment (2026-10-01): zlib. The scanner also inflates every valid
+zlib header at any offset, so text in PDF `FlateDecode` streams and PNG
+`zTXt` and `iTXt` chunks is read. Every gzip or zlib attempt charges
+the input it consumes and the output it produces to the budget, which
+replaces the attempt cap. Pixel data the scanner has parsed in a
+well-formed PNG or PDF is exempt from inflation; nothing else is. Under
 Decoding.
 
 ## Context
@@ -258,54 +257,60 @@ through the full pattern set and the decoders again.
   characters decodes to, is still inflated. An attempt that fails
   (a bad header, a bad checksum, a missing trailer) still has whatever
   it inflated before failing scanned.
-- **Zlib.** Every occurrence of `78 01`, `78 5e`, `78 9c`, or `78 da`
-  in a file's bytes or in any decoded output starts an inflate attempt,
-  on the same terms as gzip: glued streams are found, and an attempt
-  that fails (a bad block, a bad Adler-32 checksum, a missing trailer)
-  still has whatever it inflated scanned. PDF content and object
-  streams (`FlateDecode`) and PNG `zTXt` and `iTXt` chunks are zlib
-  streams, and the text in them is otherwise opaque. Images and PDFs
-  limit where attempts start (Formats, below).
+- **Zlib.** Every valid zlib header in a file's bytes or in any decoded
+  output starts an inflate attempt, on the same terms as gzip: glued
+  streams are found, and an attempt that fails (a bad block, a bad
+  Adler-32 checksum, a missing trailer) still has whatever it inflated
+  scanned. A valid header is two bytes `CMF FLG` with compression
+  method 8 (the low four bits of `CMF`), a window field `CINFO` (its
+  high four bits) of at most 7, `FDICT` (bit 5 of `FLG`) clear, and
+  `CMF * 256 + FLG` a multiple of 31. Every window size counts, not only
+  the common `78 01`, `78 5e`, `78 9c`, and `78 da`: libpng writes
+  smaller windows for small text chunks. PDF content and object streams
+  (`FlateDecode`) and PNG `zTXt` and `iTXt` chunks are zlib streams, and
+  the text in them is otherwise opaque.
 
-Each gzip or zlib attempt counts the header bytes it reads, as well as
-its output, against the budget. A buffer starts at most 1024 attempts,
-gzip and zlib together, so a buffer of repeated headers costs bounded
-work. A buffer with more occurrences where an attempt would start than
-that makes its field unscannable, since a stream past the cap would go
-unread; `78 5e` is `x^` in text, so a message can reach the cap, and is
-refused rather than passed.
+Every gzip or zlib attempt, successful or failed, charges the budget for
+the input bytes it consumes and the output it produces. There is no
+attempt cap; the budget bounds the work. In random bytes about one
+offset in 2,000 is a valid zlib header: 8 of 256 `CMF` values, and about
+4 of 256 `FLG` values for each. Inflating random bytes fails within a
+few to a few tens of bytes, on an invalid block type, a stored length
+that fails its check, an invalid code, or a distance reaching behind
+the start of the output, so a false header costs tens of bytes of
+budget. A high-entropy file (a zip, an MP4, a JPEG, the compressed
+bytes of a `.tar.gz`) pays a few percent of its size in false attempts.
+Text full of `x^` (`78 5e`) pays the same per occurrence and is
+scanned, not refused.
 
-**Formats.** Pixel data is never inflated. A buffer, a file's bytes or
-any decoded output, is recognized by its first bytes, and its format
-decides where inflate attempts start. Matching and the base64, hex, and
-URL decoders run on every buffer, whatever its format.
+**Pixel data.** One kind of span is exempt from inflate attempts: pixel
+data the scanner has parsed in a well-formed container. Nothing else is
+exempt. A magic number alone exempts nothing, and JPEG, GIF, WebP, and
+every other format get attempts at every offset, as any buffer does.
+Matching and the base64, hex, and URL decoders read every byte, exempt
+spans included.
 
-- **PNG**, by its 8-byte signature `89 50 4e 47 0d 0a 1a 0a`. The
-  scanner walks the chunk table by each chunk's length, never past the
-  end of the buffer. Attempts start only at the compressed text of a
-  `zTXt` chunk, and of an `iTXt` chunk whose compression flag is set;
-  `tEXt` is plain text and is matched as it stands. `IDAT` and `fdAT`
-  (pixel data), `iCCP` (a color profile), and every other chunk get no
-  attempt. A chunk whose length runs past the end of the buffer ends
-  the walk as malformed, and the scanner falls back to starting
-  attempts at every gzip and zlib header in the buffer, except inside
-  the data of an `IDAT` or `fdAT` chunk the walk parsed before it
-  failed.
-- **JPEG** (`ff d8 ff`), **GIF** (`GIF87a`, `GIF89a`), **WebP**
-  (`RIFF`, four bytes, `WEBP`). No inflate attempt starts anywhere in
-  the buffer. These formats carry no zlib text worth inflating.
-- **PDF**, by `%PDF-` within its first 1024 bytes. Attempts start at
-  every header as in any buffer, except inside the data of a stream the
-  scanner skips: from the end of the line holding the `stream` keyword
-  to the next `endstream`. A stream is skipped when its dictionary
-  holds `/Subtype /Image` (an image XObject or its soft mask), or a
-  `/Filter`, by name or in an array, of `/DCTDecode`, `/JPXDecode`,
-  `/CCITTFaxDecode`, or `/JBIG2Decode`. The dictionary is found
-  lexically: the nearest `>>` within 4 KiB before `stream` and its
-  matching `<<`, nesting counted, whitespace between name and value
-  optional. A dictionary not found that way leaves the stream
-  inflated, as in any buffer.
-- **Anything else** starts attempts at every header, as above.
+- **PNG.** A buffer that starts with the signature `89 50 4e 47 0d 0a
+  1a 0a` is walked chunk by chunk: a 4-byte length that keeps the chunk
+  inside the buffer, a 4-byte type of ASCII letters, the data, and a
+  CRC-32 that verifies. The walk ends at `IEND`. When every chunk up to
+  and including `IEND` passes, the data of each `IDAT` and `fdAT` chunk
+  is exempt. A walk that fails anywhere exempts nothing. Bytes after
+  `IEND` are scanned as any buffer.
+- **PDF.** A buffer with `%PDF-` in its first 1024 bytes is read for
+  streams. A `stream` keyword is a token when it starts a line or
+  follows `>>` and whitespace, outside a literal string and outside a
+  comment. Its dictionary is the `<<…>>` that ends, with only whitespace
+  after it, at that keyword, found within 4 KiB before it, nesting
+  counted. The stream's data runs from the end of the keyword's line to
+  the next `endstream` token, at a line start or after whitespace. The
+  data is exempt when the dictionary holds `/Subtype /Image` (an image
+  XObject or its soft mask), or a `/Filter`, by name or in an array, of
+  `/DCTDecode`, `/JPXDecode`, `/CCITTFaxDecode`, or `/JBIG2Decode`;
+  whitespace between a name and its value is optional. A stream whose
+  dictionary cannot be read that way, or with no `endstream`, has no
+  exempt span.
+
 
 There is no precedence between decoders. A span more than one decoder
 recognizes (every hex run is also a base64 run) is decoded by each, in a
@@ -315,9 +320,10 @@ follow in offset order (a gzip and a zlib header never start at the same
 offset). A match through any of them blocks.
 
 Decoding goes to depth 3: the content as sent is depth 0, and output at
-depth 3 is matched but not decoded again. A budget of 32 MiB of decoded
-output per call covers every field and depth together. It is counted on
-the output as it is produced, so inflation stops at the budget whatever
+depth 3 is matched but not decoded again. A budget of 32 MiB per call
+covers every field and depth together. It counts decoded output, and
+the input each inflate attempt consumes. It is counted as the output is
+produced, so inflation stops at the budget whatever
 the stream claims. The scan runs breadth-first: every field at depth 0
 (the text forms, the file names, each file's bytes, in that order), then
 all of depth 1, and so on, with spans in offset order and decoders in
@@ -343,12 +349,20 @@ cookies it captured, and blocks on them, correctly. The budget is sized
 for these files: at 8 MiB, under 3 MiB of base64 would already be
 unscannable.
 
-Zlib costs the inflated size of each stream inflated. An image of any
-resolution costs a scan of its bytes, about its file size, plus the
-inflated size of its PNG text chunks, which is small. A PDF costs its
-inflated non-image streams: page content, object streams, and embedded
-fonts. An image is therefore scannable at any resolution, and a PDF
-reaches the budget only through its text and fonts.
+Inflation costs the input and output of every stream inflated. A
+well-formed PNG costs about its file size: a scan of its bytes, its
+small inflated text chunks, and false headers outside its pixel chunks.
+JPEG, GIF, and WebP compress pixels with schemes the scanner does not
+decode, so they cost their false headers, a few percent of their size,
+at any resolution. A PDF's parsed image streams cost their bytes; its
+other streams cost their inflated size: page content, object streams,
+embedded fonts, embedded files, and inline images, which sit inside
+content streams. A TIFF or ICO with deflate-compressed pixels, a PNG
+that fails its walk, and an image stream in a PDF whose dictionary
+cannot be read have their pixels inflated, at width times height times
+bytes per pixel; a 3840x2160 RGBA image inflates to about 31.6 MiB and
+is likely refused as unscannable. A `.tar.gz` is inflated whole and is
+scannable while its contents fit the budget.
 
 No model is in the loop. The patterns are compiled into the binary, and
 the same input gives the same answer. A match on any class is a
@@ -785,7 +799,9 @@ destination refuses `say` and `mark-read` whatever the trust list says.
 The trust entry stays recorded and has no effect while the quarantine
 holds; when the operator clears the quarantine, it applies again, and
 `slack-mcp quarantine clear` says so when it clears a trusted
-destination. The strike lock refuses every write, trusted or not.
+destination. The strike lock refuses every write, trusted or not. A block on a
+trusted external destination posts no notice, as on any external
+destination.
 
 #### What is trusted
 
@@ -800,14 +816,21 @@ ID.
   from.
 - **A conversation** (`#channel`, a group DM's `#mpdm-…` name, or a
   conversation ID): that conversation only. For case 1 the entry
-  records the external parties the gate finds when it is added: the
-  external organizations a channel is shared with, the external members
-  of a group DM, the other member of a DM. At gate time trust applies
-  only when every external party the gate finds is among those
-  recorded, so a channel shared with a new organization after it was
-  trusted is gated again. When the gate cannot list the external
-  parties (a failed fetch, a sharing flag with no organization list),
-  the entry does not apply and the call is gated.
+  records the external parties the gate finds when it is added, and at
+  gate time trust applies only when every external party the gate finds
+  is among those recorded. A channel shared with a new organization
+  after it was trusted is gated again.
+  - A channel's parties are the team IDs in `conversations.info`'s
+    `shared_team_ids`, `connected_team_ids`, and `pending_shared`
+    (slack-go's `SharedTeamIDs`, `ConnectedTeamIDs`, `PendingShared`),
+    less the own team and, when the own `enterprise_id` is non-empty,
+    the Grid siblings the channel lists in `internal_team_ids`. A
+    pending share counts as a party.
+  - A group DM's parties are its external members, from
+    `conversations.members`; a DM's is its other member.
+  - When the gate cannot enumerate the parties (a failed fetch, or an
+    external flag with no party left after the subtraction), the entry
+    does not apply and the call is gated.
 
 The self-DM is never external, so it needs no case 1 entry.
 
@@ -819,9 +842,14 @@ destination, and deny.
 - **Elicitation**: approve and trust is offered only in `soft`, the
   attended posture. In `strict` the form offers approve once and deny,
   and trust is added only through the CLI. The entry covers the cases of
-  the request answered and has no expiry. A server in `strict` ignores
-  entries added by elicitation, so an entry a `soft` session added
-  does not carry into a `strict` deployment on the same data directory.
+  the request answered and has no expiry. It is keyed as the
+  destination was named: `@person` by user ID, a channel by
+  conversation ID, a group DM by conversation ID with its members
+  recorded as its parties. A server in `strict` ignores entries added by
+  elicitation, so an entry a `soft` session added does not carry into a
+  `strict` deployment on the same data directory. An ignored entry
+  replaces nothing: in `strict`, an earlier CLI entry for the same key
+  stays in effect.
 - **CLI**: `slack-mcp trust add <destination> [--case
   external|cross-conversation|all] [--for <duration>]`, where
   `<destination>` is `@handle`, `#channel`, or a conversation ID, and
@@ -835,7 +863,10 @@ destination, and deny.
   separate `trust add`.
 
 A later add for the same key replaces the earlier one's cases and
-expiry, so an add can narrow trust as well as widen it.
+expiry, so an add can narrow trust as well as widen it. An add approves
+nothing already pending: requests issued before it still need `approve`
+or `deny`, and the next call to the destination passes the gate by
+trust.
 
 `slack-mcp trust remove <destination>` ends every case for that key. It
 needs no terminal and no typed confirmation: removal only reduces
@@ -846,7 +877,9 @@ behind the gate. It works in both postures.
 name, resolved at list time with the configured tokens (else the name
 recorded at add time, marked as such), its ID and kind, its cases, when
 and how it was added, its expiry, and its state: in effect, expired,
-quarantined, or ignored in `strict`.
+quarantined, or ignored in `strict`. The CLI takes the posture from
+`SLACK_MCP_SAFETY` in its own environment, default `strict`, prints the
+posture it assumed, and labels entries by it.
 
 #### The trust file
 
@@ -879,12 +912,15 @@ only gate more.
 
 Trusted destinations are not listed to the agent: not in the server
 instructions, the banner, a tool description, or any result. A send
-that trust let through returns the same result as a send no case gated,
-so the agent learns only that the send needed no approval. A list of
-the external destinations that skip the gate is a list of where an
-attacker would ask the agent to send.
+that trust let through returns the same result as a send no case gated.
+The agent can still infer trust: a send it can tell is external that
+passes without a pending request was trusted. Not listing the
+destinations keeps that knowledge to what the agent has already sent;
+a list of the external destinations that skip the gate would be a list
+of where an attacker would ask the agent to send.
 
-The operator sees each send trust let through in a log line:
+The operator sees each send trust let through in a line in the operator
+log, private at mode 0600 once PR #124 lands (#118):
 
 ```
 outbound-safety: TRUSTED say to=#partner-acme (C0456EFGH) case=external entry=cli
@@ -918,10 +954,11 @@ text or file names.
   enough matches and the strike lock engages. ADR-014's soft posture
   raises the count, and the clear path ends the freeze.
 - A large compressed upload can exhaust the decode budget and be refused
-  as unscannable: a large gzip file, or a PDF whose
-  text and font streams inflate past the budget. Images cost about
-  their file size and are not inflated, so resolution does not reach
-  the budget.
+  as unscannable: a gzip whose contents pass the budget, a PDF whose
+  non-image streams do, or a TIFF, ICO, or malformed PNG whose pixels
+  are deflate-compressed. A well-formed PNG, a PDF's parsed image
+  streams, and JPEG, GIF, and WebP files cost about their file size,
+  whatever their resolution.
 - The notice tells a requester their request was caught.
 - Gated calls wait on the operator, and the operator learns of them
   only from the log or `slack-mcp approve`. Unattended, they wait up to
@@ -937,13 +974,17 @@ text or file names.
   secret split across calls, a format no pattern names, a zip
   container (`.zip`, `.docx`, `.xlsx`, `.pptx`, and other Office
   documents), which the scanner does not open, a raw deflate stream
-  with no zlib or gzip header, which it does not inflate, bytes hidden
-  in compressed pixel data (PNG `IDAT`, a PDF image stream), which it
-  does not inflate, text drawn in
+  with no zlib or gzip header, which it does not inflate, text drawn in
   an image, which it does not OCR, or text a PDF draws through a font
   with a custom encoding, which inflates to glyph codes rather than
   characters. The layers raise the cost; they do not make exfiltration
   impossible.
+- **Exempt pixel data.** A secret deliberately compressed into the
+  pixel chunks of a well-formed PNG, or into a PDF stream whose
+  dictionary marks it as an image, is not found: the scanner parsed
+  that span as pixel data and does not inflate it. The scanner is a net
+  for content sent without intent to evade, not a boundary against an
+  agent that sets out to evade it.
 - **Provenance is by hash.** A one-byte edit with the client's file
   tools gives a downloaded file a new hash and no record, and case 2
   no longer applies to it. This is accepted: case 2 is a speed bump for
@@ -988,10 +1029,11 @@ text or file names.
 Removing the layers is not local to `say`. `download` would stop
 recording provenance, the read nouns would drop the banner, `mark-read`
 would drop its quarantine checks, and the CLI subcommands would go.
-Removing trusted destinations alone puts every gated call back behind
-the gate, the fail-safe direction; the trust file is then unread.
-Removing them gives back the four routes in Context. The quarantine file
-outlives a removal; restoring the layers restores its state.
+Removing the layers gives back the four routes in Context. The
+quarantine file outlives a removal; restoring the layers restores its
+state. Removing trusted destinations alone puts every gated call back
+behind the gate, the fail-safe direction; the trust file is then
+unread.
 
 ## Alternatives Considered
 
