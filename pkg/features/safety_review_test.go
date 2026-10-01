@@ -57,6 +57,12 @@ func TestSafetyLocalChecksBeforeAnyBoot(t *testing.T) {
 // what the download wrote and the call's output.
 func download(t *testing.T, f *safetyFake, data []byte) string {
 	t.Helper()
+	return downloadThen(t, f, data, nil)
+}
+
+// downloadThen runs after once the bytes are written.
+func downloadThen(t *testing.T, f *safetyFake, data []byte, after func()) string {
+	t.Helper()
 	t.Setenv("SLACK_MCP_EXCHANGE_DIR", "")
 	f.srv.Handle("files.info", func(*http.Request) any {
 		return map[string]any{"ok": true, "file": map[string]any{
@@ -67,6 +73,9 @@ func download(t *testing.T, f *safetyFake, data []byte) string {
 	})
 	t.Cleanup(features.SetFetchFileForTest(func(_ string, w io.Writer) (int64, error) {
 		n, err := w.Write(data)
+		if after != nil {
+			after()
+		}
 		return int64(n), err
 	}))
 	return runTool(t, features.Download, f.ap, map[string]any{"fileId": "F7"})
@@ -231,7 +240,7 @@ func TestSafetyUnrecordedBlockHoldsWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := f.say(t, context.Background(), map[string]any{"to": "#eng", "text": fakeToken()})
-	wantIn(t, res.Message, "BLOCKED", "could not be recorded", "refused until the operator clears it", "pending p")
+	wantIn(t, res.Message, "BLOCKED", "could not be recorded", "until the operator approves pending p", "or clears the strikes, or the server restarts")
 
 	wantIn(t, f.say(t, context.Background(), map[string]any{"to": "#platform", "text": "clean"}).Message, "an earlier block could not be recorded")
 	wantIn(t, runTool(t, features.MarkAsRead, f.ap, map[string]any{"channel": "#platform"}), "an earlier block could not be recorded")
@@ -253,5 +262,63 @@ func TestSafetyUnrecordedBlockHoldsWrites(t *testing.T) {
 	}
 	if !f.say(t, context.Background(), map[string]any{"to": "#platform", "text": "clean"}).Success {
 		t.Fatalf("the hold outlived the approved lift")
+	}
+}
+
+// When the record fails and so does removing the file, the download says
+// the file is still there without a record.
+func TestSafetyProvenanceFailureReportsAKeptFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	f := newSafetyFake(t, strictHuman())
+	breakProvenance(t)
+	dir := exchangeDir()
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	out := downloadThen(t, f, []byte("numbers"), func() {
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Errorf("chmod: %v", err)
+		}
+	})
+	_ = os.Chmod(dir, 0o700)
+	wantIn(t, out, "removing it failed too", "still in the exchange directory without a record")
+}
+
+// A malformed provenance line may be any file's record, so an attachment
+// with no record counts as moved while one is skipped.
+func TestSafetyMalformedProvenanceGatesUnrecorded(t *testing.T) {
+	f := newSafetyFake(t, strictHuman())
+	attachUploads(t, f)
+	putExchange(t, "notes.txt", []byte("operator's own notes"))
+	if err := os.MkdirAll(safety.Dir("T1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(safety.Dir("T1"), safety.ProvenanceFile), []byte("{\"sha256\": torn\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantIn(t, f.say(t, context.Background(), map[string]any{"to": "#eng", "files": []any{"notes.txt"}}).Message,
+		"Needs operator approval", "from another conversation")
+}
+
+// slack-mcp quarantine clear strikes, from another process, releases the
+// hold even though the unrecorded block left no strike in the file.
+func TestSafetyStrikesClearReleasesTheHold(t *testing.T) {
+	f := newSafetyFake(t, strictHuman())
+	lock := filepath.Join(safety.Dir("T1"), safety.QuarantineFile+".lock")
+	if err := os.MkdirAll(lock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.say(t, context.Background(), map[string]any{"to": "#eng", "text": fakeToken()})
+	wantIn(t, f.say(t, context.Background(), map[string]any{"to": "#platform", "text": "clean"}).Message, "an earlier block could not be recorded")
+
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := f.workspace(t).Quarantine.Clear(safety.StrikesKey, safety.ByCLI, "", time.Now()); err != nil {
+		t.Fatalf("clear strikes: %v", err)
+	}
+	if !f.say(t, context.Background(), map[string]any{"to": "#platform", "text": "clean"}).Success {
+		t.Fatalf("clear strikes did not release the hold")
 	}
 }

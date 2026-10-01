@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 
 	"github.com/aaronsb/slack-mcp/pkg/exchange"
 	"github.com/aaronsb/slack-mcp/pkg/lifecycle"
@@ -131,8 +132,17 @@ func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*F
 			convs = append(convs, conv)
 		}
 	}
+	// The file is written under its final name before its record: ADR-012
+	// excludes no bare name from say files=, so a temporary name would be
+	// as reachable, and renaming into place would give up Create's
+	// no-overwrite guarantee. Until the record lands, an attachment of these
+	// bytes gets the scanner only, as any unrecorded file does.
 	if err := recordProvenance(apiProvider, created.Name, fileID, hex.EncodeToString(sum.Sum(nil)), convs); err != nil {
-		_ = dir.Remove(created.Name)
+		if rmErr := dir.Remove(created.Name); rmErr != nil {
+			log.Printf("download: unrecorded %s not removed: %v", created.Name, rmErr)
+			return fail(fmt.Sprintf("Downloaded as %s, but where it came from could not be recorded, and removing it failed too, so it is still in the exchange directory without a record.", created.Name),
+				"Tell the operator; do not attach this file. The outbound-safety state needs attention.")
+		}
 		return fail("Downloaded, but where the file came from could not be recorded, so it was deleted rather than kept unchecked. Nothing was saved.",
 			"Tell the operator; the outbound-safety state may need attention.")
 	}

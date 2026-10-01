@@ -53,6 +53,8 @@ type QuarantineStore struct {
 	convs        map[string]Key
 	strikes      int
 	lockRecorded bool
+	// strikesCleared is when the latest clear of strikes was written.
+	strikesCleared time.Time
 }
 
 func newQuarantineStore(path string, p Posture, self string) *QuarantineStore {
@@ -66,6 +68,7 @@ func (s *QuarantineStore) reset() {
 	s.convs = map[string]Key{}
 	s.strikes = 0
 	s.lockRecorded = false
+	s.strikesCleared = time.Time{}
 }
 
 func (s *QuarantineStore) apply(raw []byte) error {
@@ -100,6 +103,7 @@ func (s *QuarantineStore) apply(raw []byte) error {
 		case KeyStrikes:
 			s.strikes = 0
 			s.lockRecorded = false
+			s.strikesCleared = l.Time
 		case KeyPerson:
 			delete(s.people, l.Target.ID)
 		case KeyConversation:
@@ -132,6 +136,9 @@ type QuarantineState struct {
 	Err error
 	// Malformed lists the 1-based line numbers skipped as unparseable.
 	Malformed []int
+	// StrikesCleared is when the latest clear of strikes was written, or
+	// zero.
+	StrikesCleared time.Time
 
 	people       map[string]Key
 	convs        map[string]Key
@@ -148,14 +155,15 @@ func (s *QuarantineStore) State() QuarantineState {
 
 func (s *QuarantineStore) snapshot() QuarantineState {
 	st := QuarantineState{
-		Posture:      s.posture,
-		Strikes:      s.strikes,
-		Limit:        StrikeLimit(s.posture),
-		Err:          s.j.err,
-		Malformed:    s.j.malformedLines(),
-		people:       make(map[string]Key, len(s.people)),
-		convs:        make(map[string]Key, len(s.convs)),
-		lockRecorded: s.lockRecorded,
+		Posture:        s.posture,
+		Strikes:        s.strikes,
+		Limit:          StrikeLimit(s.posture),
+		Err:            s.j.err,
+		Malformed:      s.j.malformedLines(),
+		StrikesCleared: s.strikesCleared,
+		people:         make(map[string]Key, len(s.people)),
+		convs:          make(map[string]Key, len(s.convs)),
+		lockRecorded:   s.lockRecorded,
 	}
 	for id, k := range s.people {
 		st.people[id] = k
@@ -321,9 +329,11 @@ func decideBlock(p Posture, strike int, d Destination, self string) BlockOutcome
 }
 
 // Clear appends a clear of target: a person, a conversation, or
-// StrikesKey. It reports false, writing nothing, when the target is not in
-// force. by is ByCLI or ByApproval; pendingID names the lift request an
-// approval answered.
+// StrikesKey, and reports whether anything was in force. A person or
+// conversation not in force writes nothing. A clear of strikes is always
+// written: a server holding writes after a block it could not record
+// releases on seeing one. by is ByCLI or ByApproval; pendingID names the
+// lift request an approval answered.
 func (s *QuarantineStore) Clear(target Key, by, pendingID string, now time.Time) (bool, error) {
 	switch target.Kind {
 	case KeyPerson, KeyConversation:
@@ -350,7 +360,7 @@ func (s *QuarantineStore) Clear(target Key, by, pendingID string, now time.Time)
 		case KeyConversation:
 			_, cleared = s.convs[target.ID]
 		}
-		if !cleared {
+		if !cleared && target.Kind != KeyStrikes {
 			return nil
 		}
 		t := target

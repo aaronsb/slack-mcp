@@ -126,10 +126,10 @@ var strikesLift = safety.Destination{Kind: safety.DestChannel, Name: "every writ
 func lockRefusal(ws *safety.Workspace, tool string) *FeatureResult {
 	if held, _ := ws.UnrecordedHeld(time.Now()); held {
 		id := issueLift(ws, tool, strikesLift, []safety.Key{safety.StrikesKey})
-		ws.HoldUnrecorded(id)
+		ws.RetryUnrecordedLift(id)
 		return &FeatureResult{
 			Success:  false,
-			Message:  "BLOCKED: an earlier block could not be recorded, so every say and mark-read is refused until the operator clears it. Nothing was sent." + liftSentence(id),
+			Message:  "BLOCKED: an earlier block could not be recorded, so every say and mark-read is refused " + holdUntil(id) + " Nothing was sent.",
 			Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere.",
 		}
 	}
@@ -170,6 +170,16 @@ func issueLift(ws *safety.Workspace, tool string, d safety.Destination, keys []s
 		log.Printf("outbound-safety: PENDING %s case=lift %s lift=%s expires=%s", r.ID, tool, strings.Join(names, ","), r.Expires.UTC().Format("2006-01-02T15:04Z"))
 	}
 	return r.ID
+}
+
+// holdUntil says how the in-process hold after an unrecorded block ends:
+// the operator approves its lift request or clears the strikes, or the
+// server restarts.
+func holdUntil(id string) string {
+	if id == "" {
+		return "until the operator clears the strikes or the server restarts."
+	}
+	return fmt.Sprintf("until the operator approves pending %s or clears the strikes, or the server restarts.", id)
 }
 
 // liftSentence names a lift request for the agent.
@@ -573,12 +583,11 @@ func block(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, 
 	quarantine := "none"
 	if err != nil {
 		// The file does not hold this block's strike or quarantine, so the
-		// in-process hold makes the refusal below true until the operator
-		// approves the lift request issued with it, or the server restarts.
+		// in-process hold makes the refusal below true.
 		id := issueLift(ws, "say", strikesLift, []safety.Key{safety.StrikesKey})
-		ws.HoldUnrecorded(id)
+		ws.HoldUnrecorded(id, time.Now())
 		log.Printf("outbound-safety: BLOCKED say to=%s (%s) class=%s location=%s strike=unrecorded hold=engaged: %v", gd.d.Name, gd.d.ID(), finding.Class, location(finding.Field.Kind), err)
-		b.WriteString("The block could not be recorded, so every say and mark-read is refused until the operator clears it." + liftSentence(id) + "\n")
+		b.WriteString("The block could not be recorded, so every say and mark-read is refused " + holdUntil(id) + "\n")
 	} else {
 		switch {
 		case outcome.Quarantined:

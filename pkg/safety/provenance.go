@@ -82,9 +82,10 @@ func (s *ProvenanceStore) Record(p Provenance) error {
 }
 
 // Lookup returns the conversations a file with this hash was shared in,
-// sorted, and whether any download recorded it. A file that exists and
-// cannot be read is an error; the gate treats it as a move from an unknown
-// conversation.
+// sorted, and whether any download recorded it. It is an error when the
+// file exists and cannot be read, or when the hash has no record and a
+// line was skipped as malformed; the gate treats either as a move from an
+// unknown conversation.
 func (s *ProvenanceStore) Lookup(sha string) ([]string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,6 +95,10 @@ func (s *ProvenanceStore) Lookup(sha string) ([]string, bool, error) {
 	}
 	set, ok := s.byHash[sha]
 	if !ok {
+		if bad := s.j.malformedLines(); len(bad) > 0 {
+			// A skipped line may be this file's record.
+			return nil, false, fmt.Errorf("provenance has %d unreadable line(s); a record may be among them", len(bad))
+		}
 		return nil, false, nil
 	}
 	out := make([]string, 0, len(set))
