@@ -97,6 +97,8 @@ export SLACK_MCP_XOXD_TOKEN="xoxd-..."
 ./slack-mcp
 ```
 
+Settings come from the environment your MCP client config provides. A `.env` file in the working directory may set only `SLACK_MCP_PERSONALITY` and `SLACK_MCP_NO_BROWSER`, and never overrides a variable the environment already sets. If `.env` sets any other key the environment does not, the server refuses to start and names the key; set it in the client config instead.
+
 ## Lifecycle
 
 Over stdio the server exits cleanly when its client is gone: stdin closes, a termination signal arrives (`SIGTERM`, `SIGINT`, `SIGHUP`), or its parent process exits. Each exit flushes the caches and releases the ledger locks, so the next instance is not left read-only. On Windows, the npm wrapper's `child.kill` terminates the server forcibly, so this graceful shutdown does not run there.
