@@ -166,6 +166,11 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature, handle st
 		// Execute feature
 		result, err := feature.Handler(features.WithElicitation(ctx, s.elicitation(ctx, request)), params)
 		if err != nil {
+			if bannered[feature.Name] {
+				if banner := features.SafetyBanner(p); banner != "" {
+					return mcp.NewToolResultError(banner + "\n\n" + err.Error()), nil
+				}
+			}
 			return nil, err
 		}
 		if in := result.InputRequest; in != nil {

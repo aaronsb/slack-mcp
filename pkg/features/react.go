@@ -3,11 +3,16 @@ package features
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/slack-go/slack"
 )
+
+// emojiNamePattern is the shape of a Slack emoji name, with an optional
+// skin tone, checked before the reaction reaches the safety gate.
+var emojiNamePattern = regexp.MustCompile(`^[a-z0-9_+'-]+(::skin-tone-[2-6])?$`)
 
 // React adds or removes emoji reactions on messages
 var React = &Feature{
@@ -88,6 +93,12 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 
 	// Normalize emoji name - strip colons if provided
 	emojiName := strings.Trim(emoji, ":")
+	if !emojiNamePattern.MatchString(emojiName) {
+		return &FeatureResult{
+			Success: false,
+			Message: "emoji must be an emoji name: lowercase letters, digits, and _ + ' -, optionally ::skin-tone-2 to ::skin-tone-6 ('thumbsup'). Nothing was sent.",
+		}, nil
+	}
 
 	out := &outbound{Emoji: emojiName, Remove: remove, MessageTs: messageTs}
 	if refusal := preSend(ctx, apiProvider, dest, out); refusal != nil {

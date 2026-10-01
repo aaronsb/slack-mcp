@@ -49,8 +49,10 @@ func TestElicitationOnlyForModernRequestsThatDeclareIt(t *testing.T) {
 	}
 
 	s.ServeSSE("127.0.0.1:0")
-	if s.elicitation(modern(mcp.ProtocolVersion20260728, elicit), req).Offer {
-		t.Fatalf("an SSE session was offered elicitation")
+	// On SSE an answer carried on a retry is ignored too: no request state
+	// is honored there.
+	if got := s.elicitation(modern(mcp.ProtocolVersion20260728, elicit), req); got.Offer || got.Answered || got.State != "" {
+		t.Fatalf("an SSE session was offered elicitation or had its answer read: %+v", got)
 	}
 }
 

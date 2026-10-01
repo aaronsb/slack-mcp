@@ -57,6 +57,11 @@ func markAsReadHandler(ctx context.Context, params map[string]interface{}) (*Fea
 			Message: "Internal error: provider not available",
 		}, nil
 	}
+	// mark-read has no local checks to keep ahead of Slack calls, so it
+	// boots here, and the safety steps below know the workspace.
+	if _, err := apiProvider.Provide(); err != nil {
+		return &FeatureResult{Success: false, Message: fmt.Sprintf("Failed to connect to Slack: %v", err)}, nil
+	}
 
 	// Parse parameters
 	target := ""

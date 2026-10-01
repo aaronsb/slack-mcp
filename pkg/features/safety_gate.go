@@ -41,19 +41,13 @@ var (
 )
 
 // safetyFor returns the account's safety state under the posture read at
-// startup. The provider boots first if it has not, since auth.test names
-// the workspace. One Workspace per state directory and posture is kept, so
-// its readers resume from their offsets.
+// startup. It makes no Slack call: the organization is the one the startup
+// auth.test seeded, or boot's. One Workspace per state directory and
+// posture is kept, so its readers resume from their offsets.
 func safetyFor(ap *provider.ApiProvider) (*safety.Workspace, error) {
 	team, enterprise, self := ap.Organization()
 	if team == "" {
-		if _, err := ap.Provide(); err != nil {
-			return nil, err
-		}
-		team, enterprise, self = ap.Organization()
-	}
-	if team == "" {
-		return nil, errors.New("the workspace is not identified yet")
+		return nil, errNotIdentified
 	}
 	org := safety.Org{TeamID: team, EnterpriseID: enterprise, UserID: self}
 	posture := safety.Current().Posture
@@ -71,6 +65,10 @@ func safetyFor(ap *provider.ApiProvider) (*safety.Workspace, error) {
 	workspaces[key] = ws
 	return ws, nil
 }
+
+// errNotIdentified: the provider has not learned its workspace yet (an
+// account loaded by auth, still booting).
+var errNotIdentified = errors.New("the workspace is not identified yet")
 
 func requestSigner() (*safety.Signer, error) {
 	signerOnce.Do(func() { signer, signerErr = safety.NewSigner() })
@@ -101,14 +99,39 @@ func stateErrText(err error) string {
 }
 
 // strikeLock is preWriteLocal: every say and mark-read is refused while the
-// lock is engaged, and the refusal issues a lift request (gate case 3).
+// lock is engaged. It is local: when the workspace is not identified yet
+// (an account auth loaded, still booting) it defers, and the steps after
+// the handler's boot check the lock again (lockRefusal), still before any
+// content reaches Slack.
 func strikeLock(ctx context.Context, ap *provider.ApiProvider, tool string) *FeatureResult {
 	if ap == nil {
-		return nil
+		return &FeatureResult{Success: false, Message: "Internal error: provider not available. Nothing was sent."}
 	}
 	ws, err := safetyFor(ap)
+	if errors.Is(err, errNotIdentified) {
+		return nil
+	}
 	if err != nil {
 		return unavailable(tool, err)
+	}
+	return lockRefusal(ws, tool)
+}
+
+// strikesLift is what a lock refusal asks the operator to lift.
+var strikesLift = safety.Destination{Kind: safety.DestChannel, Name: "every write"}
+
+// lockRefusal refuses every say and mark-read while the strike lock is
+// engaged, the quarantine file cannot be read, or a block failed to record
+// in this process; the refusal issues a lift request (gate case 3).
+func lockRefusal(ws *safety.Workspace, tool string) *FeatureResult {
+	if held, _ := ws.UnrecordedHeld(time.Now()); held {
+		id := issueLift(ws, tool, strikesLift, []safety.Key{safety.StrikesKey})
+		ws.HoldUnrecorded(id)
+		return &FeatureResult{
+			Success:  false,
+			Message:  "BLOCKED: an earlier block could not be recorded, so every say and mark-read is refused until the operator clears it. Nothing was sent." + liftSentence(id),
+			Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere.",
+		}
 	}
 	qs := ws.Quarantine.State()
 	if !qs.LockEngaged() {
@@ -124,14 +147,14 @@ func strikeLock(ctx context.Context, ap *provider.ApiProvider, tool string) *Fea
 	msg := fmt.Sprintf("BLOCKED: the strike lock is engaged (%d of %d): every say and mark-read is refused until the operator clears it. Nothing was sent.", qs.Strikes, qs.Limit)
 	return &FeatureResult{
 		Success:  false,
-		Message:  msg + liftLine(ws, tool, safety.Destination{Kind: safety.DestChannel, Name: "every write"}, []safety.Key{safety.StrikesKey}),
+		Message:  msg + liftSentence(issueLift(ws, tool, strikesLift, []safety.Key{safety.StrikesKey})),
 		Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere.",
 	}
 }
 
-// liftLine issues a lift request (gate case 3) for keys and returns the
-// sentence that names it, or an empty string when none could be issued.
-func liftLine(ws *safety.Workspace, tool string, d safety.Destination, keys []safety.Key) string {
+// issueLift issues a lift request (gate case 3) for keys and returns its
+// ID, or "" when none could be issued.
+func issueLift(ws *safety.Workspace, tool string, d safety.Destination, keys []safety.Key) string {
 	r, created, err := ws.Pending.Create(safety.Request{
 		Cases: []safety.Case{safety.CaseLift}, Tool: tool, Destination: d, Lift: keys,
 	}, time.Now())
@@ -146,7 +169,15 @@ func liftLine(ws *safety.Workspace, tool string, d safety.Destination, keys []sa
 		}
 		log.Printf("outbound-safety: PENDING %s case=lift %s lift=%s expires=%s", r.ID, tool, strings.Join(names, ","), r.Expires.UTC().Format("2006-01-02T15:04Z"))
 	}
-	return fmt.Sprintf(" Lifting it needs operator approval: pending %s.", r.ID)
+	return r.ID
+}
+
+// liftSentence names a lift request for the agent.
+func liftSentence(id string) string {
+	if id == "" {
+		return ""
+	}
+	return fmt.Sprintf(" Lifting it needs operator approval: pending %s.", id)
 }
 
 func logKey(k safety.Key) string {
@@ -277,7 +308,7 @@ func quarantineStep(ctx context.Context, ap *provider.ApiProvider, ws *safety.Wo
 	return nil, &FeatureResult{
 		Success: false,
 		Message: fmt.Sprintf("BLOCKED: %s is quarantined: say and mark-read to it are refused until the operator clears it. Quarantined: %s. Nothing was sent.%s",
-			dest.Name, strings.Join(names, ", "), liftLine(ws, tool, gd.d, keys)),
+			dest.Name, strings.Join(names, ", "), liftSentence(issueLift(ws, tool, gd.d, keys))),
 		Guidance: "Tell the operator. Do not retry, rephrase, or route the content elsewhere. Reading the conversation still works.",
 	}
 }
@@ -290,6 +321,9 @@ func preMarkRead(ctx context.Context, ap *provider.ApiProvider, dest *resolvedDe
 	if err != nil {
 		return unavailable("mark-read", err)
 	}
+	if refusal := lockRefusal(ws, "mark-read"); refusal != nil {
+		return refusal
+	}
 	_, refusal := quarantineStep(ctx, ap, ws, dest, "mark-read")
 	return refusal
 }
@@ -299,8 +333,8 @@ func preMarkRead(ctx context.Context, ap *provider.ApiProvider, dest *resolvedDe
 // classification fails. With nothing quarantined nothing is looked up.
 func markReadFilter(ctx context.Context, ap *provider.ApiProvider) func(convID string) (skip bool, name string) {
 	ws, err := safetyFor(ap)
-	if err != nil {
-		return func(string) (bool, string) { return true, "a conversation" }
+	if err != nil || lockRefusal(ws, "mark-read") != nil {
+		return func(string) (bool, string) { return true, "a conversation (writes are refused)" }
 	}
 	qs := ws.Quarantine.State()
 	if len(qs.People) == 0 && len(qs.Conversations) == 0 {
@@ -328,6 +362,9 @@ func gateSend(ctx context.Context, ap *provider.ApiProvider, dest *resolvedDesti
 	ws, err := safetyFor(ap)
 	if err != nil {
 		return unavailable(tool, err)
+	}
+	if refusal := lockRefusal(ws, tool); refusal != nil {
+		return refusal
 	}
 	gd, refusal := quarantineStep(ctx, ap, ws, dest, tool)
 	if refusal != nil {
@@ -535,8 +572,13 @@ func block(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, 
 
 	quarantine := "none"
 	if err != nil {
-		log.Printf("outbound-safety: BLOCKED say to=%s (%s) class=%s location=%s strike=unrecorded: %v", gd.d.Name, gd.d.ID(), finding.Class, location(finding.Field.Kind), err)
-		b.WriteString("The block could not be recorded, so every say and mark-read is refused until the operator fixes the safety state.\n")
+		// The file does not hold this block's strike or quarantine, so the
+		// in-process hold makes the refusal below true until the operator
+		// approves the lift request issued with it, or the server restarts.
+		id := issueLift(ws, "say", strikesLift, []safety.Key{safety.StrikesKey})
+		ws.HoldUnrecorded(id)
+		log.Printf("outbound-safety: BLOCKED say to=%s (%s) class=%s location=%s strike=unrecorded hold=engaged: %v", gd.d.Name, gd.d.ID(), finding.Class, location(finding.Field.Kind), err)
+		b.WriteString("The block could not be recorded, so every say and mark-read is refused until the operator clears it." + liftSentence(id) + "\n")
 	} else {
 		switch {
 		case outcome.Quarantined:
@@ -776,11 +818,11 @@ func summary(gd *gateDest, out *outbound, from []string) string {
 	var what string
 	switch {
 	case out.Emoji != "":
-		what = "reaction :" + out.Emoji + ":"
+		what = "reaction :" + shown(out.Emoji) + ":"
 	case len(out.Files) > 0:
 		names := make([]string, len(out.Files))
 		for i, f := range out.Files {
-			names[i] = f.Name
+			names[i] = shown(f.Name)
 		}
 		what = "upload " + strings.Join(names, ", ")
 		if len(from) > 0 {
@@ -790,6 +832,39 @@ func summary(gd *gateDest, out *outbound, from []string) string {
 		what = "message"
 	}
 	return what + " to " + gd.d.Name
+}
+
+// shown is agent-supplied text as a summary may carry it: control, format,
+// and line-separator characters dropped, markdown and backticks
+// neutralized, at most 64 characters.
+func shown(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+			continue
+		}
+		if strings.ContainsRune("`*[]<>|\\", r) {
+			r = '-'
+		}
+		if n == 64 {
+			b.WriteString("…")
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
+}
+
+// reactionText is what a gated reaction's pending request holds for the
+// operator to read: the emoji, add or remove, and the message's timestamp.
+func reactionText(out *outbound) string {
+	verb := "add"
+	if out.Remove {
+		verb = "remove"
+	}
+	return fmt.Sprintf("reaction :%s: (%s) on the message at ts %s", out.Emoji, verb, out.MessageTs)
 }
 
 // gate is the approval gate (ADR-013): case 1 for an external destination,
@@ -857,6 +932,9 @@ func gate(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, g
 		Cases: untrusted, Tool: "say", Destination: gd.d, ContentHash: hash,
 		FileCount: len(out.Files), From: fromNames, Text: out.Text,
 	}
+	if out.Emoji != "" {
+		req.Text = reactionText(out)
+	}
 	for _, f := range out.Files {
 		req.FileNames = append(req.FileNames, f.Name)
 	}
@@ -899,6 +977,9 @@ func gate(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, g
 			return pending
 		}
 		choices := safety.ChoicesFor(ws.Posture)
+		if !trustable(gd, ext, untrusted) {
+			choices = []safety.Choice{safety.ChoiceApproveOnce, safety.ChoiceDeny}
+		}
 		token, err := s.Sign(r, choices, t)
 		if err != nil {
 			log.Printf("outbound-safety: request state not signed: %v", err)
@@ -911,6 +992,22 @@ func gate(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, g
 		}
 	}
 	return pending
+}
+
+// trustable reports whether a trust entry added for this call would apply:
+// a conversation trusted for case 1 applies only to the external parties
+// recorded with it, so one whose parties the gate could not list is never
+// offered approve and trust.
+func trustable(gd *gateDest, ext externality, cases []safety.Case) bool {
+	if gd.d.Kind == safety.DestPerson || gd.d.Kind == safety.DestDM {
+		return true
+	}
+	for _, c := range cases {
+		if c == safety.CaseExternal && !ext.known {
+			return false
+		}
+	}
+	return true
 }
 
 func caseReason(cases []safety.Case) string {
@@ -1024,19 +1121,29 @@ func elicitationFrom(ctx context.Context) Elicitation {
 
 // SafetyBanner is ADR-013's banner for the top of every inbox, messages,
 // estate, and batch result while safety state needs the operator, or "".
-// It reads the quarantine file once and never boots the provider.
+// It reads the quarantine file once and never boots the provider; before
+// the workspace is identified there is nothing to read.
 func SafetyBanner(ap *provider.ApiProvider) string {
 	if ap == nil {
 		return ""
 	}
-	if team, _, _ := ap.Organization(); team == "" {
-		return ""
-	}
 	ws, err := safetyFor(ap)
-	if err != nil {
+	if errors.Is(err, errNotIdentified) {
 		return ""
 	}
-	return bannerLines(ap, ws.Quarantine.State())
+	if err != nil {
+		log.Printf("outbound-safety: banner: state unavailable: %v", err)
+		return "> **Writes refused until the operator clears them.**\n> The outbound-safety state could not be opened: every `say` and `mark-read` is refused."
+	}
+	banner := bannerLines(ap, ws.Quarantine.State())
+	if held, _ := ws.UnrecordedHeld(time.Now()); held {
+		line := "> An earlier block could not be recorded: every `say` and `mark-read` is refused."
+		if banner == "" {
+			return "> **Writes refused until the operator clears them.**\n" + line
+		}
+		return banner + "\n" + line
+	}
+	return banner
 }
 
 func bannerLines(ap *provider.ApiProvider, qs safety.QuarantineState) string {
@@ -1082,13 +1189,14 @@ func bannerLines(ap *provider.ApiProvider, qs safety.QuarantineState) string {
 }
 
 // AccountName is the account's handle as the identity wording uses it
-// (ADR-014): control characters stripped, capped, and quoted; without one,
-// "this account's owner".
+// (ADR-014): only letters, digits, spaces, and '.', '-', and '_' kept, so
+// no control, format, or separator character and no markdown survives,
+// capped, and quoted; without one, "this account's owner".
 func AccountName(handle string) string {
 	var b strings.Builder
 	n := 0
 	for _, r := range handle {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '"' {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != ' ' && r != '.' && r != '-' && r != '_' {
 			continue
 		}
 		if n == 40 {
@@ -1166,9 +1274,10 @@ func sentPhrase(ap *provider.ApiProvider) string {
 	return "sent from your account"
 }
 
-// recordProvenance records a download for gate case 2. A failure is logged:
-// the file then has no record and gets the scanner only.
-func recordProvenance(ap *provider.ApiProvider, name, fileID, sha string, convs []string) {
+// recordProvenance records a download for gate case 2. The caller fails
+// the download on an error: a file with no record would skip the move
+// check.
+func recordProvenance(ap *provider.ApiProvider, name, fileID, sha string, convs []string) error {
 	ws, err := safetyFor(ap)
 	if err == nil {
 		err = ws.Provenance.Record(safety.Provenance{Time: time.Now(), SHA256: sha, Name: name, FileID: fileID, Conversations: convs})
@@ -1176,4 +1285,5 @@ func recordProvenance(ap *provider.ApiProvider, name, fileID, sha string, convs 
 	if err != nil {
 		log.Printf("outbound-safety: provenance for %s not recorded: %v", fileID, err)
 	}
+	return err
 }

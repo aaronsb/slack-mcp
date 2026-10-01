@@ -131,7 +131,11 @@ func downloadFileHandler(ctx context.Context, params map[string]interface{}) (*F
 			convs = append(convs, conv)
 		}
 	}
-	recordProvenance(apiProvider, created.Name, fileID, hex.EncodeToString(sum.Sum(nil)), convs)
+	if err := recordProvenance(apiProvider, created.Name, fileID, hex.EncodeToString(sum.Sum(nil)), convs); err != nil {
+		_ = dir.Remove(created.Name)
+		return fail("Downloaded, but where the file came from could not be recorded, so it was deleted rather than kept unchecked. Nothing was saved.",
+			"Tell the operator; the outbound-safety state may need attention.")
+	}
 
 	path := dir.DisplayPath(created.Name)
 	msg := fmt.Sprintf("Downloaded %s (%d bytes) into the exchange directory as %s", file.Name, n, created.Name)

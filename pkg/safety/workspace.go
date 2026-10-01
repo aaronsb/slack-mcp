@@ -32,6 +32,8 @@ type Workspace struct {
 	Trust      *TrustStore
 	Pending    *PendingStore
 	Provenance *ProvenanceStore
+
+	unrecorded unrecordedHold
 }
 
 // Dir is the workspace's directory: the estate ledger's, keyed by team ID

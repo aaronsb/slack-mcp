@@ -46,6 +46,12 @@ func (f *safetyFake) posted() []url.Values {
 // channels #eng (C1) and #platform (C2), and #partner (CX), shared with T9.
 func newSafetyFake(t *testing.T, s safety.Settings) *safetyFake {
 	t.Helper()
+	return newSafetyFakeWith(t, s, nil)
+}
+
+// newSafetyFakeWith lets before change the fake before the provider boots.
+func newSafetyFakeWith(t *testing.T, s safety.Settings, before func(*slacktest.Server)) *safetyFake {
+	t.Helper()
 	safety.SetCurrent(s)
 	t.Cleanup(func() { safety.SetCurrent(safety.DefaultSettings) })
 
@@ -55,6 +61,8 @@ func newSafetyFake(t *testing.T, s safety.Settings) *safetyFake {
 		slack.User{ID: "U2", Name: "schen", RealName: "Sarah Chen"},
 		slack.User{ID: "U3", Name: "partner", RealName: "Pat Partner", TeamID: "T9"},
 		slack.User{ID: "U4", Name: "nodm", RealName: "No DM Yet"},
+		slack.User{ID: "U5", Name: "grid", RealName: "Grid Sibling", TeamID: "T2", Enterprise: slack.EnterpriseUser{EnterpriseID: "E1"}},
+		slack.User{ID: "U6", Name: "outsider", RealName: "Other Team", TeamID: "T2"},
 	)
 	ch := func(id, name string) slack.Channel {
 		var c slack.Channel
@@ -69,7 +77,21 @@ func newSafetyFake(t *testing.T, s safety.Settings) *safetyFake {
 	shared := ch("CX", "partner")
 	shared.IsExtShared, shared.IsShared = true, true
 	shared.SharedTeamIDs = []string{"T1", "T9"}
-	srv.SeedChannels(ch("C1", "eng"), ch("C2", "platform"), shared, im("D2", "U2"), im("D3", "U3"))
+	// #lonely (CY) is flagged external but names no party to trust.
+	lonely := ch("CY", "lonely")
+	lonely.IsExtShared, lonely.IsShared = true, true
+	var mpim slack.Channel
+	mpim.ID, mpim.Name, mpim.IsMpIM, mpim.IsMember = "G8", "mpdm-partner--bockeliea-1", true, true
+	srv.SeedChannels(ch("C1", "eng"), ch("C2", "platform"), shared, lonely, mpim,
+		im("D2", "U2"), im("D3", "U3"), im("D5", "U5"), im("D6", "U6"))
+	srv.Handle("conversations.members", func(r *http.Request) any {
+		_ = r.ParseForm()
+		members := []string{"U1"}
+		if r.Form.Get("channel") == "G8" {
+			members = append(members, "U3")
+		}
+		return map[string]any{"ok": true, "members": members, "response_metadata": map[string]any{"next_cursor": ""}}
+	})
 
 	f := &safetyFake{srv: srv}
 	srv.Handle("chat.postMessage", func(r *http.Request) any {
@@ -79,6 +101,9 @@ func newSafetyFake(t *testing.T, s safety.Settings) *safetyFake {
 		f.mu.Unlock()
 		return map[string]any{"ok": true, "channel": r.PostForm.Get("channel"), "ts": "1786752114.508819"}
 	})
+	if before != nil {
+		before(srv)
+	}
 	f.ap = bootedProvider(t, srv)
 	srv.ResetCalls()
 	return f
@@ -338,7 +363,8 @@ func TestSafetyTrustedDestinationSkipsTheGate(t *testing.T) {
 func TestSafetyReactionRoutesThroughPreSend(t *testing.T) {
 	f := newSafetyFake(t, strictHuman())
 	ts := "1786752114.508819"
-	res := f.say(t, context.Background(), map[string]any{"to": "#eng", "emoji": fakeToken(), "messageTs": ts})
+	wantIn(t, f.say(t, context.Background(), map[string]any{"to": "#eng", "emoji": "Thumbs`up", "messageTs": ts}).Message, "emoji must be an emoji name")
+	res := f.say(t, context.Background(), map[string]any{"to": "#eng", "emoji": strings.ToLower(fakeToken()), "messageTs": ts})
 	wantIn(t, res.Message, "BLOCKED", "the reaction")
 	wantIn(t, f.say(t, context.Background(), map[string]any{"to": "#partner", "emoji": "tada", "messageTs": ts}).Message,
 		"Needs operator approval", "reaction :tada: to #partner")
@@ -438,7 +464,7 @@ func TestSafetyInstructionsCarryIdentityAndQuarantines(t *testing.T) {
 
 	safety.SetCurrent(safety.Settings{Identity: safety.Agent, Posture: safety.Soft})
 	wantIn(t, features.SayDescription(safety.Agent, features.AccountName("bot")), "This account is yours. Speak as yourself, for the people you're helping")
-	if got := features.AccountName("a\x1b[31mb\u202e"); got != `"a[31mb"` {
+	if got := features.AccountName("a\x1b[31m*b*\u202e\u2028`c`"); got != `"a31mbc"` {
 		t.Fatalf("AccountName = %q", got)
 	}
 }
