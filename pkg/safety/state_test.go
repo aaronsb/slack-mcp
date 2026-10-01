@@ -516,11 +516,11 @@ func TestPendingLiftApprovalClears(t *testing.T) {
 	now := time.Now()
 	block(t, w, channel("C1", "#a"))
 	block(t, w, dm("D1", "U1", "@dana"))
-	lift, _, err := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"), Lift: []Key{Conversation("C1", "#a")}}, now)
+	lift, _, err := w.IssueLift(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"), Lift: []Key{Conversation("C1", "#a")}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock, _, _ := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C5", "#e"), Lift: []Key{StrikesKey}}, now)
+	lock, _, _ := w.IssueLift(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C5", "#e"), Lift: []Key{StrikesKey}}, now)
 	if _, err := w.Approve(lift, now); err != nil {
 		t.Fatal(err)
 	}

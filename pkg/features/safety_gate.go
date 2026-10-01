@@ -156,7 +156,7 @@ func lockRefusal(ws *safety.Workspace, tool string) *FeatureResult {
 // issueLift issues a lift request (gate case 3) for keys and returns its
 // ID, or "" when none could be issued.
 func issueLift(ws *safety.Workspace, tool string, d safety.Destination, keys []safety.Key) string {
-	r, created, err := ws.Pending.Create(safety.Request{
+	r, created, err := ws.IssueLift(safety.Request{
 		Cases: []safety.Case{safety.CaseLift}, Tool: tool, Destination: d, Lift: keys,
 	}, time.Now())
 	if err != nil {

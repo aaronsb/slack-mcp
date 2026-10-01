@@ -23,8 +23,11 @@ const (
 	StatusPending  Status = "pending"
 	StatusApproved Status = "approved" // by the CLI, awaiting the next matching call
 	StatusDenied   Status = "denied"
-	StatusConsumed Status = "consumed" // one send let through, or a lift applied
-	StatusExpired  Status = "expired"
+	// StatusSuperseded: a lift reissued after its key was cleared and
+	// closed again (IssueLift).
+	StatusSuperseded Status = "superseded"
+	StatusConsumed   Status = "consumed" // one send let through, or a lift applied
+	StatusExpired    Status = "expired"
 )
 
 // Who answered a request.
@@ -53,6 +56,12 @@ type Request struct {
 	// Lift names what a case 3 request lifts: people, conversations, or
 	// StrikesKey.
 	Lift []Key `json:"lift,omitempty"`
+	// At is where the quarantine file stood when a lift was issued; a
+	// key cleared after it is not the request's to clear (IssueLift).
+	At *Place `json:"at,omitempty"`
+
+	// Skipped lists the lifted keys an approval left alone (Approve).
+	Skipped []Key `json:"-"`
 
 	Status     Status    `json:"-"`
 	Resolved   time.Time `json:"-"`
@@ -133,11 +142,12 @@ func sameKeys(a, b []Key) bool {
 
 // Pending-file kinds.
 const (
-	kindRequest = "request"
-	kindApprove = "approve"
-	kindDeny    = "deny"
-	kindConsume = "consume"
-	kindRetire  = "retire" // an expired request's ID, held so it is not issued again
+	kindRequest   = "request"
+	kindApprove   = "approve"
+	kindDeny      = "deny"
+	kindConsume   = "consume"
+	kindRetire    = "retire" // an expired request's ID, held so it is not issued again
+	kindSupersede = "supersede"
 )
 
 type pendingLine struct {
@@ -234,6 +244,10 @@ func (s *PendingStore) apply(raw []byte) error {
 		if open {
 			r.Status = StatusConsumed
 		}
+	case kindSupersede:
+		if open {
+			r.Status = StatusSuperseded
+		}
 	default:
 		return fmt.Errorf("unknown kind %q", l.Kind)
 	}
@@ -316,6 +330,12 @@ func (s *PendingStore) List(now time.Time) []Request {
 // operator already approved (the approval stays unused until
 // ConsumeApproved is called).
 func (s *PendingStore) Create(req Request, now time.Time) (Request, bool, error) {
+	return s.create(req, now, nil)
+}
+
+// create is Create with stale: a pending request for the same call that
+// stale reports is superseded instead of returned.
+func (s *PendingStore) create(req Request, now time.Time, stale func(Request) bool) (Request, bool, error) {
 	req.Cases = normCases(req.Cases)
 	if len(req.Cases) == 0 {
 		return Request{}, false, errors.New("request needs a gate case")
@@ -342,11 +362,22 @@ func (s *PendingStore) Create(req Request, now time.Time) (Request, bool, error)
 		}
 		for _, id := range s.order {
 			v := view(s.reqs[id], now)
-			if v.Status == StatusPending && v.sameCall(req) {
+			if v.Status != StatusPending || !v.sameCall(req) {
+				continue
+			}
+			if stale == nil || !stale(v) {
 				out = v
 				return nil
 			}
+			raw, err := json.Marshal(pendingLine{Time: now.UTC(), Kind: kindSupersede, ID: id})
+			if err != nil {
+				return err
+			}
+			if err := s.j.appendLine(raw); err != nil {
+				return err
+			}
 		}
+		s.refreshLocked()
 		id, err := s.newID()
 		if err != nil {
 			return err

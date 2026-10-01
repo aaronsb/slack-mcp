@@ -103,8 +103,9 @@ func OpenDir(dir string, org Org, p Posture) (*Workspace, error) {
 // same destination and content goes through once (ConsumeApproved). For
 // case 3 it appends a clear for each lifted key and lets nothing through,
 // except a key already cleared after the request was issued (by the page,
-// the CLI, or another approval): what was recorded since that clear is a
-// later block the request never asked about, so it stays.
+// the CLI, or another approval), or one the file no longer lets it compare
+// (Place): what was recorded since that clear is a later block the request
+// never asked about, so it stays. Those keys come back in Skipped.
 // The lookup, the clears, and the approval run under the pending file's
 // lock, so a concurrent deny or approve cannot interleave.
 //
@@ -115,7 +116,8 @@ func OpenDir(dir string, org Org, p Posture) (*Workspace, error) {
 // keys stay quarantined, with no request left to retry.
 func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
 	same := sameAs(shown)
-	return w.Pending.resolve(shown.ID, kindApprove, AnswerCLI, now, func(r Request) error {
+	var skipped []Key
+	out, err := w.Pending.resolve(shown.ID, kindApprove, AnswerCLI, now, func(r Request) error {
 		if err := same(r); err != nil {
 			return err
 		}
@@ -124,8 +126,13 @@ func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
 		}
 		if r.IsLift() {
 			st := w.Quarantine.State()
+			if st.Err != nil {
+				return fmt.Errorf("%w: %v", ErrUnreadable, st.Err)
+			}
+			stale := liftStale(st, r)
+			skipped = stale
 			for _, k := range r.Lift {
-				if st.ClearedSince(k, r.Created) {
+				if containsKey(stale, k) {
 					continue
 				}
 				if _, err := w.Quarantine.Clear(k, ByApproval, r.ID, now); err != nil {
@@ -135,4 +142,15 @@ func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
 		}
 		return nil
 	})
+	out.Skipped = skipped
+	return out, err
+}
+
+func containsKey(ks []Key, k Key) bool {
+	for _, x := range ks {
+		if x.Kind == k.Kind && x.ID == k.ID {
+			return true
+		}
+	}
+	return false
 }

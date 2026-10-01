@@ -87,15 +87,42 @@ func (c *safetyCLI) answer(id string, approve bool) int {
 		fmt.Fprintf(c.stdout, "Denied %s.\n", id)
 		return 0
 	}
-	if _, err := c.ws.Approve(r, now); err != nil {
+	got, err := c.ws.Approve(r, now)
+	if err != nil {
 		return c.fail("%v", err)
 	}
 	if r.IsLift() {
-		fmt.Fprintf(c.stdout, "Approved %s: lifted. Nothing was sent; the agent calls again.\n", id)
+		c.reportLift(got)
 	} else {
 		fmt.Fprintf(c.stdout, "Approved %s: the next matching call goes through once.\n", id)
 	}
 	return 0
+}
+
+// reportLift says what an approved lift lifted, and why each key it left
+// alone was skipped: cleared after the request was issued, so what holds
+// it now is a later block; or the safety state was edited since, so the
+// two cannot be ordered.
+func (c *safetyCLI) reportLift(r safety.Request) {
+	st := c.ws.Quarantine.State()
+	for _, k := range r.Skipped {
+		name := "the strikes"
+		if k.Kind != safety.KeyStrikes {
+			name = c.label(k, "block time")
+		}
+		if r.At != nil {
+			if _, ordered := st.ClearedSince(k, *r.At); ordered {
+				fmt.Fprintf(c.stdout, "%s was cleared after this request was issued; nothing lifted for it.\n", name)
+				continue
+			}
+		}
+		fmt.Fprintf(c.stdout, "%s: the safety state changed in a way this request cannot be checked against; nothing lifted for it. Clear it with: quarantine clear\n", name)
+	}
+	if len(r.Skipped) < len(r.Lift) {
+		fmt.Fprintf(c.stdout, "Approved %s: lifted. Nothing was sent; the agent calls again.\n", r.ID)
+	} else {
+		fmt.Fprintf(c.stdout, "Approved %s: nothing lifted. Nothing was sent.\n", r.ID)
+	}
 }
 
 // expirePending drops expired requests, and the content held for them,

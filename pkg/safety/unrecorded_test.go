@@ -22,7 +22,7 @@ func TestUnrecordedHoldLiftsOnlyByApprovedLift(t *testing.T) {
 		t.Fatalf("a hold with no lift request must stay")
 	}
 
-	r, _, err := ws.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Lift: []Key{StrikesKey}}, now)
+	r, _, err := ws.IssueLift(Request{Cases: []Case{CaseLift}, Tool: "say", Lift: []Key{StrikesKey}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestUnrecordedHoldLiftsOnlyByApprovedLift(t *testing.T) {
 		t.Fatalf("a denied lift released the hold")
 	}
 
-	r2, _, err := ws.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Lift: []Key{StrikesKey}}, now)
+	r2, _, err := ws.IssueLift(Request{Cases: []Case{CaseLift}, Tool: "say", Lift: []Key{StrikesKey}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

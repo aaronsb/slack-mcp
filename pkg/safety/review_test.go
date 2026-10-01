@@ -210,7 +210,7 @@ func TestApproveRefusesResolvedLiftWithoutClearing(t *testing.T) {
 	w := openTest(t, Strict)
 	now := time.Now()
 	block(t, w, channel("C1", "#a"))
-	lift, _, _ := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"), Lift: []Key{Conversation("C1", "#a")}}, now)
+	lift, _, _ := w.IssueLift(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"), Lift: []Key{Conversation("C1", "#a")}}, now)
 	w.Pending.Deny(lift, AnswerCLI, now)
 	if _, err := w.Approve(lift, now); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("approved a denied lift: %v", err)
@@ -254,7 +254,7 @@ func TestApproveRefusesLiftChangedSinceShown(t *testing.T) {
 	w := openTest(t, Strict)
 	now := time.Now()
 	block(t, w, channel("C1", "#a"))
-	lift, _, _ := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"), Lift: []Key{Conversation("C1", "#a")}}, now)
+	lift, _, _ := w.IssueLift(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"), Lift: []Key{Conversation("C1", "#a")}}, now)
 	stale := lift
 	stale.Lift = []Key{StrikesKey}
 	if _, err := w.Approve(stale, now); !errors.Is(err, ErrChanged) {
@@ -314,7 +314,7 @@ func TestLiftClearFailureLeavesRequestToRetry(t *testing.T) {
 	now := time.Now()
 	block(t, w, channel("C1", "#a"))
 	block(t, w, channel("C2", "#b"))
-	lift, _, _ := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"),
+	lift, _, _ := w.IssueLift(Request{Cases: []Case{CaseLift}, Tool: "say", Destination: channel("C1", "#a"),
 		Lift: []Key{Conversation("C1", "#a"), Conversation("C2", "#b")}}, now)
 
 	aside := qpath(w) + ".aside"
