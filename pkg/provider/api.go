@@ -39,6 +39,10 @@ type ApiProvider struct {
 	client         *slack.Client
 	internalClient *InternalClient
 
+	// baseURL is the WithBaseURL host, or empty for Slack itself. An
+	// upload URL on this exact host passes CheckUploadURL.
+	baseURL string
+
 	users      map[string]slack.User
 	usersMutex sync.RWMutex
 
@@ -197,6 +201,7 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 			return api
 		},
 		internalClient:      internal,
+		baseURL:             cfg.baseURL,
 		users:               make(map[string]slack.User),
 		channels:            make(map[string]slack.Channel),
 		channelNames:        make(map[string]string),
@@ -1185,4 +1190,30 @@ func (ap *ApiProvider) ResolveChannelNameCached(id string) string {
 		return ch.Name
 	}
 	return ""
+}
+
+// CheckUploadURL refuses an upload URL that would carry the session
+// credentials anywhere but Slack. slack-go's UploadToURL sends the bearer
+// token, and this provider's transport the d cookie, to whatever URL
+// files.getUploadURLExternal returned, without checking it. The URL must be
+// https on slack.com or a subdomain of it; a provider built WithBaseURL also
+// accepts its own host, scheme and port included, so a test fake can stand
+// in for Slack.
+func (ap *ApiProvider) CheckUploadURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid upload URL: %w", err)
+	}
+	if ap.baseURL != "" {
+		if b, berr := url.Parse(ap.baseURL); berr == nil && u.Scheme == b.Scheme && strings.EqualFold(u.Host, b.Host) {
+			return nil
+		}
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("upload URL must be https, got %q", u.Scheme)
+	}
+	if !IsSlackHost(u.Hostname()) {
+		return fmt.Errorf("refusing to upload to non-Slack host %q", u.Hostname())
+	}
+	return nil
 }

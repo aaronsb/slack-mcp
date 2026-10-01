@@ -208,7 +208,7 @@ func conversationOf(target string) string {
 
 var Say = &Feature{
 	Name:        "say",
-	Description: "Contribute content, Slack-visible: text posts a message (to a channel, DM, or thread — a thread reply can also go to the channel); emoji+messageTs adds or removes a reaction — a reaction is a small say. This is a write; everything it posts is attributed to your user.",
+	Description: "Contribute content, Slack-visible: text posts a message (to a channel, DM, or thread — a thread reply can also go to the channel); files attaches up to 10 files from the exchange directory to one message, with text as its comment; emoji+messageTs adds or removes a reaction — a reaction is a small say. This is a write; everything it posts is attributed to your user.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -218,7 +218,12 @@ var Say = &Feature{
 			},
 			"text": map[string]interface{}{
 				"type":        "string",
-				"description": "The message to post",
+				"description": "The message to post; with files, the comment the files are shared with",
+			},
+			"files": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Attach files, at most 10, as one message: bare names inside the exchange directory (the directory download saves into), not paths. Copy a file in first. Not with emoji or broadcast.",
 			},
 			"thread": map[string]interface{}{
 				"type":        "string",
@@ -255,6 +260,32 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 
 	broadcast, _ := params["broadcast"].(bool)
 	thread, _ := params["thread"].(string)
+
+	// files= is checked first and whole: every refusal here and in the
+	// upload path's local checks happens before any Slack call.
+	if raw, ok := params["files"]; ok && raw != nil {
+		refuse := func(msg string) (*FeatureResult, error) {
+			return &FeatureResult{Success: false, Message: msg, Guidance: "Nothing was sent, the text included."}, nil
+		}
+		if emoji != "" {
+			return refuse("files attaches to a message; it can't be combined with emoji (a reaction). Send the reaction in its own say.")
+		}
+		if broadcast {
+			return refuse("broadcast can't be combined with files: Slack's file share has no 'also send to the channel'. Share the files into the thread without broadcast, or broadcast a text reply on its own.")
+		}
+		names, err := parseFilesParam(raw)
+		if err != nil {
+			return refuse(err.Error())
+		}
+		echo := echoLine("say", "to='"+to+"'", params, "files", "thread")
+		res, err := sayFilesHandler(ctx, params, names)
+		if res != nil {
+			res.RenderAs = "say-files"
+			res.Echo = echo
+		}
+		return res, err
+	}
+
 	if broadcast {
 		if emoji != "" {
 			return &FeatureResult{
@@ -292,7 +323,7 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 	default:
 		return &FeatureResult{
 			Success: false,
-			Message: "say needs text='...' (a message) or emoji='...' messageTs='...' (a reaction)",
+			Message: "say needs text='...' (a message), files=['name'] (attachments from the exchange directory), or emoji='...' messageTs='...' (a reaction)",
 		}, nil
 	}
 }

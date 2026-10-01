@@ -305,7 +305,7 @@ func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.
 		return 0, fmt.Errorf("file URL must be https, got %q", u.Scheme)
 	}
 	host := u.Hostname()
-	if host != "files.slack.com" && host != "slack.com" && !isSlackSubdomain(host) {
+	if !IsSlackHost(host) {
 		return 0, fmt.Errorf("refusing to download from non-Slack host %q", host)
 	}
 
@@ -348,6 +348,17 @@ func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.
 		return n, fmt.Errorf("file exceeds %d byte limit", MaxDownloadBytes)
 	}
 	return n, nil
+}
+
+// MaxUploadBytes caps one file that say files= uploads, matching
+// MaxDownloadBytes.
+const MaxUploadBytes = 500 << 20
+
+// IsSlackHost reports whether host is slack.com or a subdomain of it, the
+// only hosts the session credentials are sent to.
+func IsSlackHost(host string) bool {
+	host = strings.ToLower(host)
+	return host == "slack.com" || isSlackSubdomain(host)
 }
 
 func isSlackSubdomain(host string) bool {
