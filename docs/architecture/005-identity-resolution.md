@@ -7,7 +7,9 @@ Proposed
 Amended: step 4 of the ladder now returns ranked candidates with evidence
 instead of a hint to search — a miss must cost the agent zero extra hops.
 Partially implemented: `ResolvePerson` runs the ladder behind `search from:`;
-rings, encounter recency, and the remaining person parameters are open.
+rings, encounter-recency ranking, email lookup, and the remaining person
+parameters are open. Candidates rank prefix-before-substring, then by handle;
+the attention ledger exists but is not wired into ranking.
 
 ## Context
 
@@ -113,8 +115,9 @@ Precedence, evaluated in order, entirely against cached state:
 1. **Exact handle** (`user.Name`) — resolve outright. Slack guarantees handle uniqueness, so
    this path never produces candidates.
 2. **Exact display name or real name**, unique in the workspace — resolve.
-3. **Prefix match** across handle, display name, and real name — return candidates ranked by
-   encounter recency.
+3. **Prefix match** across handle, display name, and real name — return candidates, prefix hits
+   before substring hits, then by handle. Ranking by encounter recency is intended and
+   unbuilt.
 4. **No match** — run the directory search inline and return the ranked
    near-matches with their evidence. A miss is a candidate set, never a
    pointer to another call: the extra reasoning hop was the failure being
@@ -156,8 +159,9 @@ conversation what was surfaced. Participants are the addition.
 ### Directory search matches three keys, one of them exact
 
 Display name and account name are substring matches producing a ranked result set. **Email is
-unique, so it resolves or it does not, and never produces candidates** — `GetUserByEmail` is
-one call and also reaches people absent from the cache entirely.
+unique, so it resolves or it does not, and never produces candidates** — a single
+by-email lookup would also reach people absent from the cache. No such lookup exists in the
+code yet.
 
 Email is an input key. Resolved output carries name and identifier; addresses are not rendered
 into message bodies or briefings.
