@@ -101,7 +101,11 @@ func OpenDir(dir string, org Org, p Posture) (*Workspace, error) {
 // when the request under its ID is no longer the one shown (Fingerprint).
 // For case 1 or 2 it marks the request approved, and the next call with the
 // same destination and content goes through once (ConsumeApproved). For
-// case 3 it appends a clear for each lifted key and lets nothing through.
+// case 3 it appends a clear for each lifted key and lets nothing through,
+// except a key already cleared after the request was issued (by the page,
+// the CLI, or another approval), or one the file no longer lets it compare
+// (Place): what was recorded since that clear is a later block the request
+// never asked about, so it stays. Those keys come back in Skipped.
 // The lookup, the clears, and the approval run under the pending file's
 // lock, so a concurrent deny or approve cannot interleave.
 //
@@ -110,9 +114,14 @@ func OpenDir(dir string, org Org, p Posture) (*Workspace, error) {
 // pending, and a retry completes the lift: a clear of a key no longer in
 // force writes nothing. The reverse order could mark a lift applied whose
 // keys stay quarantined, with no request left to retry.
+// approveGapHook runs in Approve before the lift's check-and-clear; tests
+// use it to land another process's write as late as one can land.
+var approveGapHook func()
+
 func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
 	same := sameAs(shown)
-	return w.Pending.resolve(shown.ID, kindApprove, AnswerCLI, now, func(r Request) error {
+	var skipped []Key
+	out, err := w.Pending.resolve(shown.ID, kindApprove, AnswerCLI, now, func(r Request) error {
 		if err := same(r); err != nil {
 			return err
 		}
@@ -120,12 +129,28 @@ func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
 			return fmt.Errorf("%w: %s", ErrNotPending, r.Status)
 		}
 		if r.IsLift() {
-			for _, k := range r.Lift {
-				if _, err := w.Quarantine.Clear(k, ByApproval, r.ID, now); err != nil {
-					return err
-				}
+			if approveGapHook != nil {
+				approveGapHook()
+			}
+			// The check and the clears run under the quarantine file's
+			// one lock (lock order: pending, then quarantine).
+			var err error
+			skipped, err = w.Quarantine.ClearLift(r.Lift, r.At, ByApproval, r.ID, now)
+			if err != nil {
+				return err
 			}
 		}
 		return nil
 	})
+	out.Skipped = skipped
+	return out, err
+}
+
+func containsKey(ks []Key, k Key) bool {
+	for _, x := range ks {
+		if x.Kind == k.Kind && x.ID == k.ID {
+			return true
+		}
+	}
+	return false
 }

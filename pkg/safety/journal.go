@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -49,13 +50,18 @@ type journal struct {
 	offset int64             // end of the last complete line consumed
 	prefix [sha256.Size]byte // SHA-256 of [0, offset)
 	lines  int               // complete lines consumed
+	// prefixes[n] is the hex SHA-256 of the bytes through line n, n=0 the
+	// empty file: what lets another process check a Place.
+	prefixes []string
 
 	malformed []int // 1-based line numbers of lines that did not parse
 	err       error // the file exists and cannot be read
 }
 
 func newJournal(path string) *journal {
-	return &journal{path: path, lockPath: path + ".lock"}
+	j := &journal{path: path, lockPath: path + ".lock"}
+	j.clearCursor()
+	return j
 }
 
 func (j *journal) clearCursor() {
@@ -63,6 +69,7 @@ func (j *journal) clearCursor() {
 	j.size, j.offset, j.lines = 0, 0, 0
 	j.mtime = time.Time{}
 	j.prefix = sha256.Sum256(nil)
+	j.prefixes = []string{hex.EncodeToString(j.prefix[:])}
 	j.malformed = nil
 	j.err = nil
 }
@@ -145,6 +152,7 @@ func (j *journal) refresh(reset func(), apply func([]byte) error) {
 		h.Write(data[consumed:end])
 		consumed = end
 		j.lines++
+		j.prefixes = append(j.prefixes, hex.EncodeToString(h.Sum(nil)))
 		if len(line) == 0 {
 			continue
 		}
@@ -158,6 +166,11 @@ func (j *journal) refresh(reset func(), apply func([]byte) error) {
 	j.fi = fi
 	j.mtime = fi.ModTime()
 	j.err = nil
+}
+
+// place is where the last read ended.
+func (j *journal) place() Place {
+	return Place{Line: j.lines, Prefix: j.prefixes[j.lines]}
 }
 
 func (j *journal) unreadable(reset func(), err error) {

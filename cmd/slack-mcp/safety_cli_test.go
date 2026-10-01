@@ -217,6 +217,56 @@ func TestSafetyCLIApproveAndDeny(t *testing.T) {
 	}
 }
 
+// Approving a lift whose key was cleared after it was issued (here on the
+// page) and closed again lifts nothing for that key, and the CLI says so
+// instead of "lifted".
+func TestSafetyCLIApproveStaleLiftSaysNothingLifted(t *testing.T) {
+	h := newHarness(t)
+	w := h.workspace(safety.Soft)
+	general := safety.Destination{Kind: safety.DestChannel, ConversationID: "C2", Name: "#general"}
+	blockOn(t, w, general)
+	blockOn(t, w, general) // soft quarantines from the second block
+	now := time.Now()
+	r, _, err := w.IssueLift(safety.Request{Cases: []safety.Case{safety.CaseLift}, Tool: "say",
+		Destination: general, Lift: []safety.Key{safety.Conversation("C2", "#general")}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Quarantine.Clear(safety.Conversation("C2", "#general"), safety.ByWeb, "", now); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run(r.ID+"\n", "approve", r.ID); code != 0 {
+		t.Fatalf("approve: %s", h.err.String())
+	}
+	out := h.out.String()
+	if !strings.Contains(out, "#general") || !strings.Contains(out, "was cleared after this request was issued; nothing lifted for it") || strings.Contains(out, ": lifted.") {
+		t.Fatalf("output: %s", out)
+	}
+}
+
+// A strikes lift is also how a server holding writes after an unrecorded
+// block is released, and approving it releases that hold even when no
+// recorded strike was lifted; the output must not say nothing happened.
+func TestSafetyCLIApproveSkippedStrikesLiftNamesTheHold(t *testing.T) {
+	h := newHarness(t)
+	w := h.workspace(safety.Strict)
+	now := time.Now()
+	blockOn(t, w, safety.Destination{Kind: safety.DestChannel, ConversationID: "C2", Name: "#general"})
+	r, _, err := w.IssueLift(safety.Request{Cases: []safety.Case{safety.CaseLift}, Tool: "say", Lift: []safety.Key{safety.StrikesKey}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Quarantine.Clear(safety.StrikesKey, safety.ByWeb, "", now); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run(r.ID+"\n", "approve", r.ID); code != 0 {
+		t.Fatalf("approve: %s", h.err.String())
+	}
+	if out := h.out.String(); !strings.Contains(out, "releases that hold") {
+		t.Fatalf("output: %s", out)
+	}
+}
+
 func TestSafetyCLITrustAddRemoveList(t *testing.T) {
 	h := newHarness(t)
 	w := h.workspace(safety.Strict)

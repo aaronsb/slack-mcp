@@ -1,12 +1,12 @@
 package setup
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
+
 	"net"
 	"net/http"
 	"os"
@@ -53,9 +53,8 @@ type setupResult struct {
 // CallbackServer is a non-blocking localhost HTTP server that receives tokens
 // from browser snippets, Firefox extensions, or the manual setup page.
 type CallbackServer struct {
-	server   *http.Server
-	listener net.Listener
-	port     int
+	local *LocalServer
+	port  int
 
 	mu        sync.Mutex
 	result    *TokenResult
@@ -68,9 +67,8 @@ type CallbackServer struct {
 // Call Start() to begin serving.
 func NewCallbackServer(listener net.Listener, port int) *CallbackServer {
 	cs := &CallbackServer{
-		listener: listener,
-		port:     port,
-		done:     make(chan struct{}),
+		port: port,
+		done: make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
@@ -101,7 +99,7 @@ func NewCallbackServer(listener net.Listener, port int) *CallbackServer {
 		}
 	})
 
-	cs.server = &http.Server{Handler: mux}
+	cs.local = NewLocalServer(listener, port, mux)
 	return cs
 }
 
@@ -205,13 +203,7 @@ func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request)
 }
 
 // Start begins serving in the background. Non-blocking.
-func (cs *CallbackServer) Start() {
-	go func() {
-		if err := cs.server.Serve(cs.listener); err != nil && err != http.ErrServerClosed {
-			log.Printf("Callback server error: %v", err)
-		}
-	}()
-}
+func (cs *CallbackServer) Start() { cs.local.Start() }
 
 // Port returns the port the server is listening on
 func (cs *CallbackServer) Port() int {
@@ -231,11 +223,7 @@ func (cs *CallbackServer) Done() <-chan struct{} {
 }
 
 // Stop shuts down the callback server
-func (cs *CallbackServer) Stop() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cs.server.Shutdown(ctx)
-}
+func (cs *CallbackServer) Stop() { cs.local.Stop() }
 
 // RunSetup starts the local HTTP server for token extraction (CLI entry point)
 func RunSetup() error {
@@ -255,7 +243,9 @@ func RunSetup() error {
 		fmt.Printf("  Opening browser to %s\n", url)
 		fmt.Printf("  Follow the instructions there to connect your Slack workspace.\n\n")
 		fmt.Printf("  Waiting for tokens... (Ctrl+C to cancel)\n\n")
-		OpenBrowserURL(url)
+		if err := OpenBrowserURL(url); err != nil {
+			fmt.Printf("  %v. Please open this URL manually: %s\n\n", err, url)
+		}
 	}()
 
 	team, user, err := RunSetupServer(listener, port)
@@ -369,25 +359,49 @@ func AuthTest(xoxc, xoxd string) (Account, error) {
 // pile of tabs behind, and on a headless CI runner it is a pointless subprocess.
 const NoBrowserEnv = "SLACK_MCP_NO_BROWSER"
 
-// OpenBrowserURL opens the default browser to the given URL, unless
-// SLACK_MCP_NO_BROWSER is set.
-func OpenBrowserURL(url string) {
-	if os.Getenv(NoBrowserEnv) != "" {
-		log.Printf("Browser launch suppressed by %s. Open this URL manually: %s", NoBrowserEnv, url)
-		return
-	}
+// ErrNoBrowser is OpenBrowserURL's error when SLACK_MCP_NO_BROWSER is set.
+var ErrNoBrowser = errors.New("browser launch suppressed by " + NoBrowserEnv)
 
-	var cmd *exec.Cmd
+// browserCommand is the platform's launcher for url; tests replace it.
+var browserCommand = func(url string) *exec.Cmd {
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", url)
+		return exec.Command("open", url)
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
+		return exec.Command("cmd", "/c", "start", url)
 	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	if err := cmd.Start(); err != nil {
-		log.Printf("Could not open browser: %v", err)
-		fmt.Printf("  Please open this URL manually: %s\n", url)
+		return exec.Command("xdg-open", url)
 	}
 }
+
+// OpenBrowserURL opens the default browser to the given URL. It writes
+// nothing itself: on stdio the server's stdout is the JSON-RPC stream, so
+// the caller decides where a failure goes.
+func OpenBrowserURL(url string) error {
+	if os.Getenv(NoBrowserEnv) != "" {
+		return ErrNoBrowser
+	}
+
+	cmd := browserCommand(url)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("could not open a browser: %w", err)
+	}
+	// The launchers (xdg-open, open, cmd /c start) exit as soon as they
+	// have handed the URL on, and xdg-open with no handler exits non-zero
+	// after starting fine. Wait that long for the verdict; a launcher still
+	// running then has become the browser, which counts as opened.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("could not open a browser: %w", err)
+		}
+	case <-time.After(launcherWait):
+	}
+	return nil
+}
+
+// launcherWait bounds how long OpenBrowserURL waits for the launcher's
+// exit status.
+const launcherWait = 2 * time.Second

@@ -85,9 +85,9 @@ func NewSemanticMCPServer(provider *provider.ApiProvider, opts ...Option) *Seman
 	registry := features.NewRegistry()
 
 	// The v2 surface (ADR-009): three read-only nouns carrying the depth,
-	// five verbs whose names state their blast radius, and batch — ADR-010's
+	// six verbs whose names state their blast radius, and batch — ADR-010's
 	// executor over the nouns. The v1 features stay exported for the nouns
-	// to delegate to; only these nine are advertised.
+	// to delegate to; only these ten are advertised.
 	registry.Register(features.Inbox)
 	registry.Register(features.Messages)
 	registry.Register(features.EstateViews)
@@ -97,6 +97,7 @@ func NewSemanticMCPServer(provider *provider.ApiProvider, opts ...Option) *Seman
 	registry.Register(features.MarkAsRead)
 	registry.Register(features.Auth)
 	registry.Register(features.Download)
+	registry.Register(features.Unlock)
 
 	semanticServer := &SemanticMCPServer{
 		server:   s,
@@ -170,7 +171,7 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature, handle st
 		params["_provider"] = p
 
 		// Execute feature
-		result, err := feature.Handler(features.WithElicitation(ctx, s.elicitation(ctx, request)), params)
+		result, err := feature.Handler(s.callContext(ctx, request), params)
 		if err != nil {
 			if bannered[feature.Name] {
 				if banner := features.SafetyBanner(p); banner != "" {
@@ -198,6 +199,14 @@ func (s *SemanticMCPServer) registerFeature(feature *features.Feature, handle st
 
 	// Register the tool
 	s.server.AddTool(mcp.NewTool(feature.Name, toolOptions...), handler)
+}
+
+// callContext is what a tool handler runs under: whether this call came
+// over SSE, whose host need not be the operator's, and its elicitation
+// facts.
+func (s *SemanticMCPServer) callContext(ctx context.Context, request mcp.CallToolRequest) context.Context {
+	ctx = features.WithSSE(ctx, s.sse.Load())
+	return features.WithElicitation(ctx, s.elicitation(ctx, request))
 }
 
 // elicitation reports whether the current request's client can be asked

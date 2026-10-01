@@ -130,8 +130,8 @@ server restarts.
 - ADR-013's notice reads: "I can't share that."
 
 In both, `@me` and self mean the account. The operator, who runs the
-CLI, approves requests, and clears quarantines, is the person at the
-terminal. Identity changes no read behavior (reads stay stealth) and
+CLI, approves requests, and clears quarantines (at the terminal or on
+ADR-013's local page), is the person at the keyboard. Identity changes no read behavior (reads stay stealth) and
 not who approves.
 
 ### Safety posture: how hard a block escalates
@@ -149,7 +149,7 @@ gets a notice.
 | 3rd block | (already locked) | that destination quarantined, notice posted; then the strike lock |
 | Gated: external destination | yes | yes |
 | Gated: cross-conversation file move | yes | no; a warning in the result |
-| Gated: lifting a quarantine or the lock | yes | yes |
+| Gated: lifting a quarantine or the lock | yes; the CLI's `clear` and ADR-013's local page lift directly, without a request | yes; likewise |
 | Trusted destinations added by | `slack-mcp trust add` only; elicitation approves once, and entries added by elicitation are ignored | `slack-mcp trust add`, or approve and trust at an elicitation |
 
 Every block counts a strike in both postures. A soft first block is
@@ -160,15 +160,17 @@ the strike count, taken from block entries, includes it.
 an attended assistant on the operator's own account.
 
 The strike lock persists across a posture change. A block that engages
-the lock records that it did, and the lock holds until
-`slack-mcp quarantine clear strikes` (which also releases ADR-013's
-in-memory hold after an unrecorded block), whatever the posture is when the
-server next reads the file. Two `strict` strikes stay locked under
-`soft`, whose limit is three. Otherwise editing one setting in the
-client config and restarting would lift the lock, an ungated lift that
-ADR-013 reserves for the operator at the CLI. The strike count itself is
-read under the current posture, so a count that reaches the new limit
-engages the lock too.
+the lock records that it did, and the lock holds until the operator
+clears it: `slack-mcp quarantine clear strikes` (which also releases
+ADR-013's in-memory hold after an unrecorded block), the strike row on
+ADR-013's local page, or approving a pending strike lift. That holds
+whatever the posture is when the server next reads the file. Two
+`strict` strikes stay locked under `soft`, whose limit is three.
+Otherwise editing one setting in the client config and restarting would
+lift the lock, an ungated lift that ADR-013 reserves for the operator at
+the CLI or the local page. The strike count itself is read under the
+current posture, so a count that reaches the new limit engages the lock
+too.
 
 ## Consequences
 

@@ -19,7 +19,22 @@ const (
 const (
 	ByCLI      = "cli"
 	ByApproval = "approval"
+	// ByWeb is the local clearing page (ADR-013, #132).
+	ByWeb = "web"
 )
+
+// Reason is what the quarantine file keeps about a block: when, where it
+// was going, and the scanner's class and field. The matched value is
+// never recorded, so it is never here.
+type Reason struct {
+	Time        time.Time
+	Destination string
+	Class       string
+	// Location: text, reaction, upload-title, file-name, or file-bytes;
+	// File is the 1-based position of the file for file locations.
+	Location string
+	File     int
+}
 
 // quarantineLine is one line of the quarantine file.
 type quarantineLine struct {
@@ -53,6 +68,14 @@ type QuarantineStore struct {
 	convs        map[string]Key
 	strikes      int
 	lockRecorded bool
+	// reasons holds the latest block's reason per key in force (by
+	// reasonKey); strikeReasons the reasons of the blocks counted since
+	// the last clear of strikes, oldest first.
+	reasons       map[string]Reason
+	strikeReasons []Reason
+	// clearedLine is the line of the latest clear of each key (by
+	// reasonKey), strikes included.
+	clearedLine map[string]int
 	// epoch counts rebuilds of a fold that had read a line (a replaced,
 	// shrunk, or edited file read again from offset 0); a line number means
 	// something only within one epoch. A fold that had read nothing (no
@@ -75,6 +98,9 @@ func (s *QuarantineStore) reset() {
 	s.convs = map[string]Key{}
 	s.strikes = 0
 	s.lockRecorded = false
+	s.reasons = map[string]Reason{}
+	s.strikeReasons = nil
+	s.clearedLine = map[string]int{}
 	if s.readLine {
 		s.epoch++
 	}
@@ -97,6 +123,11 @@ func (s *QuarantineStore) apply(raw []byte) error {
 		if l.Lock {
 			s.lockRecorded = true
 		}
+		r := Reason{Time: l.Time, Destination: l.Destination.Name}
+		if l.Match != nil {
+			r.Class, r.Location, r.File = l.Match.Class, l.Match.Location, l.Match.File
+		}
+		s.strikeReasons = append(s.strikeReasons, r)
 		if l.Quarantined != nil && *l.Quarantined {
 			for _, k := range l.Keys {
 				switch k.Kind {
@@ -104,22 +135,29 @@ func (s *QuarantineStore) apply(raw []byte) error {
 					s.people[k.ID] = k
 				case KeyConversation:
 					s.convs[k.ID] = k
+				default:
+					continue
 				}
+				s.reasons[reasonKey(k)] = r
 			}
 		}
 	case kindClear:
 		if l.Target == nil {
 			return errors.New("clear without target")
 		}
+		s.clearedLine[reasonKey(*l.Target)] = s.j.lines
 		switch l.Target.Kind {
 		case KeyStrikes:
 			s.strikes = 0
 			s.lockRecorded = false
+			s.strikeReasons = nil
 			s.strikesClearLine = s.j.lines
 		case KeyPerson:
 			delete(s.people, l.Target.ID)
+			delete(s.reasons, reasonKey(*l.Target))
 		case KeyConversation:
 			delete(s.convs, l.Target.ID)
+			delete(s.reasons, reasonKey(*l.Target))
 		default:
 			return fmt.Errorf("clear of unknown kind %q", l.Target.Kind)
 		}
@@ -128,6 +166,8 @@ func (s *QuarantineStore) apply(raw []byte) error {
 	}
 	return nil
 }
+
+func reasonKey(k Key) string { return string(k.Kind) + "\x00" + k.ID }
 
 func (s *QuarantineStore) refreshLocked() {
 	s.j.refresh(s.reset, s.apply)
@@ -152,7 +192,13 @@ type QuarantineState struct {
 	// the latest clear of strikes in the same epoch, or 0.
 	Position         Position
 	StrikesClearLine int
+	// StrikeReasons are the blocks counted in Strikes, oldest first.
+	StrikeReasons []Reason
 
+	reasons      map[string]Reason
+	clearedLine  map[string]int
+	place        Place
+	prefixes     []string
 	people       map[string]Key
 	convs        map[string]Key
 	lockRecorded bool
@@ -190,9 +236,20 @@ func (s *QuarantineStore) snapshot() QuarantineState {
 		Malformed:        s.j.malformedLines(),
 		Position:         Position{Epoch: s.epoch, Line: s.j.lines},
 		StrikesClearLine: s.strikesClearLine,
+		StrikeReasons:    append([]Reason(nil), s.strikeReasons...),
+		reasons:          make(map[string]Reason, len(s.reasons)),
+		clearedLine:      make(map[string]int, len(s.clearedLine)),
+		place:            s.j.place(),
+		prefixes:         append([]string(nil), s.j.prefixes...),
 		people:           make(map[string]Key, len(s.people)),
 		convs:            make(map[string]Key, len(s.convs)),
 		lockRecorded:     s.lockRecorded,
+	}
+	for rk, r := range s.reasons {
+		st.reasons[rk] = r
+	}
+	for rk, n := range s.clearedLine {
+		st.clearedLine[rk] = n
 	}
 	for id, k := range s.people {
 		st.people[id] = k
@@ -222,6 +279,13 @@ func sortKeys(ks []Key) {
 // be read.
 func (q QuarantineState) LockEngaged() bool {
 	return q.Err != nil || q.lockRecorded || q.Strikes >= q.Limit
+}
+
+// ReasonFor returns the latest block's reason for a person or conversation
+// in force.
+func (q QuarantineState) ReasonFor(k Key) (Reason, bool) {
+	r, ok := q.reasons[reasonKey(k)]
+	return r, ok
 }
 
 // StrikeCount returns the strikes since the last clear of strikes.
@@ -361,49 +425,99 @@ func decideBlock(p Posture, strike int, d Destination, self string) BlockOutcome
 // StrikesKey, and reports whether anything was in force. A person or
 // conversation not in force writes nothing. A clear of strikes is always
 // written: a server holding writes after a block it could not record
-// releases on seeing one. by is ByCLI or ByApproval; pendingID names the
+// releases on seeing one. by is ByCLI, ByWeb, or ByApproval; pendingID names the
 // lift request an approval answered.
 func (s *QuarantineStore) Clear(target Key, by, pendingID string, now time.Time) (bool, error) {
-	switch target.Kind {
-	case KeyPerson, KeyConversation:
-		if target.ID == "" {
-			return false, errors.New("clear needs an ID")
-		}
-	case KeyStrikes:
-	default:
-		return false, fmt.Errorf("cannot clear a %q", target.Kind)
+	if err := checkClearable(target); err != nil {
+		return false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cleared := false
+	var cleared bool
 	err := s.j.withLock(func() error {
 		s.refreshLocked()
 		if s.j.err != nil {
 			return fmt.Errorf("%w: %v", ErrUnreadable, s.j.err)
 		}
-		switch target.Kind {
-		case KeyStrikes:
-			cleared = s.strikes > 0 || s.lockRecorded
-		case KeyPerson:
-			_, cleared = s.people[target.ID]
-		case KeyConversation:
-			_, cleared = s.convs[target.ID]
-		}
-		if !cleared && target.Kind != KeyStrikes {
-			return nil
-		}
-		t := target
-		raw, err := json.Marshal(quarantineLine{Time: now.UTC(), Kind: kindClear, Target: &t, By: by, PendingID: pendingID})
-		if err != nil {
-			return err
-		}
-		if err := s.j.appendLine(raw); err != nil {
-			return err
-		}
-		s.refreshLocked()
-		return nil
+		var err error
+		cleared, err = s.clearLocked(target, by, pendingID, now)
+		return err
 	})
 	return cleared, err
+}
+
+// ClearKeysAt clears targets as Clear does, all under one hold of the
+// lock, and only when the file still stands at at: a block or clear
+// appended since (moved) means the operator answered a page that no longer
+// shows the state, and nothing is applied. cleared is per target applied,
+// in order: on an error it covers the targets written before the one that
+// failed, which stay written.
+func (s *QuarantineStore) ClearKeysAt(targets []Key, by string, at Place, now time.Time) (moved bool, cleared []bool, err error) {
+	for _, k := range targets {
+		if err := checkClearable(k); err != nil {
+			return false, nil, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err = s.j.withLock(func() error {
+		s.refreshLocked()
+		if s.j.err != nil {
+			return fmt.Errorf("%w: %v", ErrUnreadable, s.j.err)
+		}
+		if s.j.place() != at {
+			moved = true
+			return nil
+		}
+		for _, k := range targets {
+			ok, err := s.clearLocked(k, by, "", now)
+			if err != nil {
+				return err
+			}
+			cleared = append(cleared, ok)
+		}
+		return nil
+	})
+	return moved, cleared, err
+}
+
+func checkClearable(target Key) error {
+	switch target.Kind {
+	case KeyPerson, KeyConversation:
+		if target.ID == "" {
+			return errors.New("clear needs an ID")
+		}
+	case KeyStrikes:
+	default:
+		return fmt.Errorf("cannot clear a %q", target.Kind)
+	}
+	return nil
+}
+
+// clearLocked appends the clear; the caller holds the lock on a fresh fold.
+func (s *QuarantineStore) clearLocked(target Key, by, pendingID string, now time.Time) (bool, error) {
+	var cleared bool
+	switch target.Kind {
+	case KeyStrikes:
+		cleared = s.strikes > 0 || s.lockRecorded
+	case KeyPerson:
+		_, cleared = s.people[target.ID]
+	case KeyConversation:
+		_, cleared = s.convs[target.ID]
+	}
+	if !cleared && target.Kind != KeyStrikes {
+		return false, nil
+	}
+	t := target
+	raw, err := json.Marshal(quarantineLine{Time: now.UTC(), Kind: kindClear, Target: &t, By: by, PendingID: pendingID})
+	if err != nil {
+		return false, err
+	}
+	if err := s.j.appendLine(raw); err != nil {
+		return false, err
+	}
+	s.refreshLocked()
+	return cleared, nil
 }
 
 // isSelfDM reports a DM whose only member is the account itself.
