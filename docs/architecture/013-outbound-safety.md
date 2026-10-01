@@ -581,9 +581,11 @@ tool result carries the page's link. Elicitation still never lifts.
 Unattended deployments should deny the agent the tool. An agent that
 runs as the operator's user with a shell can defeat every file-based
 control, and that deployment is accepted, not designed against. A lift
-request approved after its key was cleared another way no longer wipes
-what was recorded since. Under Context, Clearing, The strike lock, and
-Risks and limits.
+request records the place in the quarantine file where it was issued; a
+pending lift whose key was cleared after that place is superseded rather
+than handed back, and an approval skips such a key and says so. Under
+Context, Clearing, The strike lock, and Risks and
+limits.
 
 ### What the operator and the agent see
 
@@ -649,8 +651,10 @@ clearable:
   and opens the operator's browser at a link that carries a random
   token for this instance. The link goes to the browser only: no tool
   result carries it. When no browser can be opened (the launch fails,
-  or `SLACK_MCP_NO_BROWSER` is set), the tool stops the page and refuses,
-  pointing at the CLI. The page lists each quarantined person and
+  the launcher exits non-zero within two seconds, or
+  `SLACK_MCP_NO_BROWSER` is set), the tool stops the page and refuses,
+  pointing at the CLI; its success result also names the CLI for when
+  no page appeared. The page lists each quarantined person and
   conversation and the strike count or lock. Each row names the key, by
   current name where the cache has one, and its failure type: the
   scanner class, the field it matched in, the destination's recorded
@@ -667,7 +671,9 @@ clearable:
   each checked row, marked `by=web`; **Done** closes the page without
   clearing. A Clear answering a page whose locks have changed since it
   was loaded (a later block, another clear) applies nothing and shows
-  the current state to answer again. Clear or Done stops that server
+  the current state to answer again. The check and the clears run under
+  the quarantine file's lock against the place the page was read at, so
+  a block landing between them also leaves everything as it was. Clear or Done stops that server
   instance, so a later request to the same link fails, and another clear
   needs the tool again. An instance nobody loads or answers for fifteen
   minutes stops, and a new `unlock` call stops the instance before it.
@@ -678,9 +684,9 @@ clearable:
   agent's next call runs the full order. The page is not a pending
   request and lifts without gate case 3: it clears directly, as the
   CLI's `clear` does. A lift request left pending stays answerable at
-  the CLI; approving it skips any key cleared since the request was
-  issued, so a later block recorded after the page's clear survives the
-  approval. The tool refuses under `SLACK_MCP_DEPLOYMENT=remote` and on
+  the CLI, under the rule in The strike lock: an approval skips a key
+  cleared since the request was issued, so a later block recorded after
+  the page's clear survives it. The tool refuses under `SLACK_MCP_DEPLOYMENT=remote` and on
   SSE, where the page would open on a host that need not be the
   operator's.
 - **Editing or removing the file.** This is documented in the README
@@ -731,8 +737,26 @@ left over from before a restart still clears strikes when approved,
 unless strikes were cleared after it was issued (by the page, the CLI,
 or another approval). Then the approval writes no clear: the strikes
 recorded since that clear belong to later blocks the request never
-named. The same holds for a lifted person or conversation. Clears are
-ordered against the request by their recorded times.
+named. The same holds for a lifted person or conversation, and the
+`approve` output names each key it skipped and why, saying "lifted"
+only when it lifted something.
+
+A lift request records its place in the quarantine file: the count of
+lines when it was issued and the SHA-256 of the file's bytes through
+them. A clear is after the request when its line comes later in a file
+that still holds those bytes. Place, not time, orders them, as for the
+hold above: the request is issued by the server and approved by the CLI,
+two processes whose clocks need not agree, and a stepped clock would
+let a clear issued after the request read as before it. When the file
+no longer holds the request's bytes (edited, replaced, or unreadable),
+the two cannot be ordered and the approval lifts nothing for that key,
+which the operator then clears directly.
+
+A pending lift is handed back for a repeated refusal only while none of
+its keys was cleared after its place. Otherwise the block now holding
+the key is one the request never saw, and approving it would lift
+nothing: the server marks the old request superseded, its ID never
+issued again, and issues a new one at the current place.
 
 ### Layer 4: the tool result
 
