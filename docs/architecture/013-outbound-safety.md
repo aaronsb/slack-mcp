@@ -41,6 +41,13 @@ the implementation. The sections below carry the rules.
 - Banner: wording, and placement once at the top of a result, batch
   included.
 
+Amendment (2026-10-01): trusted destinations. A persistent list the
+operator keeps, the inverse of the quarantine, of destinations that skip
+the approval gate for gate cases 1 and 2. Trust never skips the floor
+or case 3, and quarantine wins over it. Added at an approval (`soft`
+only) or with `slack-mcp trust add`; stored beside the quarantine file;
+never listed to the agent. Under Trusted destinations.
+
 ## Context
 
 The agent this server serves can run for hours, and reading other
@@ -91,7 +98,8 @@ quarantine, the scanner, the approval gate. The first two are local and
 make no Slack call, so ADR-012's rule that a bad name or file fails with
 zero Slack calls holds; the quarantine step is the first that may call
 Slack. The scanner runs before the gate, so approval is never a route
-for content the scanner refuses.
+for content the scanner refuses. A trusted destination is checked inside
+the gate step, so trust is never a route past any earlier step either.
 
 ### Layer 2: the scanner
 
@@ -533,7 +541,8 @@ and risky enough that the scanner's silence is not consent:
 3. Lifting a quarantine or the strike lock.
 
 ADR-014's posture decides which cases are gated; everything else relies
-on the scanner.
+on the scanner. A trusted destination (below) skips cases 1 and 2 for
+the cases it is trusted for.
 
 For case 1, the server decides at gate time from data fetched then, not
 from its caches, which a channel's sharing can outrun. The own
@@ -665,13 +674,162 @@ approve. A state from another call, past its expiry, or from before a
 restart fails verification and counts as no answer; the CLI path
 survives a restart.
 
-Accept lets the call proceed through the rest of the order. Decline
-marks the request denied. No answer, a cancel, or a failed verification
-leaves it pending for the CLI.
+The form offers approve once and deny, and in `soft` also approve and
+trust this destination (Trusted destinations). The request state binds
+which choices were offered. Approve once lets the call proceed through
+the rest of the order. Approve and trust does the same and appends a
+trust entry. Deny marks the request denied. No answer, a cancel, a
+choice the form did not offer, or a failed verification leaves it
+pending for the CLI.
 
 Elicitation is not relied on alone. Client support is uneven, a host may
 answer for the user or let the model answer, and nothing requires a
 client to answer at all. MCP sampling is not used as a guard.
+
+### Trusted destinations
+
+An operator who approves every send to the same Slack Connect partner,
+or every file moved into the same team channel, stops reading the
+requests. Trusted destinations are a persistent list the operator keeps
+of destinations that skip the approval gate. They are the inverse of
+the quarantine: a quarantine closes a destination to the agent's
+writes, and trust opens one past the gate.
+
+#### What trust skips
+
+Trust skips the approval gate only, per destination and per gate case:
+
+- **Case 1** (external destination): a call to a destination trusted
+  for case 1 issues no pending request for case 1.
+- **Case 2** (cross-conversation file move): a call attaching a moved
+  file to a destination trusted for case 2 issues no pending request for
+  case 2. The destination is the receiving conversation; where the file
+  came from does not matter. In `soft` case 2 is not gated, so a case 2
+  entry takes effect only in `strict`.
+
+A call that hits both cases is let through only when the destination is
+trusted for both; otherwise it issues a pending request for the cases
+not trusted.
+
+Trust never skips the floor. Every send to a trusted destination runs
+the full order: the strike lock, ADR-012's name and file checks, the
+quarantine, and the scanner, before the gate step where trust is
+consulted. Trust never applies to case 3: lifting a quarantine or the
+lock stays CLI-only.
+
+Quarantine wins over trust. A block on a trusted destination
+quarantines it as any block would under the posture, and a quarantined
+destination refuses `say` and `mark-read` whatever the trust list says.
+The trust entry stays recorded and has no effect while the quarantine
+holds; when the operator clears the quarantine, it applies again, and
+`slack-mcp quarantine clear` says so when it clears a trusted
+destination. The strike lock refuses every write, trusted or not.
+
+#### What is trusted
+
+Entries key on IDs: a person by user ID, anything else by conversation
+ID.
+
+- **A person** (`@handle`): their DM. A group DM is covered for a case
+  when every member other than the account is trusted for that case,
+  and, for case 1 only, when every such member is trusted or internal.
+  Internal stands in for trust in case 1 alone, because being internal
+  is what case 1 tests; it says nothing about where a moved file came
+  from.
+- **A conversation** (`#channel`, a group DM's `#mpdm-…` name, or a
+  conversation ID): that conversation only. For case 1 the entry
+  records the external parties the gate finds when it is added: the
+  external organizations a channel is shared with, the external members
+  of a group DM, the other member of a DM. At gate time trust applies
+  only when every external party the gate finds is among those
+  recorded, so a channel shared with a new organization after it was
+  trusted is gated again. When the gate cannot list the external
+  parties (a failed fetch, a sharing flag with no organization list),
+  the entry does not apply and the call is gated.
+
+The self-DM is never external, so it needs no case 1 entry.
+
+#### Adding trust
+
+At an approval, the choices are approve once, approve and trust this
+destination, and deny.
+
+- **Elicitation**: approve and trust is offered only in `soft`, the
+  attended posture. In `strict` the form offers approve once and deny,
+  and trust is added only through the CLI. The entry covers the cases of
+  the request answered and has no expiry. A server in `strict` ignores
+  entries added by elicitation, so an entry a `soft` session added
+  does not carry into a `strict` deployment on the same data directory.
+- **CLI**: `slack-mcp trust add <destination> [--case
+  external|cross-conversation|all] [--for <duration>]`, where
+  `<destination>` is `@handle`, `#channel`, or a conversation ID, and
+  `--case` defaults to `all`. Like `approve`, `deny`, and `quarantine
+  clear`, it requires an interactive terminal on stdin, shows the
+  destination's resolved name, kind, and external parties, and asks the
+  operator to type the destination back. `--for` takes a duration such
+  as `12h` or `30d`; without it the entry has no expiry. It works in
+  both postures.
+- `slack-mcp approve <id>` approves once. Trust from the CLI is always a
+  separate `trust add`.
+
+A later add for the same key replaces the earlier one's cases and
+expiry, so an add can narrow trust as well as widen it.
+
+`slack-mcp trust remove <destination>` ends every case for that key. It
+needs no terminal and no typed confirmation: removal only reduces
+privilege, and an agent that runs it only puts its own sends back
+behind the gate. It works in both postures.
+
+`slack-mcp trust list` shows each entry with the destination's current
+name, resolved at list time with the configured tokens (else the name
+recorded at add time, marked as such), its ID and kind, its cases, when
+and how it was added, its expiry, and its state: in effect, expired,
+quarantined, or ignored in `strict`.
+
+#### The trust file
+
+Trust state is an append-only JSON-lines file per workspace, keyed by
+team ID, beside the quarantine file in the data directory at mode 0600.
+Each entry records:
+
+- when, and the kind: an add or a removal;
+- the key (user ID or conversation ID), its kind, and the name it had
+  then;
+- for an add, the cases, how it was added (`cli` or `elicitation`, with
+  the posture and the pending ID it answered), the expiry if any, and
+  for a conversation's case 1 the external parties recorded.
+
+Writing follows the quarantine file's rule: an advisory lock, a newline
+first if the last byte is not one, the entry in one write.
+
+Reading follows the quarantine file's rules too. The server reads it on
+every gated call, with the same size, modification time, and identity
+check, reading on from its last offset or from 0 when the file shrank,
+was replaced, or was modified in place. An unterminated final line is
+ignored; a complete line that does not parse is skipped and named in the
+log and in `trust list`. A missing file is empty: nothing is trusted,
+which fails safe. A file that exists but cannot be read is also treated
+as nothing trusted, named in the log and in `trust list`; unlike the
+quarantine file, it engages no lock, since an unreadable trust list can
+only gate more.
+
+#### What the agent sees
+
+Trusted destinations are not listed to the agent: not in the server
+instructions, the banner, a tool description, or any result. A send
+that trust let through returns the same result as a send no case gated,
+so the agent learns only that the send needed no approval. A list of
+the external destinations that skip the gate is a list of where an
+attacker would ask the agent to send.
+
+The operator sees each send trust let through in a log line:
+
+```
+outbound-safety: TRUSTED say to=#partner-acme (C0456EFGH) case=external entry=cli
+```
+
+Like the `PENDING` line it names the destination and case, never the
+text or file names.
 
 ## Consequences
 
@@ -685,6 +843,8 @@ client to answer at all. MCP sampling is not used as a guard.
 - Every block leaves a record in the quarantine file that no tool can
   remove.
 - No new tool; the surface stays at nine.
+- A destination the operator has vetted stops costing an approval on
+  every send, without loosening the scanner or the quarantine there.
 
 ### Negative
 
@@ -701,6 +861,9 @@ client to answer at all. MCP sampling is not used as a guard.
 - Gated calls wait on the operator, and the operator learns of them
   only from the log or `slack-mcp approve`. Unattended, they wait up to
   24 hours and then expire.
+- A trusted external destination receives whatever passes the scanner
+  without a person reading it first. Text copied from a private
+  conversation to a trusted partner is stopped only by the scanner.
 
 ### Risks and limits
 
@@ -729,13 +892,18 @@ client to answer at all. MCP sampling is not used as a guard.
   `SLACK_MCP_SERVER_CA_INSECURE`, which routes token-bearing requests
   through an unverified proxy; ADR-014's `.env` allowlist closes the
   `.env` path to those settings.
-- **The server's own state.** The quarantine, pending, and provenance
-  files are in the data directory, and the `slack-mcp` binary is on the
+- **The server's own state.** The quarantine, pending, provenance, and
+  trust files are in the data directory, and the `slack-mcp` binary is on the
   path. An agent with unrestricted file or shell access can edit or
   delete the files, which a running server now honors, or drive the CLI
   through a pseudo-terminal. The client's permissions should deny the
   agent writes to the data directory and execution of `slack-mcp`
-  subcommands.
+  subcommands. A forged trust entry skips the approval gate only; the
+  scanner and the quarantine still run.
+- **Trust added by elicitation.** In `soft` a host that lets the model
+  answer elicitation lets the agent add trust. `soft` is the attended
+  posture, and `strict` both refuses to offer trust by elicitation and
+  ignores entries added that way.
 - **The server instructions are static.** They are built once at
   startup and read by the client when it connects, so a quarantine set
   later, or a workspace loaded by `auth` mid-session, reaches the agent
@@ -750,6 +918,8 @@ client to answer at all. MCP sampling is not used as a guard.
 Removing the layers is not local to `say`. `download` would stop
 recording provenance, the read nouns would drop the banner, `mark-read`
 would drop its quarantine checks, and the CLI subcommands would go.
+Removing trusted destinations alone puts every gated call back behind
+the gate, the fail-safe direction; the trust file is then unread.
 Removing them gives back the four routes in Context. The quarantine file
 outlives a removal; restoring the layers restores its state.
 
@@ -797,6 +967,25 @@ outlives a removal; restoring the layers restores its state.
   added by a code change.
 - **Failing closed on any unparseable line.** One torn write from a
   crash would lock every write until someone edited the file by hand.
+- **Trust that skips the scanner.** The scanner is the floor every
+  posture keeps. A trusted destination is where an attacker who knows
+  the list would route a secret, and the scanner is what stops it there.
+- **Trust added by elicitation in `strict`.** A host may let the model
+  answer an elicitation, and `strict` is the posture with no one
+  attending. Trust there would let the agent under attack open a
+  destination for every later call. Elicitation in `strict` approves one
+  send.
+- **An allowlist that replaces the gate.** Sending only to listed
+  destinations, or gating only unlisted ones with no per-case scope,
+  either turns every new external conversation into a configuration
+  change or lets a listed channel's later sharing, or a file from any
+  conversation, through unasked. Trust is per destination, per case, and
+  bound to the external parties recorded when it was added.
+- **Listing trusted destinations to the agent.** It would tell the agent,
+  and anyone steering it, which external destinations skip the gate.
+- **Typed confirmation for `trust remove`.** Removal only reduces
+  privilege; friction on it would only slow an operator closing a
+  destination in a hurry.
 
 ## Related
 
