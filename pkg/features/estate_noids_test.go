@@ -1,0 +1,135 @@
+package features_test
+
+import (
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/aaronsb/slack-mcp/pkg/slacktest"
+	"github.com/slack-go/slack"
+)
+
+// idShaped matches the shape of Slack internal IDs (U0123ABCD, C0123ABCD).
+var idShaped = regexp.MustCompile(`\b[UCDGWT][A-Z0-9]{8,}\b`)
+
+func noIDsFixture(t *testing.T) func(params map[string]any) string {
+	t.Helper()
+	srv := slacktest.New(t)
+	srv.SeedUsers(
+		slack.User{ID: "U1", Name: "bockeliea", RealName: "Aaron Bockelie"},
+		slack.User{ID: "U0123ABCD", Name: "schen", RealName: "Sarah Chen"},
+		slack.User{ID: "U0456EFGH", Name: "mlopez", RealName: "Maria Lopez"},
+	)
+	var eng slack.Channel
+	eng.ID, eng.Name, eng.IsChannel, eng.IsMember = "C0123ABCD", "eng", true, true
+	var dm slack.Channel
+	dm.ID, dm.IsIM, dm.User = "D0123ABCD", true, "U0555NONE" // counterpart in no map
+	srv.SeedChannels(eng, dm)
+	ap := bootedProvider(t, srv)
+
+	for _, d := range []int{1, 2, 3} {
+		seedActivity(ap, "C0123ABCD", "U0123ABCD", d)
+		seedActivity(ap, "C0123ABCD", "U0456EFGH", d)
+		seedActivity(ap, "D0123ABCD", "U0123ABCD", d) // DM to an unresolved user
+		seedActivity(ap, "C0999ZZZZ", "U0123ABCD", d) // conversation no map names
+		seedActivity(ap, "C0999ZZZZ", "U0777EXTL", d) // Slack Connect external
+		seedActivity(ap, "C0999ZZZZ", "U0888EXTM", d) // a second external
+	}
+	return func(params map[string]any) string {
+		return estateViewOut(t, ap, params)
+	}
+}
+
+func TestAboutAndPersonNeverPrintSlackIDs(t *testing.T) {
+	run := noIDsFixture(t)
+	for _, params := range []map[string]any{
+		{"view": "person", "person": "schen"},
+		{"view": "about", "person": "schen"},
+		{"view": "about", "person": "schen", "deeper": true},
+	} {
+		out := run(params)
+		if m := idShaped.FindString(out); m != "" {
+			t.Errorf("%v prints Slack ID %q:\n%s", params, m, out)
+		}
+		if !strings.Contains(out, "unnamed conversation") {
+			t.Errorf("%v: unlabelled conversation not rendered by kind:\n%s", params, out)
+		}
+	}
+}
+
+func TestEstateViewsNeverPrintSlackIDs(t *testing.T) {
+	run := noIDsFixture(t)
+	for _, params := range []map[string]any{
+		{"view": "convergence", "people": "schen,mlopez"},
+		{"view": "initiatives"},
+		{"view": "people", "person": "chen"},
+		{"view": "channels"},
+		{"view": "families"},
+		{"view": "families", "person": "schen"},
+	} {
+		out := run(params)
+		if m := idShaped.FindString(out); m != "" {
+			t.Errorf("%v prints Slack ID %q:\n%s", params, m, out)
+		}
+	}
+}
+
+func TestUnresolvedDMIsLabelledByKind(t *testing.T) {
+	run := noIDsFixture(t)
+	out := run(map[string]any{"view": "person", "person": "schen"})
+	if !strings.Contains(out, "DM (unresolved user)") {
+		t.Fatalf("unresolved DM not labelled by kind:\n%s", out)
+	}
+}
+
+func TestAboutDeeperOnUnsweptEstateDoesNotFailOnItsOwnIDs(t *testing.T) {
+	run := noIDsFixture(t)
+	out := run(map[string]any{"view": "about", "person": "schen", "deeper": true})
+	if strings.Contains(out, "Could not resolve") {
+		t.Fatalf("deeper hop failed on an ID the server produced:\n%s", out)
+	}
+	if !strings.Contains(out, "Second hop") {
+		t.Fatalf("second hop did not run:\n%s", out)
+	}
+	if !strings.Contains(out, "external user") {
+		t.Fatalf("external counterpart not labelled by kind:\n%s", out)
+	}
+}
+
+func TestAboutReadingPlanOmitsStepsWithoutAName(t *testing.T) {
+	run := noIDsFixture(t)
+	out := run(map[string]any{"view": "about", "person": "schen"})
+	if !strings.Contains(out, "messages target='#eng'") {
+		t.Fatalf("named surface missing from plan:\n%s", out)
+	}
+	if strings.Contains(out, "target='unnamed") || strings.Contains(out, "target='DM") {
+		t.Fatalf("plan names an anonymised conversation:\n%s", out)
+	}
+	if !strings.Contains(out, "person='@mlopez'") {
+		t.Fatalf("top counterpart not named by handle:\n%s", out)
+	}
+}
+
+func TestAboutDeeperContinuesTheViewsExternalNumbering(t *testing.T) {
+	run := noIDsFixture(t)
+	out := run(map[string]any{"view": "about", "person": "schen", "deeper": true})
+	for _, want := range []string{"external user 1", "external user 2", "external user 3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "external user 4") {
+		t.Errorf("second hop restarted or re-numbered externals:\n%s", out)
+	}
+}
+
+func TestExternalNumberingIsIndependentPerResponse(t *testing.T) {
+	run := noIDsFixture(t)
+	a := run(map[string]any{"view": "person", "person": "schen"})
+	b := run(map[string]any{"view": "person", "person": "schen"})
+	for i, out := range []string{a, b} {
+		if !strings.Contains(out, "external user 1") || strings.Contains(out, "external user 4") {
+			t.Errorf("response %d numbering carried over or drifted:\n%s", i, out)
+		}
+	}
+}

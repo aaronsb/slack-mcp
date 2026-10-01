@@ -139,10 +139,11 @@ func searchUsingOfficialAPI(ctx context.Context, p *provider.ApiProvider, query 
 	}
 
 	render := newBodyRenderer(p)
+	ext := &externalNamer{}
 	results := make([]map[string]interface{}, 0, len(messages.Matches))
 
 	for _, match := range messages.Matches {
-		who := userLabel(p, match.User)
+		who := userLabel(p, match.User, ext)
 
 		entry := map[string]interface{}{
 			// A handle, not a channel ID and a timestamp for the caller to

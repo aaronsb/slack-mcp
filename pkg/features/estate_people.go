@@ -26,6 +26,9 @@ type convInfo struct {
 	IsIM  bool
 	// Counterpart is the other user's ID for IM conversations.
 	Counterpart string
+	// Unresolved marks a DM whose counterpart has no known name; labelFor
+	// renders it by kind, never by the user ID.
+	Unresolved bool
 }
 
 func convLabels(ap *provider.ApiProvider) map[string]convInfo {
@@ -34,11 +37,11 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 	for _, ch := range ap.GetCachedChannels() {
 		switch {
 		case ch.IsIM:
-			label := ch.User
+			info := convInfo{Label: unresolvedDM, IsIM: true, Counterpart: ch.User, Unresolved: true}
 			if u, ok := users[ch.User]; ok {
-				label = "@" + displayName(u)
+				info = convInfo{Label: "DM @" + displayName(u), IsIM: true, Counterpart: ch.User}
 			}
-			out[ch.ID] = convInfo{Label: "DM " + label, IsIM: true, Counterpart: ch.User}
+			out[ch.ID] = info
 		case ch.IsMpIM:
 			out[ch.ID] = convInfo{Label: groupName(ch.Name, nil)}
 		case ch.Name != "":
@@ -55,7 +58,13 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 		p := rec.Props
 		switch {
 		case p.IsIM:
-			out[id] = convInfo{Label: "DM " + p.User, IsIM: true, Counterpart: p.User}
+			info := convInfo{Label: unresolvedDM, IsIM: true, Counterpart: p.User, Unresolved: true}
+			if rec, ok := ap.EstateUser(p.User); ok {
+				if name := estateUserName(rec); name != "" {
+					info = convInfo{Label: "DM @" + name, IsIM: true, Counterpart: p.User}
+				}
+			}
+			out[id] = info
 		case p.Name != "":
 			label := "#" + p.Name
 			if rec.Gone != nil {
@@ -67,14 +76,88 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 	return out
 }
 
+const (
+	unnamedConversation = "unnamed conversation"
+	unresolvedDM        = "DM (unresolved user)"
+	externalUser        = "external user"
+)
+
+// labelFor is the one place a conversation becomes display text. It never
+// returns an internal ID: a conversation the maps do not name is
+// "unnamed conversation", and a DM whose counterpart never resolved to a
+// name (its label is still the raw user ID) is "DM (unresolved user)". The
+// graph report shares it so both surfaces label alike.
 func labelFor(labels map[string]convInfo, conv string) string {
-	if info, ok := labels[conv]; ok {
-		return info.Label
+	info, ok := labels[conv]
+	switch {
+	case !ok:
+		return unnamedConversation
+	case info.Unresolved:
+		return unresolvedDM
 	}
-	return conv
+	return info.Label
 }
 
-func userLabel(ap *provider.ApiProvider, id string) string {
+// externalNamer labels people who have no name anywhere ("external user 1",
+// "external user 2"): numbered on first sight, so two externals in one
+// response stay distinct while the number reveals nothing about the ID.
+// One namer lives for one response or view; the zero value is ready.
+type externalNamer struct {
+	n map[string]int
+}
+
+func (e *externalNamer) label(id string) string {
+	if e == nil {
+		// A nil namer would silently merge distinct externals into one
+		// label; every call site owns a per-response namer.
+		panic("features: externalNamer.label on a nil namer")
+	}
+	if e.n == nil {
+		e.n = map[string]int{}
+	}
+	if _, ok := e.n[id]; !ok {
+		e.n[id] = len(e.n) + 1
+	}
+	return fmt.Sprintf("%s %d", externalUser, e.n[id])
+}
+
+// readTarget is what a reading-plan step may pass to messages target=:
+// a channel name or an @name. ok is false when the conversation has only
+// an anonymised label, so the step is omitted rather than printing an ID.
+func readTarget(labels map[string]convInfo, conv string) (string, bool) {
+	info, ok := labels[conv]
+	if !ok {
+		return "", false
+	}
+	if info.Unresolved {
+		return "", false
+	}
+	label := labelFor(labels, conv)
+	if info.IsIM {
+		return strings.TrimPrefix(label, "DM "), true
+	}
+	return label, true
+}
+
+func estateUserName(rec estate.UserRecord) string {
+	if rec.Props.RealName != "" {
+		return rec.Props.RealName
+	}
+	return rec.Props.Name
+}
+
+// userHandle is the @handle a person can be addressed by, if one is known.
+func userHandle(ap *provider.ApiProvider, id string) string {
+	if u, ok := ap.ProvideUsersMap()[id]; ok && u.Name != "" {
+		return u.Name
+	}
+	if rec, ok := ap.EstateUser(id); ok {
+		return rec.Props.Name
+	}
+	return ""
+}
+
+func userLabel(ap *provider.ApiProvider, id string, ext *externalNamer) string {
 	if u, ok := ap.ProvideUsersMap()[id]; ok {
 		name := displayName(u)
 		if u.Deleted {
@@ -83,18 +166,16 @@ func userLabel(ap *provider.ApiProvider, id string) string {
 		return name
 	}
 	if rec, ok := ap.EstateUser(id); ok {
-		name := rec.Props.RealName
-		if name == "" {
-			name = rec.Props.Name
+		if name := estateUserName(rec); name != "" {
+			if rec.Gone != nil {
+				name += " (departed)"
+			}
+			return name
 		}
-		if rec.Gone != nil {
-			name += " (departed)"
-		}
-		return name
 	}
 	// Slack Connect externals are in neither the users map nor the estate;
-	// the ID is the only identifier held, so it renders labelled as such.
-	return "external (" + id + ")"
+	// the ID is internal, so they render by kind.
+	return ext.label(id)
 }
 
 func sinceDay(days int) string {
@@ -206,10 +287,13 @@ type personViewData struct {
 	// WindowEncounters is how many observed encounters back this view, so
 	// a thin ranking is distinguishable from a quiet person.
 	WindowEncounters int
+	// ext numbers the unnamed externals in this view; the about view's
+	// second hop continues the same numbering.
+	ext *externalNamer
 }
 
 func personView(ctx context.Context, ap *provider.ApiProvider, person string, days int) *personViewData {
-	data := &personViewData{Days: days}
+	data := &personViewData{Days: days, ext: &externalNamer{}}
 	ids, labels, misses := resolvePeople(ap, []string{person})
 	if len(misses) > 0 {
 		data.Miss = &misses[0]
@@ -316,7 +400,7 @@ func personView(ctx context.Context, ap *provider.ApiProvider, person string, da
 		return data.Counterparts[i].ID < data.Counterparts[j].ID
 	})
 	for _, row := range data.Counterparts {
-		data.Names[row.ID] = userLabel(ap, row.ID)
+		data.Names[row.ID] = userLabel(ap, row.ID, data.ext)
 	}
 
 	// Founder facts from the estate.
@@ -384,6 +468,7 @@ type initiativesViewData struct {
 
 func initiativesView(ap *provider.ApiProvider, days int) *initiativesViewData {
 	data := &initiativesViewData{Days: days, Names: map[string]string{}}
+	ext := &externalNamer{}
 	since := sinceDay(days)
 	plane := ap.AttentionByConversation()
 	data.Labels = convLabels(ap)
@@ -440,7 +525,7 @@ func initiativesView(ap *provider.ApiProvider, days int) *initiativesViewData {
 	for _, row := range byCreator {
 		sort.Slice(row.Channels, func(i, j int) bool { return row.Channels[i].ActiveDays > row.Channels[j].ActiveDays })
 		data.Rows = append(data.Rows, *row)
-		data.Names[row.Creator] = userLabel(ap, row.Creator)
+		data.Names[row.Creator] = userLabel(ap, row.Creator, ext)
 	}
 	sort.Slice(data.Rows, func(i, j int) bool {
 		if data.Rows[i].TotalActiveDay != data.Rows[j].TotalActiveDay {
@@ -478,8 +563,27 @@ type convergenceViewData struct {
 }
 
 func convergenceView(ctx context.Context, ap *provider.ApiProvider, people []string, days int) *convergenceViewData {
-	data := &convergenceViewData{Days: days}
 	ids, labels, misses := resolvePeople(ap, people)
+	return convergenceByID(ctx, ap, ids, labels, misses, days)
+}
+
+// resolveByID builds the resolved-people maps for user IDs the server
+// itself produced (a counterpart row), bypassing the name ladder: an
+// unswept estate cannot fail on its own IDs. The handle is empty when none
+// is known, which only means no search can be compiled for that person.
+func resolveByID(ap *provider.ApiProvider, userIDs []string, ext *externalNamer) (map[string]string, map[string]string) {
+	ids := map[string]string{}
+	labels := map[string]string{}
+	for _, id := range userIDs {
+		ids[id] = userHandle(ap, id)
+		labels[id] = userLabel(ap, id, ext)
+	}
+	return ids, labels
+}
+
+// convergenceByID runs the convergence view over already-resolved people.
+func convergenceByID(ctx context.Context, ap *provider.ApiProvider, ids, labels map[string]string, misses []provider.PersonResolution, days int) *convergenceViewData {
+	data := &convergenceViewData{Days: days}
 	data.Misses = misses
 	data.People = labels
 	if len(ids) < 2 {

@@ -279,11 +279,11 @@ func checkUnreadsHandler(ctx context.Context, params map[string]interface{}) (*F
 	return result, nil
 }
 
-func getUserName(userID string, usersMap map[string]slack.User) string {
+func getUserName(userID string, usersMap map[string]slack.User, ext *externalNamer) string {
 	if user, ok := usersMap[userID]; ok {
 		return displayNameFor(user)
 	}
-	return "Unknown User"
+	return ext.label(userID)
 }
 
 func truncateMessage(text string, maxLen int) string {
