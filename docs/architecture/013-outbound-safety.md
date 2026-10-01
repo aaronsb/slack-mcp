@@ -21,7 +21,9 @@ the implementation. The sections below carry the rules.
   webhooks, model-provider keys, PuTTY keys, and credential URLs added;
   base64 alignment and line rejoining, hex, URL-encoding, and gzip at
   any offset; a fixed decoder order with no precedence; depth 3 and a
-  32 MiB budget, breadth-first, so a match within budget always blocks;
+  32 MiB budget, breadth-first, so a match within budget always blocks
+  (outside parsed pixel data, which the 2026-10-01 zlib amendment
+  exempts from inflation);
   the env-secret name words and value test, identifier-shaped values
   excluded, with must-match and must-not-match tables; the cost of
   base64-heavy files.
@@ -299,8 +301,8 @@ spans included.
   `IEND` are scanned as any buffer.
 - **PDF.** A buffer with `%PDF-` in its first 1024 bytes is read for
   streams. A `stream` keyword is a token when it starts a line or
-  follows `>>` and whitespace, outside a literal string and outside a
-  comment. Its dictionary is the `<<…>>` that ends, with only whitespace
+  follows `>>`, with or without whitespace between, outside a literal
+  string and outside a comment. Its dictionary is the `<<…>>` that ends, with only whitespace
   after it, at that keyword, found within 4 KiB before it, nesting
   counted. The stream's data runs from the end of the keyword's line to
   the next `endstream` token, at a line start or after whitespace. The
@@ -322,7 +324,13 @@ offset). A match through any of them blocks.
 Decoding goes to depth 3: the content as sent is depth 0, and output at
 depth 3 is matched but not decoded again. A budget of 32 MiB per call
 covers every field and depth together. It counts decoded output, and
-the input each inflate attempt consumes. It is counted as the output is
+the input each inflate attempt consumes; matching the bytes as sent is
+scan time and is not charged to it. Input consumed is the inflater's
+real position in the stream: the implementation feeds each attempt
+through a reader with no read-ahead (a `bytes.Reader`, which
+`compress/flate` uses as its `io.ByteReader` without wrapping it in a
+`bufio.Reader`), so a false attempt charges the bytes it read, not a
+buffer. The budget is counted as the output is
 produced, so inflation stops at the budget whatever
 the stream claims. The scan runs breadth-first: every field at depth 0
 (the text forms, the file names, each file's bytes, in that order), then
@@ -349,13 +357,16 @@ cookies it captured, and blocks on them, correctly. The budget is sized
 for these files: at 8 MiB, under 3 MiB of base64 would already be
 unscannable.
 
-Inflation costs the input and output of every stream inflated. A
-well-formed PNG costs about its file size: a scan of its bytes, its
-small inflated text chunks, and false headers outside its pixel chunks.
-JPEG, GIF, and WebP compress pixels with schemes the scanner does not
-decode, so they cost their false headers, a few percent of their size,
-at any resolution. A PDF's parsed image streams cost their bytes; its
-other streams cost their inflated size: page content, object streams,
+Inflation costs the input and output of every stream inflated. Scan
+time grows with a file's size; the budget grows only with what is
+decoded. A well-formed PNG costs a scan of its bytes, and against the
+budget only its small inflated text chunks and its false headers
+outside the pixel chunks. JPEG, GIF, and WebP compress pixels with
+schemes the scanner does not decode, so they cost a scan of their bytes,
+and against the budget only their false headers, a few percent of their
+size, at any resolution. A PDF's parsed image streams cost scan time
+and nothing against the budget; its other streams cost their inflated
+size: page content, object streams,
 embedded fonts, embedded files, and inline images, which sit inside
 content streams. A TIFF or ICO with deflate-compressed pixels, a PNG
 that fails its walk, and an image stream in a PDF whose dictionary
@@ -507,8 +518,10 @@ file. The log is the operator's notice, not that record. On stdio it
 goes to `$XDG_STATE_HOME/slack-mcp/slack-mcp.log` (default
 `~/.local/state/slack-mcp/`), in a directory at 0700 and a file at
 0600, or to `SLACK_MCP_LOG_FILE` when the client environment sets it;
-on SSE it goes to stderr. Every log output passes through a writer that
-redacts credentials (#118). Before #118 the stdio log was
+on SSE it goes to stderr, whose privacy depends on the deployment. When
+the stdio log cannot be opened, the server writes one line to stderr
+and discards its log output. Every log output passes through a writer
+that redacts credentials (#118). Before #118 the stdio log was
 `/tmp/slack-mcp.log` at 0666, shared by every user on the host.
 
 Two surfaces carry the state to the agent:
@@ -686,10 +699,12 @@ outbound-safety: PENDING p7k2 case=file-move say to=#general (C0123ABCD) files=1
 ```
 
 It names the ID, the gate cases, the destination, and the counts, never
-the text or file names. The log is private to the operator (#118), but
-it outlives the request, and case 1's content is held only in the
-pending file, which deletes it on expiry; that content is read through
-`slack-mcp approve`. `slack-mcp approve` with no ID lists every pending request
+the text or file names. The stdio log is a private file (#118), but on
+SSE it is stderr, it is discarded when it cannot be opened, and it
+outlives the request; case 1's content is held only in the pending
+file, which deletes it on expiry, and is read through `slack-mcp
+approve`. The log line is a notice, not the record: `slack-mcp approve`
+lists every pending request whatever happened to the log. `slack-mcp approve` with no ID lists every pending request
 with its age and expiry. The agent's result names the ID and tells it
 to tell the operator. No other channel is added: no desktop
 notification, no outbound message. A desktop notifier would make the
@@ -849,8 +864,8 @@ destination, and deny.
   and trust is added only through the CLI. The entry covers the cases of
   the request answered and has no expiry. It is keyed as the
   destination was named: `@person` by user ID, a channel by
-  conversation ID, a group DM by conversation ID with its members
-  recorded as its parties. A server in `strict` ignores entries added by
+  conversation ID, a group DM by conversation ID with its external
+  members recorded as its parties. A server in `strict` ignores entries added by
   elicitation, so an entry a `soft` session added does not carry into a
   `strict` deployment on the same data directory. An ignored entry
   replaces nothing: in `strict`, an earlier CLI entry for the same key
@@ -892,12 +907,15 @@ Trust state is an append-only JSON-lines file per workspace, keyed by
 team ID, beside the quarantine file in the data directory at mode 0600.
 Each entry records:
 
-- when, and the kind: an add or a removal;
+- when, and the kind: an add, a removal, or a use;
 - the key (user ID or conversation ID), its kind, and the name it had
   then;
 - for an add, the cases, how it was added (`cli` or `elicitation`, with
   the posture and the pending ID it answered), the expiry if any, and
-  for a conversation's case 1 the external parties recorded.
+  for a conversation's case 1 the external parties recorded;
+- for a use, the destination's ID and the cases trust let through, and
+  nothing of the content. Use entries are a history; they change no
+  trust state.
 
 Writing follows the quarantine file's rule: an advisory lock, a newline
 first if the last byte is not one, the entry in one write.
@@ -924,15 +942,17 @@ destinations keeps that knowledge to what the agent has already sent;
 a list of the external destinations that skip the gate would be a list
 of where an attacker would ask the agent to send.
 
-The operator sees each send trust let through in a line in the operator
-log (0600, #118):
+The operator sees each send trust let through in a log line, private
+on stdio and subject to the same limits as the `PENDING` line:
 
 ```
 outbound-safety: TRUSTED say to=#partner-acme (C0456EFGH) case=external entry=cli
 ```
 
 Like the `PENDING` line it names the destination and case, never the
-text or file names.
+text or file names. Each such send also appends a `used` entry to the
+trust file, so a trusted send leaves a record that does not depend on
+the log.
 
 ## Consequences
 
@@ -940,7 +960,9 @@ text or file names.
 
 - A secret in a recognized format cannot reach Slack through any `say`,
   however the agent was persuaded to send it, and an encoding the
-  decoders know does not hide it.
+  decoders know does not hide it outside parsed pixel data. The scanner
+  is a net, not a boundary against deliberate evasion (Exempt pixel
+  data, under Risks).
 - Escalation is bounded: a few blocks lock all writes until the
   operator acts.
 - Every block leaves a record in the quarantine file that no tool can
@@ -962,8 +984,8 @@ text or file names.
   as unscannable: a gzip whose contents pass the budget, a PDF whose
   non-image streams do, or a TIFF, ICO, or malformed PNG whose pixels
   are deflate-compressed. A well-formed PNG, a PDF's parsed image
-  streams, and JPEG, GIF, and WebP files cost about their file size,
-  whatever their resolution.
+  streams, and JPEG, GIF, and WebP files cost scan time in proportion to
+  their size and little of the budget, whatever their resolution.
 - The notice tells a requester their request was caught.
 - Gated calls wait on the operator, and the operator learns of them
   only from the log or `slack-mcp approve`. Unattended, they wait up to
