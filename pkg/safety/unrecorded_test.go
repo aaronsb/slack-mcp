@@ -3,6 +3,7 @@ package safety
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -99,5 +100,30 @@ func TestUnrecordedHoldLiftsOnStrikesClearAfterIt(t *testing.T) {
 	}
 	if held, _ := ws.UnrecordedHeld(now); !held {
 		t.Fatalf("a clear after a rebuild released the hold; positions across a rebuild do not compare")
+	}
+}
+
+// A hold engaged while the quarantine file is unreadable has no place in the
+// file to order a clear after: once the file reads again, a clear written
+// before the hold must not release it.
+func TestUnrecordedHoldEngagedUnreadableIgnoresOldClears(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("permission bits do not stop this reader")
+	}
+	ws := openTest(t, Strict)
+	now := time.Now()
+	if _, err := ws.Quarantine.Clear(StrikesKey, ByCLI, "", now); err != nil {
+		t.Fatal(err)
+	}
+	ws.Quarantine.State()
+	os.Chmod(qpath(ws), 0)
+	defer os.Chmod(qpath(ws), 0o600)
+	if st := ws.Quarantine.State(); st.Err == nil {
+		t.Fatal("file still readable")
+	}
+	ws.HoldUnrecorded("")
+	os.Chmod(qpath(ws), 0o600)
+	if held, _ := ws.UnrecordedHeld(now); !held {
+		t.Fatalf("a clear from before the hold released it after the file recovered")
 	}
 }

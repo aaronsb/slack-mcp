@@ -24,10 +24,21 @@ type unrecordedHold struct {
 	liftID  string
 }
 
+// unorderable is the engage position of a hold taken while the quarantine
+// file could not be read. No state has its epoch, so only an approval or a
+// restart lifts the hold.
+var unorderable = Position{Epoch: -1}
+
 // HoldUnrecorded engages the hold after a block failed to record. liftID
 // names the lift request issued for it, or is empty when none could be.
 func (w *Workspace) HoldUnrecorded(liftID string) {
-	pos := w.Quarantine.State().Position
+	st := w.Quarantine.State()
+	pos := st.Position
+	if st.Err != nil {
+		// No readable position to order a clear after: the fold rebuilt
+		// on recovery would number old clears past it.
+		pos = unorderable
+	}
 	w.unrecorded.mu.Lock()
 	defer w.unrecorded.mu.Unlock()
 	w.unrecorded.held, w.unrecorded.engaged, w.unrecorded.liftID = true, pos, liftID

@@ -650,8 +650,8 @@ pending. The hold lifts when:
   writes a clear, and the server reads it at a later place in the file
   than where the hold engaged. Place, not time, orders them, so no clock
   releases the hold early; if the file was replaced or edited since the
-  hold engaged, places no longer compare and only approval or a restart
-  releases it;
+  hold engaged, or could not be read when it engaged, places no longer
+  compare and only approval or a restart releases it;
 - the server restarts, for any reason, the host's included. The
   unrecorded strike is then lost. While no request has been issued, a
   restart is the only release besides a clear of strikes.

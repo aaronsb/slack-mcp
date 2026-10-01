@@ -992,7 +992,7 @@ func gate(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, g
 
 	el := elicitationFrom(ctx)
 	if el.Answered {
-		if res, done := answer(ws, gd, out, r, binding, ext, el, untrusted); done {
+		if res, done := answer(ws, gd, out, r, binding, ext, el, untrusted, fromNames); done {
 			return res
 		}
 		return pending
@@ -1062,7 +1062,7 @@ func choiceStrings(cs []safety.Choice) []string {
 // false when the answer counts as none (a cancel, a decline, a choice not
 // offered, or a state that fails verification): the request stays pending
 // for the CLI. Verification checks the state against this call's binding.
-func answer(ws *safety.Workspace, gd *gateDest, out *outbound, r safety.Request, b safety.Binding, ext externality, el Elicitation, cases []safety.Case) (*FeatureResult, bool) {
+func answer(ws *safety.Workspace, gd *gateDest, out *outbound, r safety.Request, b safety.Binding, ext externality, el Elicitation, cases []safety.Case, from []string) (*FeatureResult, bool) {
 	if el.Action != "accept" {
 		return nil, false
 	}
@@ -1085,7 +1085,7 @@ func answer(ws *safety.Workspace, gd *gateDest, out *outbound, r safety.Request,
 		log.Printf("outbound-safety: DENIED %s say to=%s (%s) by=elicitation", r.ID, gd.d.Name, gd.d.ID())
 		return &FeatureResult{
 			Success:  false,
-			Message:  fmt.Sprintf("Denied: pending %s (%s) was refused. Nothing was sent.", r.ID, summary(gd, out, r.From)),
+			Message:  fmt.Sprintf("Denied: pending %s (%s) was refused. Nothing was sent.", r.ID, summary(gd, out, from)),
 			Guidance: "Do not retry, rephrase, or route the content elsewhere.",
 		}, true
 	case safety.ChoiceApproveOnce, safety.ChoiceApproveTrust:

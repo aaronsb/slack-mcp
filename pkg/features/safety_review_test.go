@@ -306,6 +306,20 @@ func TestSafetyMalformedProvenanceGatesUnrecorded(t *testing.T) {
 	if len(reqs) != 1 || len(reqs[0].From) != 1 || !strings.Contains(reqs[0].From[0], "provenance.jsonl has a malformed line") {
 		t.Fatalf("request: %+v", reqs)
 	}
+
+	// A denial through the form names the move as the agent saw it.
+	params := map[string]any{"to": "#eng", "files": []any{"notes.txt"}}
+	offered := f.say(t, features.WithElicitation(context.Background(), features.Elicitation{Offer: true}), params)
+	if offered.InputRequest == nil {
+		t.Fatalf("no form offered: %+v", offered)
+	}
+	denied := f.say(t, features.WithElicitation(context.Background(), features.Elicitation{
+		Offer: true, Answered: true, Action: "accept", Choice: "deny", State: offered.InputRequest.State,
+	}), params)
+	wantIn(t, denied.Message, "Denied: pending p", "from another conversation")
+	if strings.Contains(denied.Message+denied.Guidance, "provenance") {
+		t.Fatalf("the denial told the agent about the provenance file:\n%s", denied.Message)
+	}
 }
 
 // slack-mcp quarantine clear strikes, from another process, releases the
