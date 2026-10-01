@@ -101,7 +101,10 @@ func OpenDir(dir string, org Org, p Posture) (*Workspace, error) {
 // when the request under its ID is no longer the one shown (Fingerprint).
 // For case 1 or 2 it marks the request approved, and the next call with the
 // same destination and content goes through once (ConsumeApproved). For
-// case 3 it appends a clear for each lifted key and lets nothing through.
+// case 3 it appends a clear for each lifted key and lets nothing through,
+// except a key already cleared after the request was issued (by the page,
+// the CLI, or another approval): what was recorded since that clear is a
+// later block the request never asked about, so it stays.
 // The lookup, the clears, and the approval run under the pending file's
 // lock, so a concurrent deny or approve cannot interleave.
 //
@@ -120,7 +123,11 @@ func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
 			return fmt.Errorf("%w: %s", ErrNotPending, r.Status)
 		}
 		if r.IsLift() {
+			st := w.Quarantine.State()
 			for _, k := range r.Lift {
+				if st.ClearedSince(k, r.Created) {
+					continue
+				}
 				if _, err := w.Quarantine.Clear(k, ByApproval, r.ID, now); err != nil {
 					return err
 				}

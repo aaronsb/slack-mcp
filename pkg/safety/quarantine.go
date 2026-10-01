@@ -73,6 +73,9 @@ type QuarantineStore struct {
 	// the last clear of strikes, oldest first.
 	reasons       map[string]Reason
 	strikeReasons []Reason
+	// clearedAt is the time of the latest clear of each key (by
+	// reasonKey), strikes included.
+	clearedAt map[string]time.Time
 	// epoch counts rebuilds of a fold that had read a line (a replaced,
 	// shrunk, or edited file read again from offset 0); a line number means
 	// something only within one epoch. A fold that had read nothing (no
@@ -97,6 +100,7 @@ func (s *QuarantineStore) reset() {
 	s.lockRecorded = false
 	s.reasons = map[string]Reason{}
 	s.strikeReasons = nil
+	s.clearedAt = map[string]time.Time{}
 	if s.readLine {
 		s.epoch++
 	}
@@ -140,6 +144,9 @@ func (s *QuarantineStore) apply(raw []byte) error {
 	case kindClear:
 		if l.Target == nil {
 			return errors.New("clear without target")
+		}
+		if rk := reasonKey(*l.Target); l.Time.After(s.clearedAt[rk]) {
+			s.clearedAt[rk] = l.Time
 		}
 		switch l.Target.Kind {
 		case KeyStrikes:
@@ -191,6 +198,7 @@ type QuarantineState struct {
 	StrikeReasons []Reason
 
 	reasons      map[string]Reason
+	clearedAt    map[string]time.Time
 	people       map[string]Key
 	convs        map[string]Key
 	lockRecorded bool
@@ -230,12 +238,16 @@ func (s *QuarantineStore) snapshot() QuarantineState {
 		StrikesClearLine: s.strikesClearLine,
 		StrikeReasons:    append([]Reason(nil), s.strikeReasons...),
 		reasons:          make(map[string]Reason, len(s.reasons)),
+		clearedAt:        make(map[string]time.Time, len(s.clearedAt)),
 		people:           make(map[string]Key, len(s.people)),
 		convs:            make(map[string]Key, len(s.convs)),
 		lockRecorded:     s.lockRecorded,
 	}
 	for rk, r := range s.reasons {
 		st.reasons[rk] = r
+	}
+	for rk, at := range s.clearedAt {
+		st.clearedAt[rk] = at
 	}
 	for id, k := range s.people {
 		st.people[id] = k
@@ -272,6 +284,12 @@ func (q QuarantineState) LockEngaged() bool {
 func (q QuarantineState) ReasonFor(k Key) (Reason, bool) {
 	r, ok := q.reasons[reasonKey(k)]
 	return r, ok
+}
+
+// ClearedSince reports whether k (a person, a conversation, or
+// StrikesKey) was cleared after t, by any route.
+func (q QuarantineState) ClearedSince(k Key, t time.Time) bool {
+	return q.clearedAt[reasonKey(k)].After(t)
 }
 
 // StrikeCount returns the strikes since the last clear of strikes.
