@@ -84,8 +84,8 @@ result.
    not to try next.
 
 An approval gate covers the risky-but-legitimate cases the scanner
-cannot judge. Every refusal happens before anything the agent supplied
-reaches Slack, and before any `conversations.open`, in this order: the
+cannot judge. Every refusal happens before any content the agent
+supplied reaches Slack, and before any `conversations.open`, in this order: the
 strike lock, ADR-012's name and file checks, the destination's
 quarantine, the scanner, the approval gate. The first two are local and
 make no Slack call, so ADR-012's rule that a bad name or file fails with
@@ -100,11 +100,14 @@ it: each attached file's name and bytes, a reaction's emoji name, any
 title or initial comment an upload carries (#92), and the message text
 in three forms. The text is scanned as the agent supplied it, as the
 fallback text the server posts (`NormalizeMrkdwn`), and as the plain
-text of each `rich_text` section the server builds (`ToRichText`), its
-elements' text joined with no separator. Formatting can split a token
-across elements (`` `xoxb`-123… `` becomes a code element `xoxb` and a
-text element `-123…`) that Slack renders as one string; the joined form
-puts it back together. Each file is read once into memory; the scanner
+text of each section, list item, quote, and preformatted element of the
+`rich_text` block the server builds (`ToRichText`), its inline
+elements' text joined with no separator. A quote holds its inline
+elements directly, so it is joined like a section. Formatting can split
+a token across elements (`` `xoxb`-123… `` becomes a code element `xoxb`
+and a text element `-123…`) that Slack renders as one string; the
+joined form puts it back together, inside a quote (`` > `xoxb`-123… ``)
+as anywhere else. Each file is read once into memory; the scanner
 reads that buffer, and the same buffer is what is uploaded. For text and
 files alike, the bytes scanned are the bytes sent.
 
@@ -114,22 +117,25 @@ boundary means it ends the input or precedes such a byte.
 
 | Class | Matches |
 |---|---|
-| Private key | `-----BEGIN ` and any run of `[A-Z0-9 ]` ending `PRIVATE KEY-----` (PKCS#1, PKCS#8, `ENCRYPTED`, `EC`, `DSA`, `OPENSSH`), or `-----BEGIN PGP PRIVATE KEY BLOCK-----`, followed within the next 512 bytes by at least 64 base64-alphabet characters, line breaks and `Key: value` header lines ignored; or a PuTTY key, `PuTTY-User-Key-File-` followed within 4096 bytes by `Private-Lines:` |
+| Private key | `-----BEGIN ` and any run of `[A-Z0-9 ]` ending `PRIVATE KEY-----` (PKCS#1, PKCS#8, `ENCRYPTED`, `EC`, `DSA`, `OPENSSH`), or `-----BEGIN PGP PRIVATE KEY BLOCK-----`, followed within the next 512 bytes by at least 64 base64-alphabet characters, line breaks and `Key: value` header lines ignored; or a PuTTY key, `PuTTY-User-Key-File-` followed within 4096 bytes by `Private-Lines:` and then by at least 64 base64-alphabet characters on the lines after it |
 | Slack token | left boundary, `xox` and one of `a b c d e o p r s`, `-`, then at least 20 of `[A-Za-z0-9-]`; or `xapp-` and at least 20 of `[A-Za-z0-9-]` |
 | Slack cookie | left boundary, `xoxd-`, then at least 20 of `[A-Za-z0-9%/+=_-]` |
 | Slack webhook | `hooks.slack.com/services/`, `/workflows/`, or `/triggers/`, then at least 20 of `[A-Za-z0-9/]` |
 | AWS access key | left boundary, `AKIA` or `ASIA`, exactly 16 of `[A-Z0-9]`, right boundary |
 | GitHub token | left boundary, `ghp_`, `gho_`, `ghu_`, `ghs_`, or `ghr_` and at least 36 of `[A-Za-z0-9]`; or `github_pat_` and at least 82 of `[A-Za-z0-9_]` |
-| Model-provider key | left boundary, `sk-ant-` or `sk-proj-` and at least 32 of `[A-Za-z0-9_-]`; or `sk-` and at least 40 of `[A-Za-z0-9]` |
+| Model-provider key | left boundary, `sk-`, a lowercase word `[a-z]+`, `-`, and at least 32 of `[A-Za-z0-9_-]` (`sk-ant-`, `sk-proj-`, `sk-svcacct-`, `sk-admin-`); or `sk-` and at least 40 of `[A-Za-z0-9]` |
 | JWT | left boundary, three `.`-separated segments of `[A-Za-z0-9_-]`: a header of at least 10 characters, a payload of at least 10, and a signature of at least 16; the header base64url-decodes, padding optional, to a JSON object with a string member `alg` |
 | Credential URL | `scheme://user:password@host` anywhere, with a non-empty password that is not a placeholder (below) and not, case-insensitive, `password`, `pass`, or `secret` |
 | Env secret | a line `NAME=value`, below |
 
-A private-key header with no key body after it (code that parses PEM,
-a document about key formats) does not match. A body with no header is
+A private-key header with no key body after it (code that parses PEM
+or PPK, a document about key formats) does not match. A body with no header is
 base64 text that decodes to DER, in which no pattern matches. The
 minimums sit at or below each issuer's real token length, so a longer
-future format still matches.
+future format still matches. Placeholders in vendors' own documentation
+(`xoxb-1234-…` filled out to length, a webhook URL of
+`T00000000/B00000000/XXXX…`) have the real shape and match; that cost is
+accepted, since the scanner cannot tell a sample from a token.
 
 **Env secret.** A line, after leading whitespace and an optional
 `export `, of the form `NAME = value` (spaces around `=` optional),
@@ -140,8 +146,11 @@ when a word, case-insensitive, is one of `SECRET`, `SECRETS`,
 `SECRETKEY`, `ACCESSKEY`, `PRIVATEKEY`, `AUTHTOKEN`, `CREDENTIAL`,
 `CREDENTIALS`, or `AUTH`, and no word is `PUBLIC` or `PUB`. Whole words
 keep `MONKEY`, `AUTHOR`, and `BYPASS` out. The value is taken without
-surrounding quotes; an unquoted value ends at ` #`. It matches when the
-value:
+surrounding quotes; an unquoted value ends at ` #`. `NAME` must start a
+line in at least one scanned form. In the joined `rich_text` form, the
+start of each inline element counts as a line start, so a whole code
+element (`` `API_TOKEN=…` ``) is caught inside a sentence; a `NAME=value`
+inside running prose is not. It matches when the value:
 
 - is at least 16 characters;
 - has Shannon entropy over its characters of at least 3.0 bits per
@@ -152,8 +161,10 @@ value:
   `your_`/`your-`, or consisting only of `x`, `X`, `*`, `.`, or `-`, or
   beginning `${`, `$(`, `{{`, `<`, or `%` and closing with the matching
   `}`, `)`, `}}`, `>`, or `%`;
-- is not a URL without a password, or a path beginning `/`, `./`,
-  `../`, or `~/`;
+- contains no whitespace;
+- is not a URL without a password, an ARN (beginning `arn:`), or a
+  path: beginning `/`, `./`, `../`, `~/`, `\\`, or a drive letter and
+  `:\` or `:/`;
 - is not identifier-shaped.
 
 A value is identifier-shaped when it holds only `[A-Za-z0-9._-]` and,
@@ -169,7 +180,7 @@ The implementation carries these as test tables.
 
 | Must not match | Why |
 |---|---|
-| `MAX_TOKENS=4096` | all digits, short |
+| `MAX_TOKENS=4096` | `TOKENS` is not a keyword |
 | `PASSWORD_MIN_LENGTH=12` | all digits, short |
 | `TOKEN_TTL=3600` | all digits, short |
 | `GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}` | placeholder |
@@ -184,26 +195,29 @@ The implementation carries these as test tables.
 | `CSRF_TOKEN_HEADER=X-CSRF-Token` | short (12) |
 | `PASSWORD_HASH_ALGORITHM=PBKDF2-SHA256` | short (13) |
 | `PASSWORD_HASHER=Argon2PasswordHasher` | identifier-shaped |
-| `SSH_PUBLIC_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGk3…` | `PUBLIC` in the name |
+| `SSH_PUBLIC_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGk3…` | `PUBLIC` in the name; whitespace |
 | `DATABASE_URL=postgres://app:${DB_PASSWORD}@db/app` | placeholder password |
+| `KMS_KEY_ARN=arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000` | ARN |
+| `AUTH_SCOPES=openid profile email offline_access` | whitespace |
+| `SIGNING_KEY_PATH=C:\keys\signing.pem` | path |
 
 | Must match | Through |
 |---|---|
-| `DB_PASSWORD=Xk9#mQ2v!pL7wR4z` | `#` and `!` are not identifier characters |
+| `DB_PASSWORD=Fake#Pass!1a2b3c` | `#` and `!` are not identifier characters |
 | `export API_TOKEN="a1B2c3D4e5F6g7H8i9J0"` | lone letters |
 | `SECRET_KEY='9f8e7d6c5b4a39281706f5e4d3c2b1a0'` | lone letters |
 | `session_token = Zm9vYmFyYmF6cXV4MTIz` | lone letters (`v`, `F`) |
 | `TOKEN=550e8400-e29b-41d4-a716-446655440000` | lone letter `e` |
-| `OPENAI_API_KEY=sk-proj-4fK9x2LmQ8vR7tY1wZ3nB6cD` | `KEY`; lone letters |
-| `PAYMENTS_KEY=Hq7T9xKzY2bR4mWvN8pL3cD5` | `KEY`; lone letters |
-| `DB_PASS=Tr0ub4dor&3xQ9mP` | `PASS`; `&` |
+| `OPENAI_API_KEY=sk-proj-FAKE1a2B3c4D5e6F7g8H9i0J` | `KEY`; lone letters |
+| `PAYMENTS_KEY=FAKE1a2B3c4D5e6F7g8H` | `KEY`; lone letters |
+| `DB_PASS=N0t&A&Real&Pass1` | `PASS`; `&` |
 | `DATABASE_URL=postgres://u:p@h/db` | credential URL, whatever the name |
 
 Every must-match value other than the credential URL is at least 16
-characters with entropy of at least 3.3 bits per character. Two kinds of secret are known misses: a
-passphrase of plain words (`PASSWORD=correcthorsebatterystaple`) and a
-random string with no lone letter (all lowercase, say) are both
-identifier-shaped. The env class is a net for a pasted `.env`, not a
+characters, has no whitespace, and has entropy of at least 3.3 bits per
+character. Two kinds of secret are known misses: a passphrase of
+plain words (`PASSWORD=correcthorsebatterystaple`) and a random string
+with no lone letter (all lowercase, say) are both identifier-shaped. The env class is a net for a pasted `.env`, not a
 boundary.
 
 **Decoding.** Encoded content is decoded, and the decoded bytes go
@@ -225,7 +239,11 @@ through the full pattern set and the decoders again.
   decoded output starts an inflate attempt, so gzip glued behind other
   bytes, including the bytes a glued base64 prefix of four or more
   characters decodes to, is still inflated. An attempt that fails
-  costs only what it produced.
+  (a bad header, a bad checksum, a missing trailer) still has whatever
+  it inflated before failing scanned. Each attempt counts the header
+  bytes it reads, as well as its output, against the budget, and a
+  buffer starts at most 1024 attempts, so a buffer of repeated
+  `1f 8b 08` costs bounded work.
 
 There is no precedence between decoders. A span more than one decoder
 recognizes (every hex run is also a base64 run) is decoded by each, in a
