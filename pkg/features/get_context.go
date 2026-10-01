@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 )
 
@@ -233,7 +234,8 @@ func getContextHandler(ctx context.Context, params map[string]interface{}) (*Fea
 
 func resolveChannelName(ctx context.Context, apiProvider *provider.ApiProvider, channelID string, fallback string) string {
 	if name := apiProvider.ResolveChannelName(ctx, channelID); name != "" {
-		return "#" + name
+		ch, _ := apiProvider.LookupChannel(channelID)
+		return text.ChannelLabel(name, ch.ID == channelID && ch.IsMpIM)
 	}
 	return fallback
 }
