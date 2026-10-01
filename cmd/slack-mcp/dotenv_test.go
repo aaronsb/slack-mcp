@@ -164,3 +164,17 @@ func TestLoadDotEnvMalformedFile(t *testing.T) {
 		t.Fatalf("malformed file: got nil error, set %v", env)
 	}
 }
+
+// ADR-012: the exchange-directory override comes only from the client
+// environment; a .env that sets it refuses startup.
+func TestLoadDotEnvRefusesExchangeDirOverride(t *testing.T) {
+	env := fakeEnv{}
+	path := writeDotEnv(t, "SLACK_MCP_EXCHANGE_DIR=/tmp/x\n")
+	err := loadDotEnv(path, env.lookup, env.setenv)
+	if err == nil || !strings.Contains(err.Error(), "SLACK_MCP_EXCHANGE_DIR") {
+		t.Fatalf("want refusal naming SLACK_MCP_EXCHANGE_DIR, got %v", err)
+	}
+	if len(env) != 0 {
+		t.Fatalf("refused load still set %v", env)
+	}
+}
