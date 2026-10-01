@@ -47,36 +47,45 @@ func aboutView(ctx context.Context, ap *provider.ApiProvider, person string, day
 		if i >= 3 {
 			break
 		}
-		label := labelFor(data.Person.Labels, row.Conv)
-		next := fmt.Sprintf("messages target='%s'", label)
-		if info, ok := data.Person.Labels[row.Conv]; ok && info.IsIM {
-			next = fmt.Sprintf("messages target='%s'", strings.TrimPrefix(info.Label, "DM "))
+		target, ok := readTarget(data.Person.Labels, row.Conv)
+		if !ok {
+			continue // no name to read by: omit the step rather than print an ID
 		}
 		data.Plan = append(data.Plan, readingStep{
-			Why:  fmt.Sprintf("%s — their densest observed surface (%d active days) — read for current state", label, row.Days),
-			Next: next,
+			Why:  fmt.Sprintf("%s — their densest observed surface (%d active days) — read for current state", target, row.Days),
+			Next: fmt.Sprintf("messages target='%s'", target),
 		})
 	}
 	if len(data.Person.Counterparts) > 0 {
 		top := data.Person.Counterparts[0]
-		data.Plan = append(data.Plan, readingStep{
-			Why: fmt.Sprintf("%s — top counterpart as observed (%d co-active days) — read for the working relationship",
-				data.Person.Names[top.ID], top.CoDays+top.DMDays),
-			Next: fmt.Sprintf("estate view='person' person='%s'", top.ID),
-		})
+		if handle := userHandle(ap, top.ID); handle != "" {
+			data.Plan = append(data.Plan, readingStep{
+				Why: fmt.Sprintf("%s — top counterpart as observed (%d co-active days) — read for the working relationship",
+					data.Person.Names[top.ID], top.CoDays+top.DMDays),
+				Next: fmt.Sprintf("estate view='person' person='@%s'", handle),
+			})
+		}
 	}
 
 	// The second hop: compile the top counterparts' activity and show where
 	// the seed's circle converges. Bounded: three people, two pages each.
 	if deeper && len(data.Person.Counterparts) > 0 {
-		people := []string{person}
+		// Resolved by internal ID, not through the name ladder: these IDs
+		// came from the fold, and an unswept estate cannot resolve them
+		// by name.
+		people := []string{data.Person.ID}
 		for i, row := range data.Person.Counterparts {
 			if i >= 3 {
 				break
 			}
 			people = append(people, row.ID)
 		}
-		data.Convergence = convergenceView(ctx, ap, people, days)
+		ids, labels := resolveByID(ap, people)
+		labels[data.Person.ID] = data.Person.Label
+		if data.Person.Handle != "" {
+			ids[data.Person.ID] = data.Person.Handle
+		}
+		data.Convergence = convergenceByID(ctx, ap, ids, labels, nil, days)
 	}
 	return data
 }

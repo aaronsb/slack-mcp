@@ -55,7 +55,13 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 		p := rec.Props
 		switch {
 		case p.IsIM:
-			out[id] = convInfo{Label: "DM " + p.User, IsIM: true, Counterpart: p.User}
+			label := p.User
+			if rec, ok := ap.EstateUser(p.User); ok {
+				if name := estateUserName(rec); name != "" {
+					label = "@" + name
+				}
+			}
+			out[id] = convInfo{Label: "DM " + label, IsIM: true, Counterpart: p.User}
 		case p.Name != "":
 			label := "#" + p.Name
 			if rec.Gone != nil {
@@ -67,11 +73,62 @@ func convLabels(ap *provider.ApiProvider) map[string]convInfo {
 	return out
 }
 
+const (
+	unnamedConversation = "unnamed conversation"
+	unresolvedDM        = "DM (unresolved user)"
+	externalUser        = "external user"
+)
+
+// labelFor is the one place a conversation becomes display text. It never
+// returns an internal ID: a conversation the maps do not name is
+// "unnamed conversation", and a DM whose counterpart never resolved to a
+// name (its label is still the raw user ID) is "DM (unresolved user)". The
+// graph report shares it so both surfaces label alike.
 func labelFor(labels map[string]convInfo, conv string) string {
-	if info, ok := labels[conv]; ok {
-		return info.Label
+	info, ok := labels[conv]
+	switch {
+	case !ok:
+		return unnamedConversation
+	case info.IsIM && info.Counterpart != "" && info.Label == "DM "+info.Counterpart:
+		return unresolvedDM
 	}
-	return conv
+	return info.Label
+}
+
+// readTarget is what a reading-plan step may pass to messages target=:
+// a channel name or an @name. ok is false when the conversation has only
+// an anonymised label, so the step is omitted rather than printing an ID.
+func readTarget(labels map[string]convInfo, conv string) (string, bool) {
+	info, ok := labels[conv]
+	if !ok {
+		return "", false
+	}
+	label := labelFor(labels, conv)
+	if label == unresolvedDM {
+		return "", false
+	}
+	if info.IsIM {
+		return strings.TrimPrefix(label, "DM "), true
+	}
+	return label, true
+}
+
+func estateUserName(rec estate.UserRecord) string {
+	if rec.Props.RealName != "" {
+		return rec.Props.RealName
+	}
+	return rec.Props.Name
+}
+
+// userHandle is the @handle a person can be addressed by, if one is known.
+func userHandle(ap *provider.ApiProvider, id string) string {
+	if u, ok := ap.ProvideUsersMap()[id]; ok && u.Name != "" {
+		return u.Name
+	}
+	if rec, ok := ap.EstateUser(id); ok {
+		return rec.Props.Name
+	}
+	return ""
 }
 
 func userLabel(ap *provider.ApiProvider, id string) string {
@@ -83,18 +140,16 @@ func userLabel(ap *provider.ApiProvider, id string) string {
 		return name
 	}
 	if rec, ok := ap.EstateUser(id); ok {
-		name := rec.Props.RealName
-		if name == "" {
-			name = rec.Props.Name
+		if name := estateUserName(rec); name != "" {
+			if rec.Gone != nil {
+				name += " (departed)"
+			}
+			return name
 		}
-		if rec.Gone != nil {
-			name += " (departed)"
-		}
-		return name
 	}
 	// Slack Connect externals are in neither the users map nor the estate;
-	// the ID is the only identifier held, so it renders labelled as such.
-	return "external (" + id + ")"
+	// the ID is internal, so they render by kind.
+	return externalUser
 }
 
 func sinceDay(days int) string {
@@ -478,8 +533,27 @@ type convergenceViewData struct {
 }
 
 func convergenceView(ctx context.Context, ap *provider.ApiProvider, people []string, days int) *convergenceViewData {
-	data := &convergenceViewData{Days: days}
 	ids, labels, misses := resolvePeople(ap, people)
+	return convergenceByID(ctx, ap, ids, labels, misses, days)
+}
+
+// resolveByID builds the resolved-people maps for user IDs the server
+// itself produced (a counterpart row), bypassing the name ladder: an
+// unswept estate cannot fail on its own IDs. The handle is empty when none
+// is known, which only means no search can be compiled for that person.
+func resolveByID(ap *provider.ApiProvider, userIDs []string) (map[string]string, map[string]string) {
+	ids := map[string]string{}
+	labels := map[string]string{}
+	for _, id := range userIDs {
+		ids[id] = userHandle(ap, id)
+		labels[id] = userLabel(ap, id)
+	}
+	return ids, labels
+}
+
+// convergenceByID runs the convergence view over already-resolved people.
+func convergenceByID(ctx context.Context, ap *provider.ApiProvider, ids, labels map[string]string, misses []provider.PersonResolution, days int) *convergenceViewData {
+	data := &convergenceViewData{Days: days}
 	data.Misses = misses
 	data.People = labels
 	if len(ids) < 2 {

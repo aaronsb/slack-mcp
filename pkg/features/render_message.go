@@ -118,7 +118,7 @@ func (r *messageRenderer) AuthorByID(id string) string {
 			return name
 		}
 	}
-	return "external (" + id + ")"
+	return externalUser
 }
 
 // flattenBlocks renders Block Kit content as plain text. User and channel

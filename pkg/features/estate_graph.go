@@ -67,20 +67,16 @@ func (b *graphBuilder) edge(from, to, kind string, weight int, label string) {
 // nodes and keep their own edge weights. Labels are for display only.
 func (b *graphBuilder) convNode(labels map[string]convInfo, conv string, detail ...string) string {
 	info, ok := labels[conv]
+	label := labelFor(labels, conv)
 	switch {
 	case !ok:
-		// labelFor's fallback is the raw conversation ID.
-		return b.node("conv:"+conv, "unnamed conversation", report.KindChannel, detail...)
+		return b.node("conv:"+conv, label, report.KindChannel, detail...)
 	case info.IsIM:
-		label := info.Label
-		if info.Counterpart != "" && label == "DM "+info.Counterpart {
-			label = "DM (unresolved user)"
-		}
 		return b.node("conv:"+conv, label, report.KindDM, detail...)
 	default:
-		id := b.node("conv:"+conv, info.Label, report.KindChannel, detail...)
-		if _, ok := b.byLabel[info.Label]; !ok {
-			b.byLabel[info.Label] = id
+		id := b.node("conv:"+conv, label, report.KindChannel, detail...)
+		if _, ok := b.byLabel[label]; !ok {
+			b.byLabel[label] = id
 		}
 		return id
 	}
@@ -106,7 +102,7 @@ func (b *graphBuilder) createdNode(label string, detail ...string) string {
 // personNode adds a person keyed by user ID, labelled as the view names them.
 func (b *graphBuilder) personNode(id, label string, detail ...string) string {
 	if label == "external ("+id+")" {
-		label = "external user"
+		label = externalUser
 	}
 	if label == "" {
 		label = "unresolved user"
