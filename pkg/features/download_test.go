@@ -45,6 +45,7 @@ func TestDownloadRefusesMalformedFilenameWithZeroSlackCalls(t *testing.T) {
 	for _, bad := range []string{
 		"../x", "/abs", "a:b", "CON", "NUL.txt", "name.", "name ",
 		"a\x01b", strings.Repeat("a", 256), `..\x`, "x/y",
+		"del\x7f.txt", "c1\u0085.txt", "invoice\u202Efdp.exe",
 	} {
 		out := runTool(t, features.Download, ap, map[string]any{"fileId": "F1", "filename": bad})
 		if !strings.Contains(out, "is not a bare file name") {

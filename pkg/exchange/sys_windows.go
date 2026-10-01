@@ -25,3 +25,14 @@ func linkCount(f *os.File, _ fs.FileInfo) (uint64, error) {
 	}
 	return uint64(info.NumberOfLinks), nil
 }
+
+// linkCountByName opens the name through the root to read its link count,
+// for the missing-name hint; Windows Stat does not carry it.
+func linkCountByName(root *os.Root, name string, fi fs.FileInfo) (uint64, error) {
+	f, err := root.Open(name)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	return linkCount(f, fi)
+}

@@ -55,8 +55,8 @@ func ValidateName(name string) error {
 		return refuse("it is not a local name")
 	}
 	for _, r := range name {
-		if r < 0x20 {
-			return refuse("it contains a control character")
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return refuse(fmt.Sprintf("it contains a control or format character (%U)", r))
 		}
 		if strings.ContainsRune(refusedChars, r) {
 			return refuse(fmt.Sprintf("it contains %q (refused: : < > \" | ? *)", r))
@@ -69,6 +69,13 @@ func ValidateName(name string) error {
 		return refuse("its stem is a Windows device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, ...)")
 	}
 	return nil
+}
+
+// refusedRune reports whether r is refused anywhere in a bare name: one of
+// refusedChars, a control character (C0, DEL, C1), or a format character
+// (Cf, including bidi controls such as U+202E that disguise an extension).
+func refusedRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || strings.ContainsRune(refusedChars, r)
 }
 
 // isDeviceStem reports whether the part of name before its first dot, with
@@ -96,18 +103,17 @@ func SplitExt(name string) (stem, ext string) {
 }
 
 // Sanitize turns a Slack-supplied file name into a valid bare name: each
-// refused character, control character, or Unicode format character becomes '_', trailing dots and spaces are dropped, a
-// device-name stem gets a leading '_', an over-long name is truncated at a
-// rune boundary keeping its extension, and an empty result falls back to
-// fallback (the file ID).
+// refused, control, format (Cf), or line/paragraph separator character
+// becomes '_', trailing dots and spaces are dropped, a device-name stem gets
+// a leading '_', an over-long name is truncated at a rune boundary keeping
+// its extension, and an empty result falls back to fallback (the file ID).
 func Sanitize(name, fallback string) string {
 	name = strings.ToValidUTF8(name, "_")
 	var b strings.Builder
 	for _, r := range name {
-		// Beyond the bare-name rule, Slack names also lose control
-		// characters (C0, DEL, C1) and format characters (Cf, including
-		// bidi overrides such as U+202E that disguise an extension).
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || strings.ContainsRune(refusedChars, r) {
+		// Beyond the bare-name rule, Slack names also lose line and
+		// paragraph separators (Zl, Zp).
+		if refusedRune(r) || unicode.In(r, unicode.Zl, unicode.Zp) {
 			b.WriteByte('_')
 			continue
 		}

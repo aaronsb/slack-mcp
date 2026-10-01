@@ -16,3 +16,5 @@ func verifyRoot(p string, _ *os.Root, _ fs.FileInfo) error {
 }
 
 func linkCount(*os.File, fs.FileInfo) (uint64, error) { return 0, os.ErrInvalid }
+
+func linkCountByName(*os.Root, string, fs.FileInfo) (uint64, error) { return 0, os.ErrInvalid }

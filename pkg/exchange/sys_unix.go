@@ -48,3 +48,9 @@ func linkCount(_ *os.File, fi fs.FileInfo) (uint64, error) {
 	}
 	return uint64(sys.Nlink), nil
 }
+
+// linkCountByName reports the link count of a name in the root, for the
+// missing-name hint, from its Stat.
+func linkCountByName(_ *os.Root, _ string, fi fs.FileInfo) (uint64, error) {
+	return linkCount(nil, fi)
+}

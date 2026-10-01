@@ -17,6 +17,7 @@ func TestValidateNameRefuses(t *testing.T) {
 		"name.", "name ", "name..",
 		"a\x00b", "a\x01b", "tab\there", "line\nbreak", "\x1f",
 		"a<b", "a>b", `a"b`, "a|b", "a?b", "a*b",
+		"del\x7f.txt", "c1\u0085.txt", "c1\u009f", "invoice\u202Efdp.exe", "zw\u200Bsp.txt", "bom\uFEFF.txt",
 		strings.Repeat("a", 256),
 		strings.Repeat("é", 128), // 256 bytes
 	} {
@@ -58,6 +59,7 @@ func TestSanitize(t *testing.T) {
 		{"a\u200Db.txt", "a_b.txt"},
 		{"x\u0085y\u009F.txt", "x_y_.txt"},
 		{"del\x7f.txt", "del_.txt"},
+		{"a\u2028b\u2029.txt", "a_b_.txt"},
 	} {
 		if got := Sanitize(tc.in, "F123"); got != tc.want {
 			t.Errorf("Sanitize(%q) = %q, want %q", tc.in, got, tc.want)

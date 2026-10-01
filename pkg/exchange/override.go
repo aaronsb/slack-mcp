@@ -40,8 +40,11 @@ func checkOverride(p string) error {
 		return refuse("cannot be checked: the config directory is not absolute (check XDG_CONFIG_HOME)")
 	}
 
-	if isDefaultPath(ov) {
+	switch defaultPathMatch(ov) {
+	case defaultPlain:
 		return nil
+	case defaultLinked:
+		return refuse("names the default exchange path, which passes through a symlink, so it can't be named as an override; unset " + EnvOverride + " to use it")
 	}
 	if sameFile(home, ov) {
 		return refuse("is your home directory")
@@ -85,23 +88,35 @@ func checkOverride(p string) error {
 	return nil
 }
 
-// isDefaultPath reports whether the override is the default exchange path,
-// the directory the server would use anyway. ADR-012 carves it out of the
-// data-directory rule, and this carve-out covers the whole guard since the
-// default sits under ~/.local/share. It holds only when the default path has
-// no symlink in any component and is a plain directory: a default path that
-// is, or passes through, a link to ~/.ssh must not exempt an override that
-// names ~/.ssh.
-func isDefaultPath(ov fs.FileInfo) bool {
+type defaultMatch int
+
+const (
+	defaultOther  defaultMatch = iota // the override is not the default path
+	defaultPlain                      // it is, and no component is a link
+	defaultLinked                     // it is, reached through a link
+)
+
+// defaultPathMatch reports whether the override is the default exchange
+// path, the directory the server would use anyway. ADR-012 carves it out of
+// the data-directory rule; the carve-out covers the whole guard since the
+// default sits under ~/.local/share. It is exempt only when no component of
+// the default path is a symlink or reparse point (checked with Lstat per
+// component, so case and 8.3 spellings do not matter) and the last is a
+// plain directory: a default path that is, or passes through, a link to
+// ~/.ssh must not exempt an override that names ~/.ssh.
+func defaultPathMatch(ov fs.FileInfo) defaultMatch {
 	def := filepath.Clean(DefaultPath())
-	if r, err := filepath.EvalSymlinks(def); err != nil || r != def {
-		return false
-	}
 	lst, err := os.Lstat(def)
-	if err != nil || !lst.IsDir() || lst.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
-		return false
+	if err != nil || !lst.IsDir() || lst.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 || !os.SameFile(lst, ov) {
+		return defaultOther
 	}
-	return os.SameFile(lst, ov)
+	for _, c := range chain(def) {
+		ci, err := os.Lstat(c)
+		if err != nil || ci.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+			return defaultLinked
+		}
+	}
+	return defaultPlain
 }
 
 // homeDir is $HOME (or the platform equivalent), or "" when unknown.

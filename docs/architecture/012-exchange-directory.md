@@ -374,6 +374,9 @@ client's job, as above. The operator may revisit this.
   disables the hard-link rule on them.
 - On macOS an ACL can grant other users access that the mode bits do
   not show, so a 0700 directory with an ACL entry passes the mode check.
+- A bind mount or a directory hard link that root places onto the
+  exchange path looks like a plain directory to these checks. Root is
+  outside the threat model.
 - On Windows the override guard is only the refusal list. It misses
   `%APPDATA%`, including the Startup folder, and folders OneDrive has
   redirected. OneDrive placeholder files surface as `ModeIrregular` and

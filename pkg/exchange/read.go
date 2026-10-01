@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -40,7 +41,14 @@ func (f *File) ReadAll() ([]byte, error) {
 // readBounded reads at most limit+1 bytes from r, so memory is bounded
 // whatever r holds, and refuses anything past limit.
 func readBounded(r io.Reader, limit int64) ([]byte, error) {
-	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if limit < 0 {
+		return nil, fmt.Errorf("negative read limit %d", limit)
+	}
+	n := limit
+	if n < math.MaxInt64 {
+		n++
+	}
+	b, err := io.ReadAll(io.LimitReader(r, n))
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +97,9 @@ func (e *NotFoundError) Error() string {
 // limit bytes. A missing name returns a *NotFoundError listing the names
 // that match it; a malformed one a *NameError. The caller closes the File.
 func (d *Dir) Open(name string, limit int64) (*File, error) {
+	if limit < 0 {
+		return nil, fmt.Errorf("negative read limit %d", limit)
+	}
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
@@ -137,8 +148,8 @@ func (d *Dir) ReadFile(name string, limit int64) ([]byte, error) {
 }
 
 // notFound builds the miss answer: entries that are regular files or
-// symlinks (as ReadDir reports them, unfollowed; a symlink only when the
-// root can follow it) with valid bare names,
+// symlinks (as ReadDir reports them, unfollowed) with valid bare names that
+// Open would accept (regular target, one link),
 // matching by stem under simple case folding, sorted by fold key then by
 // name, capped at MaxHintNames.
 func (d *Dir) notFound(name string) *NotFoundError {
@@ -169,12 +180,15 @@ func (d *Dir) notFound(name string) *NotFoundError {
 		if ValidateName(n) != nil {
 			continue
 		}
-		// A symlink that is dangling or leaves the root cannot be read,
-		// so it is not offered.
-		if t&fs.ModeSymlink != 0 {
-			if _, err := d.root.Stat(n); err != nil {
-				continue
-			}
+		// Only names Open would accept are offered: a symlink that is
+		// dangling, leaves the root, or reaches a non-regular file is
+		// left out, and so is a file with more than one link.
+		fi, err := d.root.Stat(n)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		if links, err := linkCountByName(d.root, n, fi); err != nil || links != 1 {
+			continue
 		}
 		stem, _ := SplitExt(n)
 		if strings.Contains(FoldKey(n), reqStemKey) || strings.Contains(reqKey, FoldKey(stem)) {

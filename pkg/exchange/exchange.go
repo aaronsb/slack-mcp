@@ -205,7 +205,7 @@ func (d *Dir) Create(name string) (*CreateResult, error) {
 	if free := d.freeName(name); free != "" {
 		msg += fmt.Sprintf("; pass filename=%q", free)
 	} else {
-		msg += "; pass a different filename="
+		msg += "; pass a different name with filename="
 	}
 	return nil, errors.New(msg)
 }

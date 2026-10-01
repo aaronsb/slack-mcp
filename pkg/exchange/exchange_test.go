@@ -3,6 +3,7 @@ package exchange
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -408,8 +409,8 @@ func TestDefaultPathExemptionRefusesASymlinkedAncestor(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	t.Setenv(EnvOverride, filepath.Join(hidden, "exchange"))
-	if _, err := Open(); err == nil {
-		t.Fatalf("override reached through a symlinked data directory was exempted")
+	if _, err := Open(); err == nil || !strings.Contains(err.Error(), "passes through a symlink, so it can't be named as an override; unset SLACK_MCP_EXCHANGE_DIR") {
+		t.Fatalf("override reached through a symlinked data directory: %v", err)
 	}
 }
 
@@ -495,5 +496,50 @@ func TestDanglingSymlinkIsReportedAndNotOffered(t *testing.T) {
 	var nf *NotFoundError
 	if _, err := d.Open("gone.pdf", 100); !errors.As(err, &nf) || fmt.Sprint(nf.Matches) != "[gonex.txt]" {
 		t.Fatalf("hint offered the dangling link: %v", err)
+	}
+}
+
+func TestReadLimitBounds(t *testing.T) {
+	isolate(t)
+	d := mustOpen(t)
+	writeFile(t, d, "a.txt", "abc")
+	if _, err := d.Open("a.txt", -1); err == nil || !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("negative limit: %v", err)
+	}
+	if _, err := d.ReadFile("a.txt", -1); err == nil {
+		t.Fatalf("ReadFile accepted a negative limit")
+	}
+	b, err := d.ReadFile("a.txt", math.MaxInt64)
+	if err != nil || string(b) != "abc" {
+		t.Fatalf("MaxInt64 limit: %q, %v", b, err)
+	}
+	if b, err := readBounded(strings.NewReader("xyz"), math.MaxInt64); err != nil || string(b) != "xyz" {
+		t.Fatalf("readBounded MaxInt64: %q, %v", b, err)
+	}
+	if _, err := readBounded(strings.NewReader("xyz"), -1); err == nil {
+		t.Fatalf("readBounded accepted a negative limit")
+	}
+}
+
+func TestMissingNameHintLeavesOutWhatOpenRefuses(t *testing.T) {
+	home := isolate(t)
+	d := mustOpen(t)
+	writeFile(t, d, "plan.txt", "x")
+	if err := os.Mkdir(filepath.Join(d.Path(), "plan-dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("plan-dir", filepath.Join(d.Path(), "plan-dirlink")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	other := filepath.Join(home, "other")
+	if err := os.WriteFile(other, []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(other, filepath.Join(d.Path(), "plan-hard.txt")); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	var nf *NotFoundError
+	if _, err := d.Open("plan.pdf", 100); !errors.As(err, &nf) || fmt.Sprint(nf.Matches) != "[plan.txt]" || nf.Total != 1 {
+		t.Fatalf("hint offered names Open refuses: %v", err)
 	}
 }
