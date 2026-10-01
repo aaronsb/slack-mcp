@@ -254,6 +254,10 @@ var Say = &Feature{
 }
 
 func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureResult, error) {
+	if refusal := preWriteLocal(ctx); refusal != nil {
+		return refusal, nil
+	}
+
 	to, _ := params["to"].(string)
 	text, _ := params["text"].(string)
 	emoji, _ := params["emoji"].(string)

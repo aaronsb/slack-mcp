@@ -172,13 +172,13 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 		boot: func() *slack.Client {
 			if cfg.baseURL != "" {
 				return slack.New(token,
-					withHTTPClientOption(cookie),
+					withHTTPClientOption(cookie, cfg.baseURL),
 					slack.OptionAPIURL(cfg.baseURL+"/api/"),
 				)
 			}
 
 			api := slack.New(token,
-				withHTTPClientOption(cookie),
+				withHTTPClientOption(cookie, cfg.baseURL),
 			)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -194,7 +194,7 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 			log.Printf("Authenticated as: %s\n", res)
 
 			api = slack.New(token,
-				withHTTPClientOption(cookie),
+				withHTTPClientOption(cookie, cfg.baseURL),
 				withTeamEndpointOption(res.URL),
 			)
 
@@ -1118,7 +1118,7 @@ func LooksLikeChannelID(s string) bool {
 	return digits
 }
 
-func withHTTPClientOption(cookie string) func(c *slack.Client) {
+func withHTTPClientOption(cookie, baseURL string) func(c *slack.Client) {
 	return func(c *slack.Client) {
 		var proxy func(*http.Request) (*url.URL, error)
 		if proxyURL := os.Getenv("SLACK_MCP_PROXY"); proxyURL != "" {
@@ -1168,6 +1168,10 @@ func withHTTPClientOption(cookie string) func(c *slack.Client) {
 				"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
 				cookie,
 			),
+			// The transport sets the d cookie on every request, redirect
+			// hops included, so a hop may go only where a first request
+			// may: a Slack host, or the WithBaseURL host.
+			CheckRedirect: redirectPolicy(baseURL),
 		}
 
 		slack.OptionHTTPClient(client)(c)
@@ -1192,28 +1196,30 @@ func (ap *ApiProvider) ResolveChannelNameCached(id string) string {
 	return ""
 }
 
+// CachedUserHandle returns a user's handle from the cache alone, or "".
+func (ap *ApiProvider) CachedUserHandle(id string) string {
+	ap.usersMutex.RLock()
+	defer ap.usersMutex.RUnlock()
+	return ap.users[id].Name
+}
+
 // CheckUploadURL refuses an upload URL that would carry the session
 // credentials anywhere but Slack. slack-go's UploadToURL sends the bearer
 // token, and this provider's transport the d cookie, to whatever URL
 // files.getUploadURLExternal returned, without checking it. The URL must be
-// https on slack.com or a subdomain of it; a provider built WithBaseURL also
-// accepts its own host, scheme and port included, so a test fake can stand
-// in for Slack.
+// https on slack.com or a subdomain of it (CheckSlackURL); a provider built
+// WithBaseURL also accepts its own scheme, host and port, byte for byte, so
+// a test fake can stand in for Slack.
 func (ap *ApiProvider) CheckUploadURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("invalid upload URL: %w", err)
 	}
-	if ap.baseURL != "" {
-		if b, berr := url.Parse(ap.baseURL); berr == nil && u.Scheme == b.Scheme && strings.EqualFold(u.Host, b.Host) {
-			return nil
-		}
+	if isBaseURLHost(ap.baseURL, u) {
+		return nil
 	}
-	if u.Scheme != "https" {
-		return fmt.Errorf("upload URL must be https, got %q", u.Scheme)
-	}
-	if !IsSlackHost(u.Hostname()) {
-		return fmt.Errorf("refusing to upload to non-Slack host %q", u.Hostname())
+	if err := CheckSlackURL(u); err != nil {
+		return fmt.Errorf("refusing upload address: %w", err)
 	}
 	return nil
 }

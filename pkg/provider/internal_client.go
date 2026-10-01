@@ -301,12 +301,8 @@ func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.
 	if err != nil {
 		return 0, fmt.Errorf("invalid file URL: %w", err)
 	}
-	if u.Scheme != "https" {
-		return 0, fmt.Errorf("file URL must be https, got %q", u.Scheme)
-	}
-	host := u.Hostname()
-	if !IsSlackHost(host) {
-		return 0, fmt.Errorf("refusing to download from non-Slack host %q", host)
+	if err := CheckSlackURL(u); err != nil {
+		return 0, fmt.Errorf("refusing to download: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fileURL, nil)
@@ -324,6 +320,10 @@ func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")
+			}
+			// The Cookie header set above is copied to every hop.
+			if err := CheckSlackURL(req.URL); err != nil {
+				return fmt.Errorf("refusing redirect: %w", err)
 			}
 			return nil
 		},
@@ -353,17 +353,6 @@ func (c *InternalClient) DownloadFile(ctx context.Context, fileURL string, w io.
 // MaxUploadBytes caps one file that say files= uploads, matching
 // MaxDownloadBytes.
 const MaxUploadBytes = 500 << 20
-
-// IsSlackHost reports whether host is slack.com or a subdomain of it, the
-// only hosts the session credentials are sent to.
-func IsSlackHost(host string) bool {
-	host = strings.ToLower(host)
-	return host == "slack.com" || isSlackSubdomain(host)
-}
-
-func isSlackSubdomain(host string) bool {
-	return len(host) > len(".slack.com") && host[len(host)-len(".slack.com"):] == ".slack.com"
-}
 
 // PostInternalAPI calls internal endpoints with POST method
 func (c *InternalClient) PostInternalAPI(ctx context.Context, endpoint string, payload interface{}, result interface{}) error {

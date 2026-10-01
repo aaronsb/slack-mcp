@@ -20,6 +20,9 @@ Amendment (2026-09-30, follow-up): the missing-name answer's order,
 tie-break, cap (20), candidate set, and count line are fixed under
 Reads.
 
+Amendment (2026-10-01): one `say files=` call reads at most 1 GiB in all
+(500 MiB per file), checked from the handles' `Stat` before any read.
+
 ## Context
 
 Three features move bytes between the local disk and Slack. `download`

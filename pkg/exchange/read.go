@@ -31,16 +31,34 @@ type File struct {
 // ReadAll reads the file, bounded by the limit it was opened with. A file
 // that grew past the limit after the check is refused.
 func (f *File) ReadAll() ([]byte, error) {
-	b, err := readBounded(f.File, f.limit)
+	return f.readUpTo(f.limit)
+}
+
+// ReadStated reads the file, bounded by the size its handle's Stat
+// reported at Open. A file that grew since is refused, so a caller that
+// checked sizes (a total across several files, say) reads no more than it
+// checked.
+func (f *File) ReadStated() ([]byte, error) {
+	return f.readUpTo(f.Size)
+}
+
+func (f *File) readUpTo(limit int64) ([]byte, error) {
+	b, err := readBounded(f.File, limit, f.Size)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", f.Name, err)
 	}
 	return b, nil
 }
 
+// readGrowStep is how much a read grows its buffer once the size hint is
+// exceeded.
+const readGrowStep = 64 << 10
+
 // readBounded reads at most limit+1 bytes from r, so memory is bounded
-// whatever r holds, and refuses anything past limit.
-func readBounded(r io.Reader, limit int64) ([]byte, error) {
+// whatever r holds, and refuses anything past limit. The buffer is sized
+// from hint (capped at limit) plus one byte for the end-of-file probe, so
+// a file of the stated size is read without a growing copy.
+func readBounded(r io.Reader, limit, hint int64) ([]byte, error) {
 	if limit < 0 {
 		return nil, fmt.Errorf("negative read limit %d", limit)
 	}
@@ -48,14 +66,32 @@ func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	if n < math.MaxInt64 {
 		n++
 	}
-	b, err := io.ReadAll(io.LimitReader(r, n))
-	if err != nil {
-		return nil, err
+	if hint < 0 {
+		hint = 0
 	}
-	if int64(len(b)) > limit {
+	if hint > limit {
+		hint = limit
+	}
+	buf := make([]byte, int(hint)+1)
+	lr := io.LimitReader(r, n)
+	total := 0
+	for {
+		if total == len(buf) {
+			buf = append(buf, make([]byte, readGrowStep)...)
+		}
+		m, err := lr.Read(buf[total:])
+		total += m
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if int64(total) > limit {
 		return nil, fmt.Errorf("grew past the %d byte limit while being read", limit)
 	}
-	return b, nil
+	return buf[:total], nil
 }
 
 // NotFoundError is a missing name. Error() is the full answer: the count

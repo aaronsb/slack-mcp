@@ -455,7 +455,7 @@ func (r *infinite) Read(p []byte) (int, error) {
 
 func TestReadIsBoundedInMemory(t *testing.T) {
 	r := &infinite{}
-	_, err := readBounded(r, 1024)
+	_, err := readBounded(r, 1024, 0)
 	if err == nil || !strings.Contains(err.Error(), "1024 byte limit") {
 		t.Fatalf("unbounded source: %v", err)
 	}
@@ -480,6 +480,38 @@ func TestFileGrowingAfterTheCheckIsRefused(t *testing.T) {
 	}
 	if _, err := f.ReadAll(); err == nil || !strings.Contains(err.Error(), "grew past the 5 byte limit") {
 		t.Fatalf("grown file: %v", err)
+	}
+}
+
+func TestReadStatedIsBoundedByTheCheckedSize(t *testing.T) {
+	isolate(t)
+	d := mustOpen(t)
+	writeFile(t, d, "grow.txt", "abc")
+	f, err := d.Open("grow.txt", 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := os.WriteFile(filepath.Join(d.Path(), "grow.txt"), []byte("abcd"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ReadStated(); err == nil || !strings.Contains(err.Error(), "grew past the 3 byte limit") {
+		t.Fatalf("file grown past its stated size: %v", err)
+	}
+}
+
+func TestReadIsSizedFromTheHint(t *testing.T) {
+	src := strings.Repeat("x", 100000)
+	b, err := readBounded(strings.NewReader(src), math.MaxInt64, int64(len(src)))
+	if err != nil || len(b) != len(src) {
+		t.Fatalf("read %d bytes, %v", len(b), err)
+	}
+	if cap(b) != len(src)+1 {
+		t.Fatalf("buffer grew: cap %d for a %d byte hint", cap(b), len(src))
+	}
+	// A wrong hint still reads everything, within the limit.
+	if b, err := readBounded(strings.NewReader(src), math.MaxInt64, 10); err != nil || len(b) != len(src) {
+		t.Fatalf("short hint: %d bytes, %v", len(b), err)
 	}
 }
 
@@ -513,10 +545,10 @@ func TestReadLimitBounds(t *testing.T) {
 	if err != nil || string(b) != "abc" {
 		t.Fatalf("MaxInt64 limit: %q, %v", b, err)
 	}
-	if b, err := readBounded(strings.NewReader("xyz"), math.MaxInt64); err != nil || string(b) != "xyz" {
+	if b, err := readBounded(strings.NewReader("xyz"), math.MaxInt64, 0); err != nil || string(b) != "xyz" {
 		t.Fatalf("readBounded MaxInt64: %q, %v", b, err)
 	}
-	if _, err := readBounded(strings.NewReader("xyz"), -1); err == nil {
+	if _, err := readBounded(strings.NewReader("xyz"), -1, 0); err == nil {
 		t.Fatalf("readBounded accepted a negative limit")
 	}
 }

@@ -43,6 +43,15 @@ import (
 // to the default fixture.
 type Handler func(r *http.Request) any
 
+// Response is what a Handler returns to send something other than a JSON
+// body: a status, headers, and a body exactly as given. Use it for a
+// redirect, an HTTP error, or a malformed body.
+type Response struct {
+	Status int
+	Header map[string]string
+	Body   string
+}
+
 // Server is a fake Slack host.
 type Server struct {
 	*httptest.Server
@@ -120,6 +129,17 @@ func (s *Server) Calls(method string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls[method]
+}
+
+// TotalCalls reports how many requests the server received, on every path.
+func (s *Server) TotalCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, c := range s.calls {
+		n += c
+	}
+	return n
 }
 
 // ResetCalls zeroes the call counters, so a test can measure one phase in
@@ -232,6 +252,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	var body any
 	if h != nil {
 		body = h(r)
+	}
+	if raw, ok := body.(Response); ok {
+		for k, v := range raw.Header {
+			w.Header().Set(k, v)
+		}
+		status := raw.Status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(raw.Body))
+		return
 	}
 	if body == nil {
 		body = defaultFixture(method, s.URL, channels, users)

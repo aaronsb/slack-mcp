@@ -66,8 +66,10 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 		}, nil
 	}
 
-	// Route the target by prefix; a person resolves only exactly (ADR-005)
-	channelID, terr := resolveTarget(ctx, apiProvider, channel, provider.WritePolicy, "to")
+	// Route the target by prefix; a person resolves only exactly (ADR-005).
+	// Nothing is opened yet: a person with no DM gets one only after
+	// preSend passes.
+	dest, terr := resolveWriteDestination(ctx, apiProvider, channel, "to")
 	if terr != nil {
 		return terr.result(), nil
 	}
@@ -76,9 +78,19 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	// fallback (#98): the block is how Slack's own composer sends a typed
 	// message; the text carries notifications, search, and old clients.
 	fallback := text.NormalizeMrkdwn(message)
+	out := &outbound{Thread: threadTs, Broadcast: broadcast, Text: message, Fallback: fallback}
 	var blocks []slack.Block
 	if rt := text.ToRichText(message); len(rt.Elements) > 0 {
 		blocks = []slack.Block{rt}
+		out.RichText = rt
+	}
+	if refusal := preSend(ctx, apiProvider, dest, out); refusal != nil {
+		return refusal, nil
+	}
+
+	channelID, terr := openDestination(ctx, apiProvider, dest)
+	if terr != nil {
+		return terr.result(), nil
 	}
 
 	post := func(withBlocks bool) (string, string, error) {

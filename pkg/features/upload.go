@@ -21,68 +21,46 @@ import (
 // say files= (#92): attach files from the exchange directory (ADR-012) to
 // one message. The order is fixed:
 //
-//  1. parameter checks (sayHandler) and every file named, opened, checked
-//     on its handle, and read once into memory (readUploadFiles);
-//  2. preSendUpload, the one boundary between local checks and Slack;
-//  3. the destination resolved under the write policy;
-//  4. per file, files.getUploadURLExternal, a host check on the URL it
-//     returns, and a multipart POST of the bytes read in step 1;
-//  5. one files.completeUploadExternal carrying every file, so N files
+//  1. preWriteLocal and the parameter checks (sayHandler);
+//  2. every file named, opened, and checked on its handle, then read once
+//     into memory (readUploadFiles);
+//  3. the destination located without any Slack call
+//     (resolveWriteDestination);
+//  4. preSend, with the destination and every byte that will be sent;
+//  5. openDestination, which opens a DM only now;
+//  6. per file, files.getUploadURLExternal, a host check on the URL it
+//     returns, and a multipart POST of the bytes read in step 2;
+//  7. one files.completeUploadExternal carrying every file, so N files
 //     arrive as one message;
-//  6. a bounded files.info poll for the message ts.
+//  8. a bounded files.info poll for the message ts.
 //
-// Steps 1 and 2 make no Slack call, so any refusal there sends nothing,
-// the text included.
+// Steps 1 to 4 make no Slack call, so any refusal there sends nothing, the
+// text included.
 
 // maxUploadFiles matches Slack's composer: one message carries at most 10
 // files.
 const maxUploadFiles = 10
 
-// maxUploadBytes caps one file. A variable so tests can lower it.
-var maxUploadBytes int64 = provider.MaxUploadBytes
+// maxUploadBytes caps one file and maxUploadTotalBytes one call, since every
+// file is held in memory until the upload ends. Variables so tests can
+// lower them.
+var (
+	maxUploadBytes      int64 = provider.MaxUploadBytes
+	maxUploadTotalBytes int64 = 1 << 30
+)
 
 // shareTSDelays are the waits before each files.info poll for the message
 // ts, which Slack fills in asynchronously: three tries, 1.5s in all. A
-// variable so tests need not wait.
+// variable so tests need not wait. Each poll is bounded by shareTSTimeout.
 var shareTSDelays = []time.Duration{300 * time.Millisecond, 500 * time.Millisecond, 700 * time.Millisecond}
 
-// uploadFile is one file as read from the exchange directory. Data is the
-// only copy of the bytes: what any pre-send check reads is what is sent.
-type uploadFile struct {
-	Name string
-	Type string
-	Data []byte
-}
+const shareTSTimeout = 2 * time.Second
 
-// outboundUpload is everything a say files= call will send, assembled
-// before any Slack call.
-type outboundUpload struct {
-	// To is the destination as the caller named it, unresolved: nothing
-	// has looked it up or opened a DM for it yet.
-	To string
-	// Thread is the thread ts, or empty for a top-level message.
-	Thread string
-	// Text is the comment as the caller supplied it; Comment is the
-	// initial_comment as it will be sent (NormalizeMrkdwn). Both are empty
-	// for files alone.
-	Text    string
-	Comment string
-	// Files are the files in the order named, bytes included.
-	Files []uploadFile
-}
-
-// preSendUpload runs after every file is validated and read and before the
-// first Slack call. A non-nil result refuses the call and is returned
-// as-is; nothing has been sent. The outbound-safety layer (ADR-013: strike
-// lock, quarantine, scanner, approval gate) is inserted here. A variable so
-// tests can stand in for it.
-var preSendUpload = func(ctx context.Context, ap *provider.ApiProvider, up *outboundUpload) *FeatureResult {
-	return nil
-}
-
-// parseFilesParam reads say's files= parameter: a non-empty array of bare
-// names, at most maxUploadFiles. The error is the caller-facing refusal.
+// parseFilesParam reads say's files= parameter: a non-empty array of
+// distinct bare names, at most maxUploadFiles. The error is the
+// caller-facing refusal.
 func parseFilesParam(v interface{}) ([]string, error) {
+	notNames := errors.New("files must be an array of bare file names, such as files=['report.pdf']")
 	var names []string
 	switch list := v.(type) {
 	case []string:
@@ -91,12 +69,12 @@ func parseFilesParam(v interface{}) ([]string, error) {
 		for _, item := range list {
 			s, ok := item.(string)
 			if !ok {
-				return nil, errors.New("files must be an array of bare file names, such as files=['report.pdf']")
+				return nil, notNames
 			}
 			names = append(names, s)
 		}
 	default:
-		return nil, errors.New("files must be an array of bare file names, such as files=['report.pdf']")
+		return nil, notNames
 	}
 	if len(names) == 0 {
 		return nil, errors.New("files is empty: name at least one file in the exchange directory, or drop files= to post text alone")
@@ -104,13 +82,22 @@ func parseFilesParam(v interface{}) ([]string, error) {
 	if len(names) > maxUploadFiles {
 		return nil, fmt.Errorf("files names %d files; one message carries at most %d. Split them across messages", len(names), maxUploadFiles)
 	}
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		if seen[n] {
+			return nil, fmt.Errorf("files names %s more than once; name each file once", n)
+		}
+		seen[n] = true
+	}
 	return names, nil
 }
 
-// readUploadFiles opens and reads every named file from the exchange
-// directory. It checks them all before failing, so one answer names every
-// problem; a missing name carries the exchange package's matching-names
-// hint. No Slack call is made.
+// readUploadFiles reads every named file from the exchange directory in two
+// passes. The first opens and checks each name, holding the handles, and
+// collects every problem, so one answer names them all; a missing name
+// carries the exchange package's matching-names hint. Only when every file
+// passes, and their sizes together fit maxUploadTotalBytes, does the second
+// pass read each held handle, bounded by its checked size. No Slack call.
 func readUploadFiles(names []string) ([]uploadFile, []string, error) {
 	dir, err := exchange.Open()
 	if err != nil {
@@ -118,21 +105,51 @@ func readUploadFiles(names []string) ([]uploadFile, []string, error) {
 	}
 	defer dir.Close()
 
-	files := make([]uploadFile, 0, len(names))
+	held := make([]*exchange.File, 0, len(names))
+	defer func() {
+		for _, f := range held {
+			f.Close()
+		}
+	}()
 	var problems []string
+	var total int64
 	for _, name := range names {
-		data, err := dir.ReadFile(name, maxUploadBytes)
+		f, err := dir.Open(name, maxUploadBytes)
 		if err != nil {
 			problems = append(problems, err.Error())
 			continue
 		}
-		if len(data) == 0 {
+		held = append(held, f)
+		if f.Size == 0 {
 			problems = append(problems, fmt.Sprintf("%s is empty; Slack does not accept an empty file", name))
+		}
+		total += f.Size
+	}
+	if len(problems) > 0 {
+		return nil, problems, nil
+	}
+	if total > maxUploadTotalBytes {
+		var b strings.Builder
+		fmt.Fprintf(&b, "The files total %s (%d bytes), over the %s limit for one say:", humanSize(total), total, humanSize(maxUploadTotalBytes))
+		for _, f := range held {
+			fmt.Fprintf(&b, "\n- %s: %s (%d bytes)", f.Name, humanSize(f.Size), f.Size)
+		}
+		return nil, []string{b.String()}, nil
+	}
+
+	files := make([]uploadFile, 0, len(held))
+	for _, f := range held {
+		data, err := f.ReadStated()
+		if err != nil {
+			problems = append(problems, err.Error())
 			continue
 		}
-		files = append(files, uploadFile{Name: name, Type: fileType(name, data), Data: data})
+		files = append(files, uploadFile{Name: f.Name, Type: fileType(f.Name, data), Data: data})
 	}
-	return files, problems, nil
+	if len(problems) > 0 {
+		return nil, problems, nil
+	}
+	return files, nil, nil
 }
 
 // fileType is the media type shown for a file: by extension, else sniffed
@@ -169,54 +186,57 @@ func sayFilesHandler(ctx context.Context, params map[string]interface{}, names [
 	}
 	if len(problems) > 0 {
 		head := fmt.Sprintf("%d of %d files could not be attached:", len(problems), len(names))
-		if len(names) == 1 {
-			head = "The file could not be attached:"
+		if len(names) == 1 || len(problems) == 1 && strings.HasPrefix(problems[0], "The files total") {
+			head = "The files could not be attached:"
 		}
 		return fail(head+"\n\n"+strings.Join(problems, "\n\n"),
 			nothingSent+" files= takes bare names inside the exchange directory ("+exchange.Locate().Path+"); copy a file in with your own file tools, then retry.")
-	}
-
-	up := &outboundUpload{To: to, Thread: thread, Files: files}
-	if strings.TrimSpace(supplied) != "" {
-		up.Text = supplied
-		up.Comment = text.NormalizeMrkdwn(supplied)
-	}
-	if refusal := preSendUpload(ctx, apiProvider, up); refusal != nil {
-		return refusal, nil
 	}
 
 	api, err := apiProvider.Provide()
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to connect to Slack: %v", err), nothingSent)
 	}
-	channelID, terr := resolveTarget(ctx, apiProvider, to, provider.WritePolicy, "to")
+	dest, terr := resolveWriteDestination(ctx, apiProvider, to, "to")
 	if terr != nil {
 		return terr.result(), nil
 	}
 
-	ids, err := shareFiles(ctx, apiProvider, api, channelID, up)
+	out := &outbound{Thread: thread, Files: files}
+	if strings.TrimSpace(supplied) != "" {
+		out.Text = supplied
+		out.Fallback = text.NormalizeMrkdwn(supplied)
+	}
+	if refusal := preSend(ctx, apiProvider, dest, out); refusal != nil {
+		return refusal, nil
+	}
+
+	channelID, terr := openDestination(ctx, apiProvider, dest)
+	if terr != nil {
+		return terr.result(), nil
+	}
+
+	ids, err := shareFiles(ctx, apiProvider, api, channelID, out, to)
 	if err != nil {
 		return fail(err.Error(), "")
 	}
 
 	ts := shareTS(ctx, api, ids[0], channelID)
-	return sayFilesResult(destinationName(apiProvider, channelID, to), up, ids, ts), nil
+	return sayFilesResult(dest, out, ids, ts), nil
 }
 
 // shareFiles uploads every file and completes them together, so they
-// arrive as one message. It returns the Slack file IDs in order. On error
-// nothing was shared: files uploaded before the failure stay private and
-// unshared, and the error says so.
-func shareFiles(ctx context.Context, ap *provider.ApiProvider, api *slack.Client, channelID string, up *outboundUpload) ([]string, error) {
-	summaries := make([]slack.FileSummary, 0, len(up.Files))
+// arrive as one message. It returns the Slack file IDs in order.
+func shareFiles(ctx context.Context, ap *provider.ApiProvider, api *slack.Client, channelID string, out *outbound, to string) ([]string, error) {
+	summaries := make([]slack.FileSummary, 0, len(out.Files))
 	unshared := func() string {
 		if len(summaries) == 0 {
 			return "Nothing was shared."
 		}
-		return fmt.Sprintf("Nothing was shared; %d file(s) uploaded before the failure stay private and unshared.", len(summaries))
+		return fmt.Sprintf("Nothing was shared; the %d file(s) uploaded before the failure were not shared.", len(summaries))
 	}
 
-	for _, f := range up.Files {
+	for _, f := range out.Files {
 		u, err := api.GetUploadURLExternalContext(ctx, slack.GetUploadURLExternalParameters{
 			FileName: f.Name,
 			FileSize: len(f.Data),
@@ -245,10 +265,14 @@ func shareFiles(ctx context.Context, ap *provider.ApiProvider, api *slack.Client
 	if _, err := api.CompleteUploadExternalContext(ctx, slack.CompleteUploadExternalParameters{
 		Files:           summaries,
 		Channel:         channelID,
-		InitialComment:  up.Comment,
-		ThreadTimestamp: up.Thread,
+		InitialComment:  out.Fallback,
+		ThreadTimestamp: out.Thread,
 	}); err != nil {
-		return nil, fmt.Errorf("Uploaded %d file(s), but Slack refused to share them: %v. Nothing was posted; the uploads stay private and unshared.", len(summaries), err)
+		var se slack.SlackErrorResponse
+		if errors.As(err, &se) {
+			return nil, fmt.Errorf("Uploaded %d file(s), but Slack refused to share them: %v. Nothing was posted; the uploads were not shared.", len(summaries), err)
+		}
+		return nil, fmt.Errorf("Uploaded %d file(s), but the request to share them failed (%v), so whether the message was posted is unknown. Check with messages target='%s' since='5m' before retrying.", len(summaries), err, to)
 	}
 
 	ids := make([]string, len(summaries))
@@ -260,8 +284,10 @@ func shareFiles(ctx context.Context, ap *provider.ApiProvider, api *slack.Client
 
 // shareTS polls files.info for the ts of the message that shared fileID in
 // channelID. completeUploadExternal does not return it, and Slack records
-// the share asynchronously. Empty means Slack had not reported it within
-// the bounded wait; the caller says so rather than guessing.
+// the share asynchronously, under shares.public for a channel and
+// shares.private for a private channel or DM. Empty means Slack had not
+// reported it within the bounded wait; the caller says so rather than
+// guessing.
 func shareTS(ctx context.Context, api *slack.Client, fileID, channelID string) string {
 	for _, d := range shareTSDelays {
 		select {
@@ -269,7 +295,9 @@ func shareTS(ctx context.Context, api *slack.Client, fileID, channelID string) s
 			return ""
 		case <-time.After(d):
 		}
-		file, _, _, err := api.GetFileInfoContext(ctx, fileID, 0, 0)
+		pctx, cancel := context.WithTimeout(ctx, shareTSTimeout)
+		file, _, _, err := api.GetFileInfoContext(pctx, fileID, 0, 0)
+		cancel()
 		if err != nil {
 			log.Printf("say files: files.info for the message ts: %v", err)
 			continue
@@ -283,18 +311,9 @@ func shareTS(ctx context.Context, api *slack.Client, fileID, channelID string) s
 	return ""
 }
 
-// destinationName names a conversation for output without exposing its ID:
-// a channel by its cached name, anything else as the caller wrote it.
-func destinationName(ap *provider.ApiProvider, channelID, to string) string {
-	if ch, ok := ap.LookupChannel(channelID); ok && !ch.IsIM && !ch.IsMpIM && ch.Name != "" {
-		return "#" + ch.Name
-	}
-	return to
-}
-
-func sayFilesResult(dest string, up *outboundUpload, ids []string, ts string) *FeatureResult {
-	listed := make([]map[string]interface{}, len(up.Files))
-	for i, f := range up.Files {
+func sayFilesResult(dest *resolvedDestination, out *outbound, ids []string, ts string) *FeatureResult {
+	listed := make([]map[string]interface{}, len(out.Files))
+	for i, f := range out.Files {
 		listed[i] = map[string]interface{}{
 			"name":   f.Name,
 			"size":   len(f.Data),
@@ -303,32 +322,33 @@ func sayFilesResult(dest string, up *outboundUpload, ids []string, ts string) *F
 		}
 	}
 	data := map[string]interface{}{
-		"destination": dest,
+		"destination": dest.Name,
 		"files":       listed,
-		"thread":      up.Thread,
-		"comment":     up.Comment != "",
+		"thread":      out.Thread,
+		"comment":     out.Fallback != "",
 		"ts":          ts,
 	}
 
+	to := dest.Typed
 	var next []string
 	switch {
-	case up.Thread != "":
+	case out.Thread != "":
 		next = []string{
-			fmt.Sprintf("Read the thread: messages target='%s' around='%s'", up.To, up.Thread),
-			fmt.Sprintf("Continue: say to='%s' thread='%s'", up.To, up.Thread),
+			fmt.Sprintf("Read the thread: messages target='%s' around='%s'", to, out.Thread),
+			fmt.Sprintf("Continue: say to='%s' thread='%s'", to, out.Thread),
 		}
 	case ts != "":
 		next = []string{
-			fmt.Sprintf("Reply in its thread: say to='%s' thread='%s'", up.To, ts),
-			fmt.Sprintf("Watch for responses: messages target='%s' since='30m'", up.To),
+			fmt.Sprintf("Reply in its thread: say to='%s' thread='%s'", to, ts),
+			fmt.Sprintf("Watch for responses: messages target='%s' since='30m'", to),
 		}
 	default:
-		next = []string{fmt.Sprintf("Watch for responses: messages target='%s' since='30m'", up.To)}
+		next = []string{fmt.Sprintf("Watch for responses: messages target='%s' since='30m'", to)}
 	}
 
 	return &FeatureResult{
 		Success:     true,
-		Message:     fmt.Sprintf("Shared %d file(s) to %s", len(up.Files), dest),
+		Message:     fmt.Sprintf("Shared %d file(s) to %s", len(out.Files), dest.Name),
 		Data:        data,
 		NextActions: next,
 	}
