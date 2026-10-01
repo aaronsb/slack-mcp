@@ -94,9 +94,11 @@ not depend on it.
 
 ### The override is a foot-gun guard, not the boundary
 
-The override is operator configuration. Injected content cannot set an
-environment variable, so the threat this ADR addresses cannot move the
-directory. The override checks catch an operator pointing it somewhere
+The override is operator configuration, taken only from the process
+environment the MCP client sets. Injected content cannot set that
+environment, and ADR-014 refuses to start when a `.env` file supplies
+this or any other security-relevant setting, so the threat this ADR
+addresses cannot move the directory through configuration. The override checks catch an operator pointing it somewhere
 that makes bare names dangerous. They run on every file operation, like
 the checks above.
 
@@ -178,24 +180,27 @@ for the link count.
   bounded by the limit, since the file can grow after the check.
 
 A missing name answers with the files in the directory whose names
-match the one requested. A stem is the name with `filepath.Ext`
-removed, so a dotfile such as `.env` has an empty stem. Comparison is
-case-insensitive. A name matches when it contains the requested name's
-stem, or when its own stem is contained in the requested name; an empty
-stem on either side matches only a name equal to the requested one.
-Matches are listed alphabetically, capped, with the count of all
-matches. The call still makes zero Slack calls and posts nothing; the
-agent retries with a listed name. It is a correction aid on a failed
-call, not a listing. It departs from
-ADR-009's rule that a cap never bounds reachability: names beyond the
-cap are not reachable through it. That is acceptable for a hint whose
-job is to fix a near miss, and a page of it would need a next call
-through `say`, a verb that posts to Slack.
+match the one requested. A stem is the name without its extension, the
+extension as defined under Writes, so the stem of `.env` is `.env` and
+no valid name has an empty stem. Names are compared under Unicode simple
+case folding, the folding `strings.EqualFold` uses. A name matches when
+it contains the requested name's stem, or when its own stem is contained
+in the requested name. Matches are listed alphabetically, capped, with
+the count of all matches. The call still makes zero Slack calls and
+posts nothing; the agent retries with a listed name.
 
-A sandboxed client that cannot see the server's filesystem has no way to
-enumerate the exchange directory in v1. If one is needed, a read-only
-listing is a view or parameter on a noun under ADR-009, not a verb, and
-is deferred.
+The answer is a correction aid, but an agent can enumerate the
+directory with it by varying the requested name: a one-letter stem
+matches every name containing that letter. Each answer is still capped,
+so a large directory takes many failed calls to list. That departs from
+ADR-009's rule that a cap never bounds reachability, and is accepted for
+a hint whose job is to fix a near miss; a page of it would need a next
+call through `say`, a verb that posts to Slack.
+
+A sandboxed client that cannot see the server's filesystem has no
+direct way to list the exchange directory in v1, only the enumeration
+above. If one is needed, a read-only listing is a view or parameter on a
+noun under ADR-009, not a verb, and is deferred.
 
 ### Writes
 
@@ -271,10 +276,10 @@ above carry the amended rules.
 
 Before: the names closest to the one requested, by an unstated
 distance. After: the names that match it by stem under the rule in
-Reads, in alphabetical order, capped, with the count of all matches. A match rule the agent can
-predict is one it can act on; a distance ranking was a second guess at
-what the agent meant. The departure from ADR-009's paging law stands
-for the same reason as before.
+Reads, in alphabetical order, capped, with the count of all matches. A
+match rule the agent can predict is one it can act on; a distance
+ranking was a second guess at what the agent meant. The rule also lets
+the agent enumerate the directory, as Reads states.
 
 ### An explicit name that is taken is suffixed
 
@@ -315,8 +320,8 @@ client's job, as above. The operator may revisit this.
   while its other name exists.
 - Files accumulate. Nothing is deleted automatically; the directory is
   the operator's to clean.
-- A sandboxed client that cannot see the server's filesystem cannot
-  enumerate the exchange directory.
+- A sandboxed client that cannot see the server's filesystem can list
+  the exchange directory only through failed `say files=` calls.
 - When the server runs on a different host from the client (the
   experimental remote deployment, or SSE bound to a non-loopback host),
   the exchange directory is on the server's host and the agent's file

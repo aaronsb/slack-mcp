@@ -97,6 +97,10 @@ No model is in the loop. The patterns are compiled into the binary, and
 the same input gives the same answer. A match on any class is a
 **block**.
 
+The scanner sees what one call carries. Text the agent copies from a
+private conversation into a public one is gated only by the scanner and,
+for an external destination, by gate case 1; case 2 covers files only.
+
 ### Layer 3: quarantine
 
 The server cannot know who asked for a blocked call. It knows where the
@@ -109,8 +113,7 @@ call was going, so the destination is the key:
 - The account's self-DM (`@me`) is never quarantined. A block there is
   still a block and still counts a strike.
 
-Whether a block quarantines on the first strike or only warns is set by
-ADR-014's safety posture.
+Whether a given block quarantines is set by ADR-014's safety posture.
 
 A quarantined destination refuses `say` and `mark-read`. Reads,
 `dismiss`, and `download` from it keep working, so the agent can still
@@ -122,7 +125,8 @@ destination was named. A raw `C`/`D`/`G` ID on `say`, or a `thread:`
 target on `mark-read`, is checked like a name; a DM or group DM is
 checked against the quarantined people among its members. The bulk
 `mark-read` targets (`all-dms`, `all-channels`, `everything`) skip
-quarantined conversations and list them as skipped.
+quarantined conversations and list them as skipped. `mark-read` to an
+external destination is not gated, since it sends no content.
 
 When a block quarantines a destination, the server posts one notice
 into it, in the blocked call's thread when it named one. ADR-014 fixes
@@ -137,9 +141,8 @@ what they asked for and the notice says nothing about what matched.
 ### The quarantine file
 
 Quarantine state is an append-only JSON-lines file per workspace, keyed
-by team ID like the watermark store, in the data directory at mode
-0600. Each entry is appended in a single write under an advisory lock,
-and records:
+by team ID as the estate store is (`estate.Open(teamID)`), in the data
+directory at mode 0600. Each entry records:
 
 - when, and the kind: a block, a warning, or a clear;
 - the destination, by ID and by the name it had then;
@@ -151,16 +154,38 @@ and records:
 
 No matched value is ever written, in this file or in the log.
 
-The server reads the file on every gated call, from where it last read
-to the end, so a CLI clear, an approval, or a block written by another
-server process on the same data directory applies at once. Quarantines
-and strikes are shared by every process using that directory. A final
-line with no terminating newline is a write in progress and is ignored
-until it ends. A complete line that does not parse is skipped and named
-in the log and the banner. A file that cannot be read at all fails
-closed: the strike lock engages, and the banner and
-`slack-mcp quarantine list` name the error. The operator recovers by
-fixing what stopped the read, the file's permissions for example.
+**Writing.** A writer takes an advisory lock, appends a newline first if
+the file's last byte is not one, then appends its entry in one write.
+A crash mid-entry therefore never merges into the next entry.
+
+**Reading.** The server reads the file on every gated call and every
+read that renders the banner. It keeps the size and identity (device
+and inode on Unix, file index on Windows) of its last read, and reads on
+from its last offset. A file that shrank or was replaced is read again
+from offset 0 and the state rebuilt. So a CLI clear, an approval, a
+block written by another server process on the same data directory, or
+an operator's edit of the file applies at once, and quarantines and
+strikes are shared by every process using that directory.
+
+- An unterminated final line is a write in progress and is ignored.
+- A complete line that does not parse is skipped, and named in the log
+  and the banner.
+- A missing file is empty: no quarantines, no strikes.
+- A file that exists but cannot be read fails closed: the strike lock
+  engages, and the banner and `slack-mcp quarantine list` name the
+  error. The operator recovers by fixing what stopped the read, the
+  file's permissions for example.
+
+**Workspace.** Tool descriptions and server instructions are built
+before the provider boots. The implementation runs `auth.test` at
+startup on every credential path and keeps what it returns, adding the
+`team_id` that `ValidateTokens` does not return today, so the team ID,
+and with it the quarantine file, is known when they are built.
+Without credentials there is no quarantine file until `auth` completes;
+when `auth` loads a workspace, the server switches to that workspace's
+file.
+
+### What the operator and the agent see
 
 At block time the server writes a log line:
 
@@ -168,8 +193,12 @@ At block time the server writes a log line:
 outbound-safety: BLOCKED say to=#general (C0123ABCD) class=private-key location=file-bytes strike=1/2 quarantine=#general
 ```
 
-That line and the file entry are the operator's record. Two more
-surfaces carry the state to the agent:
+The record the agent cannot suppress through any tool is the quarantine
+file. The log is not that record: on stdio it goes to
+`/tmp/slack-mcp.log`, created at 0666 and shared by every user and
+process on the host. Tightening that mode is filed as a follow-up.
+
+Two surfaces carry the state to the agent:
 
 - the MCP server instructions, which this ADR introduces, naming every
   quarantine in force when the server started;
@@ -180,29 +209,32 @@ surfaces carry the state to the agent:
 
 ### Clearing
 
-False positives happen, so a quarantine is clearable three ways:
+False positives happen, so a quarantine and the strike lock are
+clearable:
 
-- **Approval**: a `say` or `mark-read` refused by a quarantine goes to
-  the approval gate as a request to lift it.
 - **CLI**: `slack-mcp quarantine list`, and `slack-mcp quarantine clear
-  <who>`, where `<who>` is `@handle`, `#channel`, or `strikes`.
+  <who>`, where `<who>` is `@handle`, `#channel`, or `strikes`. A `say`
+  or `mark-read` refused by a quarantine or the lock also issues a
+  pending lift request (gate case 3) for `slack-mcp approve`.
 - **Editing or removing the file.** This is documented in the README
   and nowhere else: never in a tool description, the server
-  instructions, or tool output. It is documentation for the operator,
-  not a control.
+  instructions, or tool output. It takes effect on a running server at
+  its next read of the file. It is documentation for the operator, not
+  a control.
 
-Approvals and CLI clears append a clear entry rather than deleting the
-block, so the file stays a history. A lift does not continue the call
-that was refused: the agent calls again, and the new call runs the full
-order, scanner included. Lifting never counts a strike.
+Lifting is CLI-only; elicitation never lifts (see Elicitation). A clear
+appends a clear entry rather than deleting the block, so the file stays
+a history. A lift lets no call through: the agent calls again, and the
+new call runs the full order, scanner included. Lifting never counts a
+strike.
 
 ### The strike lock
 
 Blocks count as strikes across all destinations since the last
-`clear strikes`. At ADR-014's strike limit, the strike lock engages:
-every `say` and `mark-read` is refused, to anyone, until the operator
-clears it. The count comes from the file, so a restart does not reset
-it. Reads keep working.
+`clear strikes`, in every posture. At ADR-014's strike limit the strike
+lock engages: every `say` and `mark-read` is refused, to anyone, until
+the operator clears it. The count comes from the file, so a restart does
+not reset it. Reads keep working.
 
 ### Layer 4: the tool result
 
@@ -264,12 +296,18 @@ the gate case, and a hash of the content; for case 1 it also holds the
 text and file names being sent, so the operator can read them. Requests
 live in their own file beside the quarantine file, at mode 0600, are
 read on every gated call, and expire 24 hours after issue, approved or
-not; content held for case 1 is deleted on expiry.
+not; content held for case 1 is deleted on expiry. A repeat of the same
+call while its request is pending names the same ID. Nothing notifies
+the operator of a new request beyond the log line.
 
-An approval lets the next call with the same destination and the same
-content hash through, once. Changed content is a new request. A
-lift approval appends the clear entry and lets nothing through; the
-agent calls again.
+One approval yields exactly one send, through either path:
+
+- For case 1 or 2, an approval through elicitation lets the current
+  call proceed; an approval through the CLI lets the next call with the
+  same destination and content hash through. Either consumes the
+  request. Changed content is a new request.
+- For case 3, an approval appends the clear entry and lets nothing
+  through.
 
 The operator answers with `slack-mcp approve <id>` or
 `slack-mcp deny <id>`; `slack-mcp approve` with no ID lists what is
@@ -283,31 +321,51 @@ and says the operator must approve it; it does not print the command.
 
 #### Elicitation
 
-Where the client can be asked in-band, the server asks as well. The
-form depends on the protocol version the client negotiated:
+For cases 1 and 2, the server also asks in-band when the client says it
+can answer. It never asks for case 3: a host may let the model answer an
+elicitation, and a lift answered by the agent under attack would undo
+the quarantine that attack produced.
 
-- **2026-07-28 and later**: elicitation is a multi-round-trip request.
-  The gated call returns an input-required result asking for approval,
-  and the client retries the call with the answer and the server's
-  request state. The request state is bound by an HMAC, under a key the
-  server process holds in memory, to the destination, the content hash,
-  the gate case, the pending ID, and an expiry. An accept presented with
-  any other call, or after a restart, fails verification and counts as
-  no answer.
-- **Earlier versions, on stdio or streamable HTTP**: a server-initiated
-  `elicitation/create`, enabled with mcp-go's
-  `WithLegacyServerInitiatedRequests`. The server waits two minutes.
-- **SSE**: no elicitation. mcp-go's SSE session does not implement it.
+The server checks the client capabilities carried by the request it is
+handling, never inferring them from an earlier request. When they do
+not declare elicitation, the result is the plain pending refusal. When
+they do, the tool handler returns mcp-go's
+`InputRequestBuilder.ToolResult()` with an approval form that names the
+pending ID:
 
-Accept marks the pending request approved and the call proceeds through
-the rest of the order. Decline marks it denied. No answer, a cancel, an
-expired timeout, or an error leaves it pending for the CLI.
+- A client on protocol 2026-07-28 or later receives the input-required
+  result and retries the call with its answer and the server's request
+  state.
+- For an earlier client, mcp-go fulfills the request itself: it issues
+  `elicitation/create` and re-invokes the handler with the answer and
+  the request state. It waits on the outer request's context, so the
+  wait ends when the client answers, cancels, or disconnects; mcp-go
+  offers no per-request deadline there, and the server sets none. A
+  failure in that bridge becomes a JSON-RPC internal error, which is why
+  the server asks only when elicitation is declared. The pending request
+  is recorded before the ask, so the CLI still lists it.
+- This server's transports are stdio and SSE. mcp-go's SSE session
+  cannot issue `elicitation/create`, so on SSE the server asks only
+  clients on 2026-07-28 or later. SSE serves several sessions; the
+  request state is bound to the session where the transport identifies
+  one.
 
-Elicitation is not relied on alone. Client support is uneven, and a
-host may answer for the user, or let the model answer. The 2025-11-25
-lifecycle says implementations should set request timeouts, not that
-they must, so the server sets its own. MCP sampling is not used as a
-guard.
+The request state carries an HMAC under a key the server process holds
+in memory. It binds the destination, the content hash, the gate case,
+the pending ID, the session where known, and an expiry ten minutes after
+issue. The state is single-use: the server consumes the pending request
+when it honors an accepted retry, so a replayed state finds nothing to
+approve. A state from another call, past its expiry, or from before a
+restart fails verification and counts as no answer; the CLI path
+survives a restart.
+
+Accept lets the call proceed through the rest of the order. Decline
+marks the request denied. No answer, a cancel, or a failed verification
+leaves it pending for the CLI.
+
+Elicitation is not relied on alone. Client support is uneven, a host may
+answer for the user or let the model answer, and nothing requires a
+client to answer at all. MCP sampling is not used as a guard.
 
 ## Consequences
 
@@ -318,8 +376,8 @@ guard.
   decoders know does not hide it.
 - Escalation is bounded: a few blocks lock all writes until the
   operator acts.
-- The operator has a record of every block that the agent cannot
-  suppress through any tool: the log line and the quarantine file.
+- Every block leaves a record in the quarantine file that no tool can
+  remove.
 - No new tool; the surface stays at nine.
 
 ### Negative
@@ -334,8 +392,9 @@ guard.
 - A large compressed upload can exhaust the decode budget and be refused
   as unscannable.
 - The notice tells a requester their request was caught.
-- Gated calls wait on the operator. Unattended, they wait up to 24
-  hours and then expire.
+- Gated calls wait on the operator, and the operator learns of them
+  only from the log or `slack-mcp approve`. Unattended, they wait up to
+  24 hours and then expire.
 
 ### Risks and limits
 
@@ -355,13 +414,16 @@ guard.
   client.
 - **The server's own state.** The quarantine, pending, and provenance
   files are in the data directory, and the `slack-mcp` binary is on the
-  path. An agent with unrestricted file or shell access can edit the
-  files, or drive the CLI through a pseudo-terminal. The client's
-  permissions should deny the agent writes to the data directory and
-  execution of `slack-mcp` subcommands.
-- **The server instructions are static.** The client reads them at
-  initialization, so a quarantine set after startup reaches the agent
-  through the banner only.
+  path. An agent with unrestricted file or shell access can edit or
+  delete the files, which a running server now honors, or drive the CLI
+  through a pseudo-terminal. The client's permissions should deny the
+  agent writes to the data directory and execution of `slack-mcp`
+  subcommands.
+- **An unanswered elicitation holds the call.** For an earlier client
+  the call waits until the client answers or cancels.
+- **The server instructions are static.** They are built once at
+  startup and read by the client when it connects, so a quarantine set
+  later reaches the agent through the banner only.
 - **Origin is asserted, not observed.** The block result says the
   request came from Slack content. The server cannot see that; it is a
   policy statement, since the operator does not ask for secrets in
@@ -389,6 +451,10 @@ outlives a removal; restoring the layers restores its state.
   no client capabilities and Claude Code's support appeared partial;
   neither was verified against current releases. The pending request is
   the path that always works.
+- **Server-initiated elicitation for every client**, through mcp-go's
+  `WithLegacyServerInitiatedRequests`. It re-enables a request form the
+  2026-07-28 protocol removed, for clients that no longer expect it, and
+  is deprecated.
 - **Approval for every `say`.** It turns the agent's one contribution
   verb into a queue, and an operator who approves everything stops
   reading the requests.
@@ -408,8 +474,9 @@ outlives a removal; restoring the layers restores its state.
 
 - ADR-012: layer 1, and the Risks entry on download-then-attach that
   this ADR decides.
-- ADR-014: the notice wording, and the safety posture that sets
-  escalation, the strike limit, and which cases are gated.
+- ADR-014: the notice wording, the safety posture that sets escalation,
+  the strike limit, and which cases are gated, and the rule that keeps
+  these settings out of `.env`.
 - ADR-009: the surface and its verb boundary. `say` and `mark-read` are
   the gated writes; reads stay ungated.
 - ADR-010: the batch executor admits only reads, so it needs no gate;
