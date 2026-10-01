@@ -13,6 +13,10 @@ ADR-013.
 Amended 2026-10-01: the posture table carries how each posture adds
 ADR-013's trusted destinations.
 
+Amended 2026-10-01 (implementation): the strike lock persists across a
+posture change, and the CLI's proxy and CA behavior is fixed. Under
+Safety posture and `.env` may set only an allowlist.
+
 ## Context
 
 Everything this server posts is attributed to the account whose session
@@ -85,6 +89,13 @@ client environment already sets is untouched, since `.env` never
 overrides. A new setting is excluded from `.env` unless added to the
 allowlist. The CLI subcommands of ADR-013 apply the same rule.
 
+The CLI subcommands reach Slack only for `auth.test` and to resolve
+names. They honor `SLACK_MCP_PROXY` and `SLACK_MCP_SERVER_CA` from their
+own environment, always with TLS verification. `SLACK_MCP_SERVER_CA`
+adds a root to the system pool, and `SLACK_MCP_SERVER_CA_INSECURE` is
+ignored with a notice, since the tokens travel on every request and the
+operator's controls should not depend on an unverified proxy.
+
 ### Identity: whose account this is
 
 `{name}` is the account's handle as `auth.test` reports it at startup.
@@ -147,6 +158,16 @@ the strike count, taken from block entries, includes it.
 
 `strict` suits an unattended agent or a dedicated account. `soft` suits
 an attended assistant on the operator's own account.
+
+The strike lock persists across a posture change. A block that engages
+the lock records that it did, and the lock holds until
+`slack-mcp quarantine clear strikes`, whatever the posture is when the
+server next reads the file. Two `strict` strikes stay locked under
+`soft`, whose limit is three. Otherwise editing one setting in the
+client config and restarting would lift the lock, an ungated lift that
+ADR-013 reserves for the operator at the CLI. The strike count itself is
+read under the current posture, so a count that reaches the new limit
+engages the lock too.
 
 ## Consequences
 

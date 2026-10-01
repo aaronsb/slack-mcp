@@ -12,6 +12,7 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/lifecycle"
 	"github.com/aaronsb/slack-mcp/pkg/logsink"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/safety"
 	"github.com/aaronsb/slack-mcp/pkg/server"
 	"github.com/aaronsb/slack-mcp/pkg/setup"
 )
@@ -38,6 +39,9 @@ func main() {
 			log.Fatalf("Setup failed: %v", err)
 		}
 		return
+	}
+	if len(os.Args) > 1 && isSafetyCommand(os.Args[1]) {
+		exit(runSafetyCommand(os.Args[1:]))
 	}
 
 	var transport string
@@ -70,6 +74,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
 		exit(1)
 	}
+
+	// SLACK_MCP_IDENTITY and SLACK_MCP_SAFETY are declared in the client
+	// config (ADR-014); an unknown value refuses to start.
+	settings, err := safety.SettingsFromEnv(os.LookupEnv)
+	if err != nil {
+		log.Print(err)
+		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
+		exit(1)
+	}
+	safety.SetCurrent(settings)
+	log.Printf("Account identity: %s; safety posture: %s", settings.Identity, settings.Posture)
 
 	// Refuse a deployment and idle-timeout combination that cannot help
 	// before anything boots. Stderr, because stdio logging goes to a file.
