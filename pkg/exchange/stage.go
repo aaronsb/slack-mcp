@@ -72,7 +72,9 @@ func (s *Staged) Commit(name string) (*CreateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.d.root.Remove(s.tmp); err != nil {
+	// A staged name already gone (swept as an orphan after a stall) leaves
+	// the named file whole with one link: the commit stands.
+	if err := s.d.root.Remove(s.tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		// With two links the file is refused on read; take the name back.
 		if rmErr := s.d.root.Remove(got); rmErr != nil {
 			s.stuck = true
@@ -99,7 +101,7 @@ func (s *Staged) Discard() error {
 
 // stagingOrphanAge is how old a staged file must be before Stage treats it
 // as left by a write that never finished.
-const stagingOrphanAge = 10 * time.Minute
+const stagingOrphanAge = time.Hour
 
 // sweepStaging removes staged files older than stagingOrphanAge. A crash
 // mid-write leaves one nothing else can reach; a crash between Commit's

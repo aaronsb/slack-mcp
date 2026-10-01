@@ -403,8 +403,8 @@ the call carries.
   miss answer under Reads never lists it. A crash mid-write leaves a
   staged copy nothing can reach, and a crash between the link and the
   unstage leaves one holding a second link on the named file, which
-  Reads refuses. Each `put` first removes staged copies older than ten
-  minutes; the link comes after the write, so that leaves the named
+  Reads refuses. Each `put` first removes staged copies older than an
+  hour; the link comes after the write, so that leaves the named
   file whole and readable.
 - The result gives the name used, the byte count, the display path, and
   the next call, `say to='<destination>' files=['<name>']`. Under the
