@@ -178,11 +178,15 @@ for the link count.
   bounded by the limit, since the file can grow after the check.
 
 A missing name answers with the files in the directory whose names
-match the one requested, compared case-insensitively: names that contain
-the requested name's stem, or whose stem the requested name contains.
-The list is capped and states how many names matched in all. The call
-still makes zero Slack calls and posts nothing; the agent retries with a
-listed name. It is a correction aid on a failed call, not a listing. It departs from
+match the one requested. A stem is the name with `filepath.Ext`
+removed, so a dotfile such as `.env` has an empty stem. Comparison is
+case-insensitive. A name matches when it contains the requested name's
+stem, or when its own stem is contained in the requested name; an empty
+stem on either side matches only a name equal to the requested one.
+Matches are listed alphabetically, capped, with the count of all
+matches. The call still makes zero Slack calls and posts nothing; the
+agent retries with a listed name. It is a correction aid on a failed
+call, not a listing. It departs from
 ADR-009's rule that a cap never bounds reachability: names beyond the
 cap are not reachable through it. That is acceptable for a hint whose
 job is to fix a near miss, and a page of it would need a next call
@@ -266,8 +270,8 @@ above carry the amended rules.
 ### A missing name lists its matches
 
 Before: the names closest to the one requested, by an unstated
-distance. After: the names that match it by stem, case-insensitively,
-capped, with the count of all matches. A match rule the agent can
+distance. After: the names that match it by stem under the rule in
+Reads, in alphabetical order, capped, with the count of all matches. A match rule the agent can
 predict is one it can act on; a distance ranking was a second guess at
 what the agent meant. The departure from ADR-009's paging law stands
 for the same reason as before.
