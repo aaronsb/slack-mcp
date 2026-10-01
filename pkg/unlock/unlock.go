@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -337,7 +338,7 @@ func (in *Instance) answer(form map[string][]string, cur view) (result string, m
 	for i := range ok {
 		if k := keys[i]; ok[i] || k.Kind == safety.KeyStrikes {
 			cleared++
-			log.Printf("outbound-safety: CLEARED %s %s (%s) by=web", k.Kind, k.Name, k.ID)
+			log.Printf("outbound-safety: CLEARED %s by=web", logKey(k))
 		}
 	}
 	closed := " This page is closed; you can close this tab."
@@ -368,4 +369,17 @@ func (in *Instance) render(w http.ResponseWriter, v view) {
 	if err := page.Execute(w, v); err != nil {
 		log.Printf("unlock: render: %v", err)
 	}
+}
+
+// logKey names a cleared key for the log: its kind, then its name and ID
+// when it has them. The strikes key has neither.
+func logKey(k safety.Key) string {
+	parts := []string{string(k.Kind)}
+	if k.Name != "" {
+		parts = append(parts, k.Name)
+	}
+	if k.ID != "" {
+		parts = append(parts, "("+k.ID+")")
+	}
+	return strings.Join(parts, " ")
 }
