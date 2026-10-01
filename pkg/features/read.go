@@ -84,6 +84,23 @@ func readHandler(ctx context.Context, params map[string]interface{}) (*FeatureRe
 		return readRef(ctx, apiProvider, api, ref, limit)
 	}
 
+	// '@' names a person: the read-policy ladder, as since= uses, so '@me'
+	// is the self-DM rather than every conversation containing "me". A read
+	// never opens a DM.
+	if strings.HasPrefix(target, "@") {
+		dest, terr := locateTarget(ctx, apiProvider, target, provider.ReadPolicy, "target")
+		if terr != nil {
+			return terr.result(), nil
+		}
+		if dest.ConvID == "" {
+			return &FeatureResult{
+				Success: false,
+				Message: fmt.Sprintf("There is no DM with %s yet, so there is nothing to read.", dest.Name),
+			}, nil
+		}
+		return readRef(ctx, apiProvider, api, handle.Ref{Kind: handle.KindConversation, Channel: dest.ConvID}, limit)
+	}
+
 	return resolveAndRead(ctx, apiProvider, api, target, limit)
 }
 
