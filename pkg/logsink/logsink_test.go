@@ -101,6 +101,54 @@ func TestRedactingWriterBuffersSplitLines(t *testing.T) {
 	}
 }
 
+// Flush emits a held partial line, redacted.
+func TestRedactingWriterFlushEmitsRedactedPartialLine(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewRedactingWriter(&buf)
+	_, _ = w.Write([]byte("last words xoxc-FAKE-1"))
+	if buf.Len() != 0 {
+		t.Fatalf("partial line written early: %q", buf.String())
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "last words <redacted>" {
+		t.Fatalf("Flush wrote %q", got)
+	}
+	if err := w.Flush(); err != nil || buf.String() != "last words <redacted>" {
+		t.Fatalf("second Flush rewrote output: %q, %v", buf.String(), err)
+	}
+}
+
+// failingWriter fails until ok is set.
+type failingWriter struct {
+	ok  bool
+	buf bytes.Buffer
+}
+
+func (f *failingWriter) Write(p []byte) (int, error) {
+	if !f.ok {
+		return 0, os.ErrClosed
+	}
+	return f.buf.Write(p)
+}
+
+// A failed underlying write keeps the line pending rather than dropping it.
+func TestRedactingWriterKeepsLineOnWriteError(t *testing.T) {
+	fw := &failingWriter{}
+	w := NewRedactingWriter(fw)
+	if _, err := w.Write([]byte("first d=xoxd-FAKE\n")); err == nil {
+		t.Fatal("want the underlying error")
+	}
+	fw.ok = true
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fw.buf.String(); got != "first d=<redacted>\n" {
+		t.Fatalf("after recovery got %q", got)
+	}
+}
+
 // A writer that never sends a newline cannot grow the buffer without bound.
 func TestRedactingWriterFlushesPastCap(t *testing.T) {
 	var buf bytes.Buffer

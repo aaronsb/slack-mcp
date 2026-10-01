@@ -65,21 +65,33 @@ func Redact(s []byte) []byte {
 // would be redacted only in part.
 const maxPending = 64 << 10
 
-type redactingWriter struct {
+// RedactingWriter redacts output by line before it reaches the underlying
+// writer.
+//
+// Line buffering assumes log.Logger-style writers, which emit each entry
+// whole and end it with a newline: such an entry is redacted and written
+// at once, and nothing is held back. A writer that sends a partial line
+// has it held until its newline, the 64 KiB cap, or Flush. Call Flush
+// before exiting so a held partial line is not lost.
+//
+// If the underlying write fails, the held lines stay pending and are
+// retried on the next Write or Flush; nothing is dropped, though pending
+// keeps growing while the sink keeps failing, and a sink that failed
+// partway through a write may see part of a line twice.
+type RedactingWriter struct {
 	mu      sync.Mutex
 	w       io.Writer
 	pending []byte
 }
 
 // NewRedactingWriter wraps w so output is redacted before it reaches w.
-// It buffers by line and redacts each complete line, so a value written
-// across several Write calls is still seen whole. log.Logger ends every
-// entry with a newline, so nothing it writes is held back.
-func NewRedactingWriter(w io.Writer) io.Writer {
-	return &redactingWriter{w: w}
+func NewRedactingWriter(w io.Writer) *RedactingWriter {
+	return &RedactingWriter{w: w}
 }
 
-func (r *redactingWriter) Write(p []byte) (int, error) {
+// Write holds p until it completes a line, then redacts and writes every
+// complete line held.
+func (r *RedactingWriter) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -88,17 +100,32 @@ func (r *redactingWriter) Write(p []byte) (int, error) {
 	if cut == 0 && len(r.pending) > maxPending {
 		cut = len(r.pending)
 	}
-	if cut == 0 {
-		return len(p), nil
-	}
-	out := Redact(append([]byte(nil), r.pending[:cut]...))
-	r.pending = append(r.pending[:0], r.pending[cut:]...)
-	if _, err := r.w.Write(out); err != nil {
+	if err := r.emit(cut); err != nil {
 		return 0, err
 	}
 	// Report the caller's length: the redacted form differs in size, and
 	// io.Writer callers treat a short count as an error.
 	return len(p), nil
+}
+
+// Flush redacts and writes whatever is held, including a partial line.
+func (r *RedactingWriter) Flush() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.emit(len(r.pending))
+}
+
+// emit redacts and writes pending[:cut], and drops it from pending only
+// once the write succeeds. The caller holds mu.
+func (r *RedactingWriter) emit(cut int) error {
+	if cut == 0 {
+		return nil
+	}
+	if _, err := r.w.Write(Redact(append([]byte(nil), r.pending[:cut]...))); err != nil {
+		return err
+	}
+	r.pending = append(r.pending[:0], r.pending[cut:]...)
+	return nil
 }
 
 // Path returns where the stdio log goes: SLACK_MCP_LOG_FILE when set,

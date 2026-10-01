@@ -19,8 +19,18 @@ import (
 var defaultSseHost = "127.0.0.1"
 var defaultSsePort = 13080
 
+// logSink is the process log's redacting writer. exit flushes it, since
+// os.Exit skips deferred calls.
+var logSink = logsink.NewRedactingWriter(os.Stderr)
+
+func exit(code int) {
+	_ = logSink.Flush()
+	os.Exit(code)
+}
+
 func main() {
-	log.SetOutput(logsink.NewRedactingWriter(os.Stderr))
+	log.SetOutput(logSink)
+	defer func() { _ = logSink.Flush() }()
 
 	// Check for subcommands before flag parsing
 	if len(os.Args) > 1 && os.Args[1] == "setup" {
@@ -50,14 +60,15 @@ func main() {
 			logOut = io.Discard
 		}
 	}
-	log.SetOutput(logsink.NewRedactingWriter(logOut))
+	logSink = logsink.NewRedactingWriter(logOut)
+	log.SetOutput(logSink)
 
 	// .env may set only the allowlisted keys; anything else must come from
 	// the client environment. Stderr, because stdio logging goes to a file.
 	if err := loadDotEnv(".env", os.LookupEnv, os.Setenv); err != nil {
 		log.Print(err)
 		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
-		os.Exit(1)
+		exit(1)
 	}
 
 	// Refuse a deployment and idle-timeout combination that cannot help
@@ -66,7 +77,7 @@ func main() {
 	if err != nil {
 		log.Print(err)
 		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
-		os.Exit(1)
+		exit(1)
 	}
 
 	// Build provider: try config file, then env vars, then start without auth
@@ -97,7 +108,7 @@ func main() {
 
 	switch transport {
 	case "stdio":
-		os.Exit(runStdio(s, idle))
+		exit(runStdio(s, idle))
 	case "sse":
 		host := os.Getenv("SLACK_MCP_HOST")
 		if host == "" {
@@ -112,7 +123,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("%v", err)
 		}
-		os.Exit(runSSE(s, httpServer, sseServer))
+		exit(runSSE(s, httpServer, sseServer))
 	default:
 		log.Fatalf("Invalid transport type: %s. Must be 'stdio' or 'sse'", transport)
 	}

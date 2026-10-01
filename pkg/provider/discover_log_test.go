@@ -92,3 +92,54 @@ func TestTeamDiscoveryNeverLogsCredentials(t *testing.T) {
 		}
 	}
 }
+
+// When auth.test fails, discovery logs the failure and still returns a usable
+// client on the discovery endpoint — and the failure line carries nothing
+// from the response, including the Set-Cookie Slack may send with it.
+func TestTeamDiscoveryFailureNeverLogsCredentials(t *testing.T) {
+	var mu sync.Mutex
+	var authCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path != "/api/auth.test" {
+			http.NotFound(w, r)
+			return
+		}
+		authCalls++
+		w.Header().Add("Set-Cookie", "uc=xoxd-FAKEfailurecookie%2Fv%3D; path=/; secure")
+		w.Header().Add("Set-Cookie", "d=xoxd-FAKEfailuresecond; path=/")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":false,"error":"invalid_auth"}`))
+	}))
+	defer srv.Close()
+
+	var out lockedBuffer
+	log.SetOutput(&out)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	api := discoverTeamClient("xoxc-FAKEtoken", "xoxd-FAKEcookie", slack.OptionAPIURL(srv.URL+"/api/"))
+	if api == nil {
+		t.Fatal("discovery returned no client on failure")
+	}
+
+	// Usable: the client still reaches the discovery host.
+	if _, err := api.AuthTestContext(context.Background()); err == nil || !strings.Contains(err.Error(), "invalid_auth") {
+		t.Fatalf("client did not reach the discovery host: %v", err)
+	}
+	mu.Lock()
+	if authCalls != 2 {
+		t.Errorf("auth.test calls = %d, want 2 (discovery, then the returned client)", authCalls)
+	}
+	mu.Unlock()
+
+	got := out.String()
+	if !strings.Contains(got, "Slack authentication failed: invalid_auth") {
+		t.Errorf("failure was not logged; log:\n%s", got)
+	}
+	for _, leak := range []string{"xox", "FAKE", "Set-Cookie"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("discovery failure log contains %q; log:\n%s", leak, got)
+		}
+	}
+}
