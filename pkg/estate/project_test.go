@@ -21,6 +21,7 @@ func TestChannelProjectionCarriesOwnership(t *testing.T) {
 }
 
 func TestOwnershipArrivesAsAnHonestChange(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	st := open(t)
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 
