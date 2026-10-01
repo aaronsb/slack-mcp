@@ -6,8 +6,9 @@ Accepted
 
 Bounds every file parameter on the surface ADR-009 defines. Changes the
 `download` contract (breaking: `destDir` is removed). Precondition for
-file upload on `say` (#92). Keeps graph reports (#61, placed by the
-2026-09-30 amendment to ADR-008) out of reach of every file parameter.
+file upload on `say` (#92). Keeps graph reports out of reach of every
+file parameter; where they are written is set by the graph-report
+amendment to ADR-008 that lands with #61.
 The read side (`say files=`) and the write side (`download`) ship in the
 same release.
 
@@ -59,26 +60,29 @@ directory.
 ### Every open goes through `os.Root`
 
 The server opens the exchange directory with `os.OpenRoot` and performs
-every read, create, stat, and remove through that `Root`. No path is
-built by joining strings, and no component of a name, symlink or not,
-can resolve outside the root.
+every read, create, stat, and remove through that `Root`. No path used
+for access is built by joining strings. A symlink inside the root is
+followed only when its target stays inside the root, and that target
+then faces the same checks as any named file; absolute links and links
+that escape are refused, and `O_CREATE|O_EXCL` never follows a link.
+`os.Root` does not stop traversal into a bind or FUSE mount placed
+inside the root, or the opening of a device file; the read checks below
+refuse anything that is not a regular file once opened.
 
-Before opening the root, on every file operation (nothing is cached):
+On every file operation, with nothing cached:
 
 - `Lstat` of the exchange path must report a plain directory. A
   symlink, a Windows junction or other reparse point (`ModeSymlink` or
   `ModeIrregular`), or any other type is refused.
-- On Unix, a `Stat` through the opened root (`root.Stat(".")`) must
-  show the directory owned by the current user with no group or other
-  permission bits. A looser mode is refused, not repaired; the error
-  names the rule and the `chmod` that satisfies it. Windows has no
-  equivalent check here; the default location sits inside the user
-  profile.
-
-Swapping the directory between the `Lstat` and the `OpenRoot` requires
-write access to its parent, which belongs to the same user whose file
-tools could already place anything inside. The checks close the
-misconfigured case, not that one.
+- On Unix, `root.Stat(".")` must be the same file as that `Lstat`
+  result (`os.SameFile`, which compares device and inode eagerly on
+  Unix), so a directory swapped in between the `Lstat` and the
+  `OpenRoot` is refused. The same `Stat` must show the directory owned
+  by the current user with no group or other permission bits. A looser
+  mode is refused, not repaired; the error names the rule and the
+  `chmod` that satisfies it.
+- On Windows there is no ownership, mode, or identity check here; the
+  default location sits inside the user profile.
 
 A refused exchange directory makes every file operation fail with an
 error naming the rule. The server still starts, since the read tools do
@@ -89,14 +93,20 @@ not depend on it.
 The override is operator configuration. Injected content cannot set an
 environment variable, so the threat this ADR addresses cannot move the
 directory. The override checks catch an operator pointing it somewhere
-that makes bare names dangerous.
+that makes bare names dangerous. They run on every file operation, like
+the checks above.
 
-They compare by file identity, not by string: each path is resolved
-with `filepath.EvalSymlinks`, and "is" and "is inside" are decided by
-walking the resolved override's parents and comparing each to the
-candidate with `os.SameFile` on `Stat` results. That survives
-case-insensitive filesystems, symlinked ancestors, and `..` spellings.
-The override is refused when it:
+They compare by file identity, not by string. Each path is resolved
+with `filepath.EvalSymlinks`. "The override is inside X" is decided by
+walking the override's resolved parents and comparing each to X; "the
+override is an ancestor of X" is decided by walking X's resolved parents
+and comparing each to the override. Comparisons use `os.SameFile` on
+`Stat` results, which survives case-insensitive filesystems, symlinked
+ancestors, and `..` spellings. On Windows `os.SameFile` reopens paths
+lazily, so it compares paths as they are at comparison time. That is
+acceptable here, where the inputs are the operator's own configuration
+and nobody is racing them; it was not acceptable for per-read checks,
+where an attacker controls the timing. The override is refused when it:
 
 - is `$HOME`, or an ancestor of the data directory or the config
   directory;
@@ -109,10 +119,13 @@ The override is refused when it:
   (`$XDG_DESKTOP_DIR`, `$XDG_DOCUMENTS_DIR`, `$XDG_DOWNLOAD_DIR`, else
   `~/Desktop`, `~/Documents`, `~/Downloads`).
 
-The per-use ownership and mode rule refuses most other shared or
-well-known directories, which are rarely 0700. Cloud-sync mounts cannot
-be detected reliably; pointing the override at one is the operator's
-choice.
+On Unix the ownership and mode rule also refuses most other shared or
+well-known directories, which are rarely 0700. It also limits who can
+use the directory: a client running under another UID or in a container
+cannot reach a 0700 directory the server owns, and mounted volumes that
+present 0755 or 0777 (WSL drvfs among them) are refused. Cloud-sync
+mounts cannot be detected reliably; pointing the override at one is the
+operator's choice. On Windows the list is the whole guard.
 
 ### File parameters take names, not paths
 
@@ -138,39 +151,58 @@ checks them itself.
 
 ### Reads
 
-`say files=` opens each name through the root, read-only, with
-`O_NONBLOCK` on Unix so a FIFO swapped in after any earlier check cannot
-block the open. Every property is then taken from `Stat` on the open
-handle, never from an earlier path lookup:
+`say files=` validates and opens every named file before anything is
+posted. A malformed name, a missing file, or a file that fails a check
+fails the whole call with zero Slack calls; the message text is not
+sent.
 
-- it must be a regular file;
-- it must have exactly one link (Unix `Stat_t.Nlink`; Windows
-  `NumberOfLinks` from `GetFileInformationByHandle`), so a hard link to
-  a file elsewhere on the volume cannot be uploaded by name. The error
-  says to copy the file in instead;
-- size and count limits are checked from that `Stat`, and the read is
+Each name is opened through the root, read-only, with `O_NONBLOCK` on
+Unix so a FIFO swapped in after any earlier check cannot block the
+open. Every check then uses the open handle, never an earlier path
+lookup: `Stat` on the handle, and on Windows `GetFileInformationByHandle`
+for the link count.
+
+- It must be a regular file.
+- It must have exactly one link (Unix `Stat_t.Nlink`; Windows
+  `NumberOfLinks`). A file is refused while another name for the same
+  inode exists; the error says to copy the file in instead. Once the
+  other name is removed, or replaced by a rename, the remaining name has
+  one link and reads normally. The rule catches a link left in place,
+  not a link made and then cut loose; the defense against that is that
+  making the link is a separate client-side action.
+- Size and count limits are checked from that `Stat`, and the read is
   bounded by the limit, since the file can grow after the check.
 
-A name that is not there answers with a correction hint: the names
-closest to the one requested and the most recently modified, up to a
-fixed cap, with the directory's total count. It is a hint attached to a
-failed write, not a list. Paging it per ADR-009 would need a next call,
-and the only call that reaches it is `say`, a verb that posts to Slack.
+A missing name answers with a correction hint: the names closest to the
+one requested, up to a fixed cap, with the directory's total count. It
+is a correction aid on a failed call, not a listing. It departs from
+ADR-009's rule that a cap never bounds reachability: names beyond the
+cap are not reachable through it. That is acceptable for a hint whose
+job is to fix a near miss, and a page of it would need a next call
+through `say`, a verb that posts to Slack.
+
+A sandboxed client that cannot see the server's filesystem has no way to
+enumerate the exchange directory in v1. If one is needed, a read-only
+listing is a view or parameter on a noun under ADR-009, not a verb, and
+is deferred.
 
 ### Writes
 
 `download` creates its file through the root with `O_EXCL` at mode
-0600. The server sanitizes Slack's `file.Name` into a valid bare name:
-each refused character becomes `_`, trailing dots and spaces are
-dropped, a device-name stem gets a leading `_`, an over-long name is
-truncated at a rune boundary keeping its extension, and an empty result
-falls back to the file ID. A caller's `filename` override is refused,
-not sanitized, and is validated before any Slack call. An explicit name
-that came back changed would hide the caller's mistake.
+0600.
 
-When the name is taken, the server tries a suffix before the extension,
-where the extension is what `filepath.Ext` returns unless the only dot
-is the leading one:
+A caller's `filename` is validated before any Slack call. It is refused,
+not sanitized, since an explicit name that came back changed would hide
+the caller's mistake, and it is never suffixed: when that name is taken,
+the call fails with an error naming the existing file.
+
+Without `filename`, the server sanitizes Slack's `file.Name` into a
+valid bare name: each refused character becomes `_`, trailing dots and
+spaces are dropped, a device-name stem gets a leading `_`, an over-long
+name is truncated at a rune boundary keeping its extension, and an empty
+result falls back to the file ID. When that name is taken, the server
+tries a suffix before the extension, where the extension is what
+`filepath.Ext` returns unless the only dot is the leading one:
 
 | Name | Suffixed |
 |---|---|
@@ -180,9 +212,11 @@ is the leading one:
 | `archive.tar.gz` | `archive.tar (1).gz` |
 
 It tries the name and up to 99 suffixes, 100 attempts in all, then
-fails naming the collision and suggesting `filename=`. A suffixed name
-that would exceed the length limit truncates the stem. The output
-reports the name used and its absolute path.
+fails naming the collision and suggesting a `filename=` that is free. A
+suffixed name that would exceed the length limit truncates the stem.
+
+The output reports the name used and the absolute path. The path is for
+display; the server never opens anything by it.
 
 ### `download` writes only to the exchange directory
 
@@ -195,10 +229,10 @@ change from the current 0644 and 0755.
 
 Graph reports are written to `<DataDir>/reports/`. The exchange root is
 a separate `os.Root`, the override may not be the data directory or any
-directory inside it other than the default exchange path, `os.Root`
-refuses a symlink out to `reports/`, and the link-count rule refuses a
-hard link from it. Sharing a report in Slack takes a deliberate copy
-into the exchange directory.
+directory inside it other than the default exchange path, and `os.Root`
+refuses a symlink out to `reports/`. A hard link to a report is refused
+while the report's own name exists. Sharing a report in Slack takes a
+deliberate copy into the exchange directory.
 
 ### Getting files in and out is the client's job
 
@@ -207,8 +241,7 @@ already provides, under its own file permissions and its own prompts.
 A server tool for those would duplicate the client's capability under
 the server's broader filesystem access, and would move the decision to
 touch a file outside the exchange directory from the client's prompt to
-a parameter on this server. Listing is covered by the missing-name hint.
-The surface stays at nine tools.
+a parameter on this server. The surface stays at nine tools.
 
 ADR-009's verb test (a capability is its own tool only if invoking it
 changes the world) does not decide this: copying and deleting files do
@@ -231,16 +264,18 @@ change the world. The ground is that the change belongs to the client.
   in `~/Downloads`. The release notes call it out.
 - Uploading a file takes two steps when it lives elsewhere: copy it in,
   then `say files=`.
-- A file hard-linked into the exchange directory is refused on read.
+- A file hard-linked into the exchange directory is refused on read
+  while its other name exists.
 - Files accumulate. Nothing is deleted automatically; the directory is
   the operator's to clean.
-- A sandboxed client that cannot see the server's filesystem has only
-  the missing-name hint to discover what is there.
-- Under the experimental remote deployment, the exchange directory is on
-  the server's host and the agent's file tools are on the client's host.
-  The agent cannot put files in or take them out; the operator transfers
-  them, and the paths `download` reports name the server's host, which
-  the output states. Accepted for v1.
+- A sandboxed client that cannot see the server's filesystem cannot
+  enumerate the exchange directory.
+- When the server runs on a different host from the client (the
+  experimental remote deployment, or SSE bound to a non-loopback host),
+  the exchange directory is on the server's host and the agent's file
+  tools are on the client's. The agent cannot put files in or take them
+  out; the operator transfers them, and the paths `download` reports
+  name the server's host, which the output states. Accepted for v1.
 
 ### Risks
 
@@ -252,9 +287,18 @@ change the world. The ground is that the change belongs to the client.
   exchange directory if the client permits it. The server cannot see
   that step; the defense is that it is a separate, client-visible
   action.
+- Download-then-attach moves a file between conversations entirely
+  through tool parameters: `download` from a private channel, then
+  `say files=` to a public one. This ADR bounds where files live, not
+  where they go. Secret scanning, quarantine of downloads, and
+  confirmation for sensitive destinations are handed to the forthcoming
+  outbound-safety ADR.
 - Some filesystems report a link count of 1 for every file, which
   disables the hard-link rule on them.
-- Windows has no ownership or mode check on the directory.
+- On Windows the override guard is only the refusal list. It misses
+  `%APPDATA%`, including the Startup folder, and folders OneDrive has
+  redirected. OneDrive placeholder files surface as `ModeIrregular` and
+  are refused, so that case fails closed.
 
 ### Reversibility
 
@@ -282,11 +326,11 @@ second breaking change.
   names inside the directory but not the directory itself. A symlinked
   or group-writable exchange directory, or one that is `~/.ssh`, passes
   `os.Root` untouched. Rejected as insufficient on its own.
-- **Lexical containment with `Lstat` and `os.SameFile`** (this ADR's
-  first draft): `Lstat` checks only the final component, and on Windows
-  `os.SameFile` on an `Lstat` result reopens the path lazily, comparing
-  the handle with the path as it is now rather than the snapshot.
-  Rejected for `os.Root` plus checks on the open handle.
+- **Per-read lexical containment with `Lstat` and `os.SameFile`**:
+  `Lstat` checks only the final component, and on Windows `os.SameFile`
+  on an `Lstat` result reopens the path lazily, comparing the handle
+  with the path as it is now rather than the snapshot an attacker could
+  race. Rejected for `os.Root` plus checks on the open handle.
 - **Dropping the override**: `$XDG_DATA_HOME` already relocates the
   exchange directory. It also relocates the caches, ledgers, and reports,
   so an operator who needs the exchange directory where a sandboxed
@@ -297,9 +341,10 @@ second breaking change.
 
 - ADR-009: the surface these parameters live on, its verb test, and its
   echo and paging laws.
-- ADR-008 and its 2026-09-30 amendment: ADR-008 deferred a localhost
-  visualization page; the amendment (#61) makes graph reports static
-  files under `<DataDir>/reports/`.
+- ADR-008: as accepted, it defers graph reports to a localhost page
+  embedded in the binary. The graph-report amendment to ADR-008 that
+  lands with #61 writes them as files under `<DataDir>/reports/`; this
+  ADR only fixes that they stay outside the exchange directory.
 - Confluence Cloud ADR-502: the same staging-directory idea. It adds a
   `manage_workspace` tool, keeps base64 upload and download as
   alternatives (its workspace is optional), checks containment with
