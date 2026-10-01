@@ -17,10 +17,11 @@ flowchart TD
     LogSetup -->|stdio| LogFile[Redirect logs to<br>/tmp/slack-mcp.log]
     LogSetup -->|sse| LogStdout[Keep logs on stdout]
 
-    LogFile --> DotEnv[Load .env if present]
+    LogFile --> DotEnv{".env sets only<br>PERSONALITY / NO_BROWSER<br>or keys already set?"}
     LogStdout --> DotEnv
 
-    DotEnv --> LoadProvider[loadProvider]
+    DotEnv -->|no| Refuse([Exit 1, naming the keys])
+    DotEnv -->|yes| LoadProvider[loadProvider]
 
     LoadProvider --> CheckConfig{Config file<br>has workspaces?}
     CheckConfig -->|yes| UseConfig[Use config tokens]
@@ -102,7 +103,6 @@ flowchart LR
     subgraph Input["Token Sources"]
         MCPB[mcpb UI fields]
         Manual[Manual export<br>SLACK_MCP_XOXC_TOKEN]
-        DotEnv[.env file]
         Browser[Browser extraction<br>via auth-setup]
     end
 
@@ -125,7 +125,6 @@ flowchart LR
 
     MCPB --> EnvCheck
     Manual --> EnvCheck
-    DotEnv --> EnvCheck
 
     EnvCheck -->|yes| Provider
 

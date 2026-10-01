@@ -82,6 +82,67 @@ func TestLoadDotEnvIgnoresDisallowedKeyAlreadySet(t *testing.T) {
 	}
 }
 
+func TestLoadDotEnvParseErrorOmitsFileText(t *testing.T) {
+	const secret = "xoxc-planted-secret-value"
+	for _, body := range []string{
+		"SLACK_MCP_XOXC_TOKEN=\"" + secret + "\n",
+		"SLACK_MCP_PERSONALITY=bot\nbad key " + secret + "\n",
+		"SLACK_MCP_XOXC_TOKEN='" + secret + "\n",
+	} {
+		env := fakeEnv{}
+		err := loadDotEnv(writeDotEnv(t, body), env.lookup, env.setenv)
+		if err == nil {
+			t.Fatalf("body %q: want parse error", body)
+		}
+		if !strings.Contains(err.Error(), "does not parse") {
+			t.Errorf("body %q: got %v, want a parse error", body, err)
+		}
+		for _, part := range []string{secret, "planted", "xoxc-"} {
+			if strings.Contains(err.Error(), part) {
+				t.Errorf("error %q leaks %q", err, part)
+			}
+		}
+	}
+}
+
+func TestLoadDotEnvRefusesOtherSyntaxForms(t *testing.T) {
+	for _, body := range []string{
+		"export SLACK_MCP_PROXY=http://x\n",
+		"SLACK_MCP_PROXY: http://x\n",
+	} {
+		env := fakeEnv{}
+		err := loadDotEnv(writeDotEnv(t, body), env.lookup, env.setenv)
+		if err == nil || !strings.Contains(err.Error(), `"SLACK_MCP_PROXY"`) {
+			t.Errorf("body %q: got %v, want refusal naming SLACK_MCP_PROXY", body, err)
+		}
+		if len(env) != 0 {
+			t.Errorf("body %q: refused load set %v", body, env)
+		}
+	}
+}
+
+func TestLoadDotEnvEmptyClientValueCountsAsSet(t *testing.T) {
+	env := fakeEnv{"SLACK_MCP_PROXY": ""}
+	path := writeDotEnv(t, "SLACK_MCP_PROXY=http://x\n")
+	if err := loadDotEnv(path, env.lookup, env.setenv); err != nil {
+		t.Fatalf("got %v, want nil", err)
+	}
+	if got := env["SLACK_MCP_PROXY"]; got != "" {
+		t.Fatalf("SLACK_MCP_PROXY = %q, want empty", got)
+	}
+}
+
+func TestLoadDotEnvDirectoryRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	env := fakeEnv{}
+	if err := loadDotEnv(path, env.lookup, env.setenv); err == nil {
+		t.Fatal("want error when .env is a directory")
+	}
+}
+
 func TestLoadDotEnvMalformedFile(t *testing.T) {
 	env := fakeEnv{}
 	path := writeDotEnv(t, "SLACK_MCP_PERSONALITY='unterminated\n")

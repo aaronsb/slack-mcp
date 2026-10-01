@@ -29,7 +29,14 @@ func loadDotEnv(path string, lookup func(string) (string, bool), setenv func(str
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("%s: %w", path, err)
+		// A file-system error names only the path. A parse error from
+		// godotenv quotes the file's text, so it is replaced by a fixed
+		// message to keep values out of stderr and the log.
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		return fmt.Errorf("%s does not parse; fix or remove it", path)
 	}
 
 	var refused []string
@@ -37,7 +44,7 @@ func loadDotEnv(path string, lookup func(string) (string, bool), setenv func(str
 		if _, set := lookup(key); set || dotEnvAllowed[key] {
 			continue
 		}
-		refused = append(refused, key)
+		refused = append(refused, fmt.Sprintf("%q", key))
 	}
 	if len(refused) > 0 {
 		sort.Strings(refused)

@@ -31,11 +31,7 @@ type SemanticMCPServer struct {
 
 // NewSemanticMCPServer creates a new semantic MCP server
 func NewSemanticMCPServer(provider *provider.ApiProvider) *SemanticMCPServer {
-	// Get personality from environment, default to "slack-user"
-	personality := os.Getenv("SLACK_MCP_PERSONALITY")
-	if personality == "" {
-		personality = "slack-user"
-	}
+	personality := sanitizePersonality(os.Getenv("SLACK_MCP_PERSONALITY"))
 
 	serverName := fmt.Sprintf("Slack MCP Server (%s)", personality)
 
