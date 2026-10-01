@@ -244,6 +244,29 @@ func TestSafetyCLIApproveStaleLiftSaysNothingLifted(t *testing.T) {
 	}
 }
 
+// A strikes lift is also how a server holding writes after an unrecorded
+// block is released, and approving it releases that hold even when no
+// recorded strike was lifted; the output must not say nothing happened.
+func TestSafetyCLIApproveSkippedStrikesLiftNamesTheHold(t *testing.T) {
+	h := newHarness(t)
+	w := h.workspace(safety.Strict)
+	now := time.Now()
+	blockOn(t, w, safety.Destination{Kind: safety.DestChannel, ConversationID: "C2", Name: "#general"})
+	r, _, err := w.IssueLift(safety.Request{Cases: []safety.Case{safety.CaseLift}, Tool: "say", Lift: []safety.Key{safety.StrikesKey}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Quarantine.Clear(safety.StrikesKey, safety.ByWeb, "", now); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run(r.ID+"\n", "approve", r.ID); code != 0 {
+		t.Fatalf("approve: %s", h.err.String())
+	}
+	if out := h.out.String(); !strings.Contains(out, "releases that hold") {
+		t.Fatalf("output: %s", out)
+	}
+}
+
 func TestSafetyCLITrustAddRemoveList(t *testing.T) {
 	h := newHarness(t)
 	w := h.workspace(safety.Strict)

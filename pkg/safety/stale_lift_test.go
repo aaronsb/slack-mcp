@@ -159,6 +159,75 @@ func TestApprovingALiftAfterTheFileWasRewrittenSkips(t *testing.T) {
 	}
 }
 
+// The page clears #a and a new block closes it again between Approve's
+// look at the file and its write: the approval must not wipe that block.
+func TestApproveChecksAndClearsUnderOneLock(t *testing.T) {
+	isolateXDG(t)
+	w := openTest(t, Soft)
+	now := time.Now()
+	block(t, w, channel("C1", "#a"))
+	block(t, w, channel("C1", "#a"))
+	r, _, _ := w.IssueLift(liftOf(keyA), now)
+	page, err := OpenDir(w.Dir, testOrg, Soft) // the server's page, another fold
+	if err != nil {
+		t.Fatal(err)
+	}
+	approveGapHook = func() {
+		approveGapHook = nil
+		if _, err := page.Quarantine.Clear(keyA, ByWeb, "", now); err != nil {
+			t.Fatal(err)
+		}
+		block(t, page, channel("C1", "#a"))
+	}
+	t.Cleanup(func() { approveGapHook = nil })
+	got, err := w.Approve(r, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.Quarantine.State().IsQuarantined("C1"); !ok {
+		t.Fatal("the approval wiped a block that landed after the page's clear")
+	}
+	if len(got.Skipped) != 1 {
+		t.Fatalf("skipped %v, want #a", got.Skipped)
+	}
+}
+
+// A place with a negative line (a corrupted pending entry) is not
+// comparable; it must not panic the gate or the CLI.
+func TestNegativePlaceLineIsUnordered(t *testing.T) {
+	isolateXDG(t)
+	w := openTest(t, Strict)
+	block(t, w, channel("C1", "#a"))
+	st := w.Quarantine.State()
+	if _, ordered := st.ClearedSince(keyA, Place{Line: -1, Prefix: st.Place().Prefix}); ordered {
+		t.Fatal("a negative line compared")
+	}
+}
+
+// A lift issued with no place (written by an older binary, or while the
+// file was unreadable) cannot be ordered: approving it lifts nothing and
+// names every key.
+func TestApprovingALiftWithoutAPlaceSkipsEveryKey(t *testing.T) {
+	isolateXDG(t)
+	w := openTest(t, Strict)
+	now := time.Now()
+	block(t, w, channel("C1", "#a"))
+	r, _, err := w.Pending.Create(Request{Cases: []Case{CaseLift}, Tool: "say", Lift: []Key{StrikesKey, keyA}}, now)
+	if err != nil || r.At != nil {
+		t.Fatalf("request %+v err %v", r, err)
+	}
+	got, err := w.Approve(r, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Skipped) != 2 {
+		t.Fatalf("skipped %v, want both keys", got.Skipped)
+	}
+	if st := w.Quarantine.State(); st.Strikes != 1 || len(st.Conversations) != 1 {
+		t.Fatalf("a placeless lift cleared something: %+v", st)
+	}
+}
+
 // ClearKeysAt applies nothing when the file moved past the place the page
 // was read at, and clears every target when it did not.
 func TestClearKeysAtRefusesAMovedFile(t *testing.T) {

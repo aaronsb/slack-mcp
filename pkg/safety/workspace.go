@@ -114,6 +114,10 @@ func OpenDir(dir string, org Org, p Posture) (*Workspace, error) {
 // pending, and a retry completes the lift: a clear of a key no longer in
 // force writes nothing. The reverse order could mark a lift applied whose
 // keys stay quarantined, with no request left to retry.
+// approveGapHook runs in Approve before the lift's check-and-clear; tests
+// use it to land another process's write as late as one can land.
+var approveGapHook func()
+
 func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
 	same := sameAs(shown)
 	var skipped []Key
@@ -125,19 +129,15 @@ func (w *Workspace) Approve(shown Request, now time.Time) (Request, error) {
 			return fmt.Errorf("%w: %s", ErrNotPending, r.Status)
 		}
 		if r.IsLift() {
-			st := w.Quarantine.State()
-			if st.Err != nil {
-				return fmt.Errorf("%w: %v", ErrUnreadable, st.Err)
+			if approveGapHook != nil {
+				approveGapHook()
 			}
-			stale := liftStale(st, r)
-			skipped = stale
-			for _, k := range r.Lift {
-				if containsKey(stale, k) {
-					continue
-				}
-				if _, err := w.Quarantine.Clear(k, ByApproval, r.ID, now); err != nil {
-					return err
-				}
+			// The check and the clears run under the quarantine file's
+			// one lock (lock order: pending, then quarantine).
+			var err error
+			skipped, err = w.Quarantine.ClearLift(r.Lift, r.At, ByApproval, r.ID, now)
+			if err != nil {
+				return err
 			}
 		}
 		return nil

@@ -449,7 +449,9 @@ func (s *QuarantineStore) Clear(target Key, by, pendingID string, now time.Time)
 // ClearKeysAt clears targets as Clear does, all under one hold of the
 // lock, and only when the file still stands at at: a block or clear
 // appended since (moved) means the operator answered a page that no longer
-// shows the state, and nothing is applied. cleared is per target.
+// shows the state, and nothing is applied. cleared is per target applied,
+// in order: on an error it covers the targets written before the one that
+// failed, which stay written.
 func (s *QuarantineStore) ClearKeysAt(targets []Key, by string, at Place, now time.Time) (moved bool, cleared []bool, err error) {
 	for _, k := range targets {
 		if err := checkClearable(k); err != nil {

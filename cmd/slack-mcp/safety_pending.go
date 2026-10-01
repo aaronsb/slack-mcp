@@ -118,6 +118,15 @@ func (c *safetyCLI) reportLift(r safety.Request) {
 		}
 		fmt.Fprintf(c.stdout, "%s: the safety state changed in a way this request cannot be checked against; nothing lifted for it. Clear it with: quarantine clear\n", name)
 	}
+	// The server's in-memory hold after a block it could not record is
+	// released by this request being approved, whatever it lifted; the CLI
+	// cannot see whether a server holds one.
+	for _, k := range r.Skipped {
+		if k.Kind == safety.KeyStrikes {
+			fmt.Fprintln(c.stdout, "If the server is holding writes after a block it could not record, approving this request releases that hold even though no recorded strike was lifted.")
+			break
+		}
+	}
 	if len(r.Skipped) < len(r.Lift) {
 		fmt.Fprintf(c.stdout, "Approved %s: lifted. Nothing was sent; the agent calls again.\n", r.ID)
 	} else {
