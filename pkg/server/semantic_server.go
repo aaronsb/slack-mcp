@@ -32,8 +32,10 @@ type SemanticMCPServer struct {
 	// sse is set once the server serves SSE, whose sessions are never
 	// asked for an approval in-band (ADR-013, Elicitation).
 	sse atomic.Bool
-	// clients holds the client lines noteClient has logged.
-	clients sync.Map
+	// clients holds the client lines noteClient has logged; clientLines
+	// counts them against maxClientLines.
+	clients     sync.Map
+	clientLines atomic.Int64
 }
 
 // Option configures the server at construction.
@@ -251,11 +253,35 @@ func (s *SemanticMCPServer) noteClient(ctx context.Context, info *server.Request
 			client = cs.GetClientInfo()
 		}
 	}
-	line := fmt.Sprintf("client: name=%q version=%q protocol=%s elicitation=%t sse=%t approval-form=%t",
-		client.Name, client.Version, protocol, declared, sse, modern && declared && !sse)
+	// Every string here is the client's own, so each is clipped and quoted:
+	// a newline cannot forge a log line, and a client varying them per
+	// request is bounded by maxClientLines.
+	line := fmt.Sprintf("client: name=%q version=%q protocol=%q elicitation=%t sse=%t approval-form=%t",
+		clip(client.Name), clip(client.Version), clip(protocol), declared, sse, modern && declared && !sse)
+	if _, seen := s.clients.Load(line); seen {
+		return
+	}
+	if n := s.clientLines.Add(1); n > maxClientLines {
+		if n == maxClientLines+1 {
+			log.Printf("client: more than %d distinct client answers; no more are logged", maxClientLines)
+		}
+		return
+	}
 	if _, seen := s.clients.LoadOrStore(line, true); !seen {
 		log.Print(line)
 	}
+}
+
+// maxClientLines bounds the distinct client lines noteClient keeps and logs.
+const maxClientLines = 64
+
+// clip bounds a client-supplied string for a log line.
+func clip(v string) string {
+	const max = 64
+	if len(v) > max {
+		return v[:max] + "…"
+	}
+	return v
 }
 
 // approvalForm is the input-required result asking the operator to answer
