@@ -61,10 +61,10 @@ func findDiscussionHandler(ctx context.Context, params map[string]interface{}) (
 	}
 
 	// Otherwise, search for discussions
-	if query == "" {
+	if query == "" && !hasFilter(params) {
 		return &FeatureResult{
 			Success: false,
-			Message: "Please provide either a search query or a threadId",
+			Message: "Please provide either a search query, a filter, or a threadId",
 		}, nil
 	}
 
