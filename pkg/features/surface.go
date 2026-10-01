@@ -35,12 +35,24 @@ func delegate(ctx context.Context, f *Feature, params map[string]interface{}, ec
 // echoLine states the tool, the mode, and every explicitly-passed scope
 // parameter, so the rendered output opens with the effective invocation.
 func echoLine(tool, mode string, params map[string]interface{}, keys ...string) string {
-	parts := []string{tool + " " + mode}
+	head := tool
+	if mode != "" {
+		head += " " + mode
+	}
+	parts := []string{head}
 	passed := make([]string, 0, len(keys))
 	for _, k := range keys {
-		if v, ok := params[k]; ok && v != nil && v != "" {
-			passed = append(passed, fmt.Sprintf("%s=%v", k, v))
+		v, ok := params[k]
+		if !ok || v == nil || v == "" || v == false {
+			continue
 		}
+		if list, isList := v.([]interface{}); isList && len(list) == 0 {
+			continue
+		}
+		if list, isList := v.([]string); isList && len(list) == 0 {
+			continue
+		}
+		passed = append(passed, fmt.Sprintf("%s=%v", k, v))
 	}
 	sort.Strings(passed)
 	parts = append(parts, passed...)
@@ -107,7 +119,7 @@ func inboxHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 
 var Messages = &Feature{
 	Name:        "messages",
-	Description: "Conversation content, addressed four ways (precedence: query beats target; around beats since): target alone reads it in full (a handle, '#channel', '@person', or a description); target+around fetches context around a timestamp; target+since renders a time window with triage; query searches with full Slack syntax (from:, in:, before:...). Read-only; never marks anything read.",
+	Description: "Conversation content, addressed four ways (precedence: query and filters beat target-less modes and refuse target; around beats since): target alone reads it in full (a handle, '#channel', '@person', or a description); target+around fetches context around a timestamp; target+since renders a time window with triage; query searches (raw Slack syntax passes through as written; in=, from=, after=, before=, has=, thread= are resolved filters composed onto it). Read-only; never marks anything read.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -125,7 +137,34 @@ var Messages = &Feature{
 			},
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "Search instead of fetch: full Slack search syntax; the server resolves from:@name through the ladder",
+				"description": "Search instead of fetch: raw Slack search text, passed to Slack as written (a from:@name typed here is NOT resolved or checked; use from= for resolution)",
+			},
+			"in": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "search: narrow to a '#channel' or '@person' (DM); resolved by name, a miss returns candidates and does not search. Several entries compose as repeated in: clauses; Slack's OR/AND behavior for repeats is unverified",
+			},
+			"from": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "search: messages by these people; resolved through the person ladder, a miss returns candidates and does not search. Several entries compose as repeated from: clauses; Slack's OR/AND behavior for repeats is unverified",
+			},
+			"after": map[string]interface{}{
+				"type":        "string",
+				"description": "search: YYYY-MM-DD (or 3d, 2w). Replaces the default window; not with timeframe",
+			},
+			"before": map[string]interface{}{
+				"type":        "string",
+				"description": "search: YYYY-MM-DD (or 3d, 2w)",
+			},
+			"has": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "search: 'link', 'pin', or a reaction as ':emoji:' (Slack's has::emoji:). Other values (file, star, bare reaction) are unverified and rejected",
+			},
+			"thread": map[string]interface{}{
+				"type":        "boolean",
+				"description": "search: only messages in threads (is:thread)",
 			},
 			"limit": map[string]interface{}{
 				"type":        "number",
@@ -137,7 +176,7 @@ var Messages = &Feature{
 			},
 			"timeframe": map[string]interface{}{
 				"type":        "string",
-				"description": "query only: how far back to search (default 1w)",
+				"description": "search: how far back to search (default 1w); refused together with after=, before=, or a date operator (after:, before:, on:, during:) in query=",
 			},
 		},
 		"required": []string{},
@@ -152,7 +191,14 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 	since, _ := params["since"].(string)
 
 	switch {
-	case query != "":
+	case query != "" || hasFilter(params):
+		if target != "" {
+			return &FeatureResult{
+				Success:  false,
+				Message:  "target= cannot be combined with query= or search filters.",
+				Guidance: "To search one place use in='#channel' or in='@person'; to read it, drop the filters.",
+			}, nil
+		}
 		// Echo what ran: the limit as Slack received it, not as passed.
 		shown := params
 		if lim, ok := explicitLimit(params); ok {
@@ -162,7 +208,11 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 			}
 			shown["limit"] = lim
 		}
-		echo := echoLine("messages", "query='"+query+"'", shown, "cursor", "limit", "timeframe")
+		mode := ""
+		if query != "" {
+			mode = "query='" + query + "'"
+		}
+		echo := echoLine("messages", mode, shown, "cursor", "limit", "timeframe", "in", "from", "after", "before", "has", "thread")
 		res, err := delegate(ctx, FindDiscussion, params, echo)
 		if res != nil {
 			res.Echo += res.EchoSuffix
@@ -189,7 +239,7 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 	default:
 		return &FeatureResult{
 			Success: false,
-			Message: "messages needs an address: target='<handle|#channel|@person>' (optionally with around=<ts> or since=<window>), or query='<slack search>'",
+			Message: "messages needs an address: target='<handle|#channel|@person>' (optionally with around=<ts> or since=<window>), or query='<slack search>' and/or filters (in, from, after, before, has, thread)",
 		}, nil
 	}
 }

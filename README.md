@@ -135,7 +135,7 @@ The deployment is `local` unless you declare it. The server does not detect it: 
 | Tool | Kind | What it does |
 |------|------|-------------|
 | `inbox` | noun | What needs you: `view='new'` (since your last dismiss), `'unreads'`, `'mentions'` |
-| `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` full Slack search syntax |
+| `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` raw Slack search syntax (passed as written) plus resolved filters `in`, `from`, `after`, `before`, `has` (link, pin, :emoji:), `thread` |
 | `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'`; `about`/`person` take `render='graph'` to also write a static HTML graph page (not in `batch`) |
 | `batch` | executor | Run a held plan of reads in one call: `commands=[{tool, params}...]`; playbooks via `save=`/`run=`/`list=`/`delete=` |
 | `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), files from the exchange directory (`files=['report.pdf']`, bare names, at most 10, shared as one message with `text` as the comment), or an emoji reaction |
@@ -151,6 +151,7 @@ Verb encodes effect, noun encodes domain, parameter encodes scope (ADR-009); the
 - **Stealth by default** — reads never trigger read receipts; only `mark-read` does
 - **Channel names, not IDs** — the AI never sees internal Slack identifiers
 - **Tokens stay local** — stored in `~/.config/slack-mcp/config.json` with `0600` permissions
+- **The log is private and holds no credentials** — on stdio it goes to `$XDG_STATE_HOME/slack-mcp/slack-mcp.log` (default `~/.local/state/slack-mcp/`), directory `0700`, file `0600`; set `SLACK_MCP_LOG_FILE` in your MCP client config to move it. It records workspace and user names, never tokens or cookies, and anything token- or cookie-shaped is redacted before it is written
 - **Ledgers hold no message content** — the durable estate ledger stores entity facts (names, lifecycle, tombstones); the attention ledger stores `{user, conversation, day}` encounters with a 90-day window; both live under XDG with `0600`, and deleting them deletes the graph
 - **Hour-level activity is recorded only for you** — colleagues bucket by day, by design
 - **Graph reports are local, private files** — `estate render='graph'` writes a self-contained HTML page to `$XDG_DATA_HOME/slack-mcp/reports/` (default `~/.local/share/slack-mcp/reports/`), directory `0700`, file `0600`, one per view and person, replaced on each render. A report holds relationship data — the same names and counts the view shows, never IDs or colleagues' hours — so treat it like the ledgers; delete the directory to remove them. The page loads nothing from the network (bundled Cytoscape.js, strict Content-Security-Policy), and nothing is served or opened for you

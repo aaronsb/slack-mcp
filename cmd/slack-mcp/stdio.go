@@ -39,7 +39,7 @@ func runStdio(s *server.SemanticMCPServer, idle time.Duration) int {
 	context.AfterFunc(ctx, func() {
 		time.AfterFunc(forcedExit, func() {
 			log.Printf("Shutdown did not finish within %s; forcing exit", forcedExit)
-			os.Exit(1)
+			exit(1)
 		})
 	})
 

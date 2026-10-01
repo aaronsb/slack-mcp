@@ -35,3 +35,16 @@ func DataDir() string {
 	}
 	return filepath.Join(home, ".local", "share", AppName)
 }
+
+// StateDir returns the XDG state directory: $XDG_STATE_HOME/slack-mcp,
+// default ~/.local/state/slack-mcp. The stdio log lives here.
+func StateDir() string {
+	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
+		return filepath.Join(base, AppName)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".local", "state", AppName)
+	}
+	return filepath.Join(home, ".local", "state", AppName)
+}

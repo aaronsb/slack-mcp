@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/aaronsb/slack-mcp/pkg/lifecycle"
+	"github.com/aaronsb/slack-mcp/pkg/logsink"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/safety"
 	"github.com/aaronsb/slack-mcp/pkg/server"
 	"github.com/aaronsb/slack-mcp/pkg/setup"
 )
@@ -18,7 +20,19 @@ import (
 var defaultSseHost = "127.0.0.1"
 var defaultSsePort = 13080
 
+// logSink is the process log's redacting writer. exit flushes it, since
+// os.Exit skips deferred calls.
+var logSink = logsink.NewRedactingWriter(os.Stderr)
+
+func exit(code int) {
+	_ = logSink.Flush()
+	os.Exit(code)
+}
+
 func main() {
+	log.SetOutput(logSink)
+	defer func() { _ = logSink.Flush() }()
+
 	// Check for subcommands before flag parsing
 	if len(os.Args) > 1 && os.Args[1] == "setup" {
 		if err := setup.RunSetup(); err != nil {
@@ -26,30 +40,51 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && isSafetyCommand(os.Args[1]) {
+		exit(runSafetyCommand(os.Args[1:]))
+	}
 
 	var transport string
 	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio or sse)")
 	flag.StringVar(&transport, "transport", "stdio", "Transport type (stdio or sse)")
 	flag.Parse()
 
-	// For stdio transport, redirect logs to a file to avoid interfering with protocol
+	// Every log line passes through the redacting writer, a safety net
+	// under the rule that log sites never print credentials. For stdio the
+	// log goes to a private file (0600 in the XDG state directory, or
+	// SLACK_MCP_LOG_FILE) so it cannot interfere with the protocol.
+	var logOut io.Writer = os.Stderr
 	if transport == "stdio" {
-		logFile, err := os.OpenFile("/tmp/slack-mcp.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		logFile, err := logsink.Open(logsink.Path())
 		if err == nil {
-			log.SetOutput(logFile)
+			logOut = logFile
 			defer logFile.Close()
 		} else {
-			log.SetOutput(io.Discard)
+			fmt.Fprintln(os.Stderr, "slack-mcp: logging disabled:", err)
+			logOut = io.Discard
 		}
 	}
+	logSink = logsink.NewRedactingWriter(logOut)
+	log.SetOutput(logSink)
 
 	// .env may set only the allowlisted keys; anything else must come from
 	// the client environment. Stderr, because stdio logging goes to a file.
 	if err := loadDotEnv(".env", os.LookupEnv, os.Setenv); err != nil {
 		log.Print(err)
 		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
-		os.Exit(1)
+		exit(1)
 	}
+
+	// SLACK_MCP_IDENTITY and SLACK_MCP_SAFETY are declared in the client
+	// config (ADR-014); an unknown value refuses to start.
+	settings, err := safety.SettingsFromEnv(os.LookupEnv)
+	if err != nil {
+		log.Print(err)
+		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
+		exit(1)
+	}
+	safety.SetCurrent(settings)
+	log.Printf("Account identity: %s; safety posture: %s", settings.Identity, settings.Posture)
 
 	// Refuse a deployment and idle-timeout combination that cannot help
 	// before anything boots. Stderr, because stdio logging goes to a file.
@@ -57,7 +92,7 @@ func main() {
 	if err != nil {
 		log.Print(err)
 		fmt.Fprintln(os.Stderr, "slack-mcp:", err)
-		os.Exit(1)
+		exit(1)
 	}
 
 	// Build provider: try config file, then env vars, then start without auth
@@ -88,7 +123,7 @@ func main() {
 
 	switch transport {
 	case "stdio":
-		os.Exit(runStdio(s, idle))
+		exit(runStdio(s, idle))
 	case "sse":
 		host := os.Getenv("SLACK_MCP_HOST")
 		if host == "" {
@@ -103,7 +138,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("%v", err)
 		}
-		os.Exit(runSSE(s, httpServer, sseServer))
+		exit(runSSE(s, httpServer, sseServer))
 	default:
 		log.Fatalf("Invalid transport type: %s. Must be 'stdio' or 'sse'", transport)
 	}
@@ -168,7 +203,7 @@ func loadProvider() (*provider.ApiProvider, error) {
 	}
 
 	if token != "" || cookie != "" {
-		log.Println("Ignoring env var tokens — don't match expected format (xoxc-/xoxd-)")
+		log.Println("Ignoring env var tokens: they lack the xoxc/xoxd prefixes")
 	}
 
 	// No credentials found anywhere
