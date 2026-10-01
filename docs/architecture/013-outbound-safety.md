@@ -13,21 +13,31 @@ release as ADR-012's implementation and file upload on `say` (#92).
 Amendment (2026-09-30, follow-up): settles what the first text left to
 the implementation. The sections below carry the rules.
 
-- Scanner: minimum lengths and boundaries per pattern class; base64
-  alignment and line rejoining, hex, URL-encoding, and gzip decoding;
-  no precedence between decoders; depth 3 and a 32 MiB budget,
-  breadth-first, so a match within budget always blocks; the env-secret
-  value test with its must-match and must-not-match tables; the cost of
+- Order: ADR-012's local checks run before the quarantine step, the
+  first that may call Slack.
+- Scanner: reads the text as sent (fallback and built `rich_text`)
+  and as supplied, and an upload's title and comment; minimum
+  lengths and boundaries per pattern class, with Slack app tokens,
+  webhooks, model-provider keys, PuTTY keys, and credential URLs added;
+  base64 alignment and line rejoining, hex, URL-encoding, and gzip at
+  any offset; a fixed decoder order with no precedence; depth 3 and a
+  32 MiB budget, breadth-first, so a match within budget always blocks;
+  the env-secret name words and value test, identifier-shaped values
+  excluded, with must-match and must-not-match tables; the cost of
   base64-heavy files.
-- Block result: the class and field only.
+- Block result: the class and field only, files by position.
 - Gate case 1: which fields make a destination external, fetched fresh
-  at gate time, failing closed as external.
+  at gate time, failing closed as external; outside Grid any other team
+  is external.
 - Provenance: a one-byte edit defeating case 2 is an accepted limit.
 - Pending requests: a `PENDING` log line and the `approve` listing; no
   desktop notification.
 - Ordering: quarantine checks run on what the target names, before any
-  `conversations.open`; `mark-read` never opens a conversation; a
-  membership lookup that fails refuses the call.
+  `conversations.open`; conversations are classified by `is_im` and
+  `is_mpim`, not by ID prefix, so a group DM named `#mpdm-…` is checked
+  through its members; `mark-read` never opens a conversation; a lookup
+  that fails refuses the call in the quarantine step and gates it in the
+  gate step.
 - Banner: wording, and placement once at the top of a result, batch
   included.
 
@@ -76,16 +86,27 @@ result.
 An approval gate covers the risky-but-legitimate cases the scanner
 cannot judge. Every refusal happens before anything the agent supplied
 reaches Slack, and before any `conversations.open`, in this order: the
-strike lock, the destination's quarantine, ADR-012's name and file
-checks, the scanner, the approval gate. The scanner runs before the
-gate, so approval is never a route for content the scanner refuses.
+strike lock, ADR-012's name and file checks, the destination's
+quarantine, the scanner, the approval gate. The first two are local and
+make no Slack call, so ADR-012's rule that a bad name or file fails with
+zero Slack calls holds; the quarantine step is the first that may call
+Slack. The scanner runs before the gate, so approval is never a route
+for content the scanner refuses.
 
 ### Layer 2: the scanner
 
-The scanner reads everything a `say` would send: the text, each
-attached file's name and bytes, and a reaction's emoji name. Each file
-is read once into memory; the scanner reads that buffer, and the same
-buffer is what is uploaded, so the bytes scanned are the bytes sent.
+The scanner reads everything a `say` would send, as the server builds
+it: each attached file's name and bytes, a reaction's emoji name, any
+title or initial comment an upload carries (#92), and the message text
+in three forms. The text is scanned as the agent supplied it, as the
+fallback text the server posts (`NormalizeMrkdwn`), and as the plain
+text of each `rich_text` section the server builds (`ToRichText`), its
+elements' text joined with no separator. Formatting can split a token
+across elements (`` `xoxb`-123… `` becomes a code element `xoxb` and a
+text element `-123…`) that Slack renders as one string; the joined form
+puts it back together. Each file is read once into memory; the scanner
+reads that buffer, and the same buffer is what is uploaded. For text and
+files alike, the bytes scanned are the bytes sent.
 
 It matches a fixed set of pattern classes. A left boundary means the
 match starts the input or follows a byte outside `[A-Za-z0-9]`; a right
@@ -93,39 +114,56 @@ boundary means it ends the input or precedes such a byte.
 
 | Class | Matches |
 |---|---|
-| Private key | `-----BEGIN ` and any run of `[A-Z0-9 ]` ending `PRIVATE KEY-----` (PKCS#1, PKCS#8, `ENCRYPTED`, `EC`, `DSA`, `OPENSSH`), or `-----BEGIN PGP PRIVATE KEY BLOCK-----`, followed within the next 512 bytes by at least 64 base64-alphabet characters, line breaks and `Key: value` header lines ignored |
-| Slack token | left boundary, `xox` and one letter `[a-z]`, `-`, then at least 20 of `[A-Za-z0-9-]` |
+| Private key | `-----BEGIN ` and any run of `[A-Z0-9 ]` ending `PRIVATE KEY-----` (PKCS#1, PKCS#8, `ENCRYPTED`, `EC`, `DSA`, `OPENSSH`), or `-----BEGIN PGP PRIVATE KEY BLOCK-----`, followed within the next 512 bytes by at least 64 base64-alphabet characters, line breaks and `Key: value` header lines ignored; or a PuTTY key, `PuTTY-User-Key-File-` followed within 4096 bytes by `Private-Lines:` |
+| Slack token | left boundary, `xox` and one of `a b c d e o p r s`, `-`, then at least 20 of `[A-Za-z0-9-]`; or `xapp-` and at least 20 of `[A-Za-z0-9-]` |
 | Slack cookie | left boundary, `xoxd-`, then at least 20 of `[A-Za-z0-9%/+=_-]` |
+| Slack webhook | `hooks.slack.com/services/`, `/workflows/`, or `/triggers/`, then at least 20 of `[A-Za-z0-9/]` |
 | AWS access key | left boundary, `AKIA` or `ASIA`, exactly 16 of `[A-Z0-9]`, right boundary |
 | GitHub token | left boundary, `ghp_`, `gho_`, `ghu_`, `ghs_`, or `ghr_` and at least 36 of `[A-Za-z0-9]`; or `github_pat_` and at least 82 of `[A-Za-z0-9_]` |
+| Model-provider key | left boundary, `sk-ant-` or `sk-proj-` and at least 32 of `[A-Za-z0-9_-]`; or `sk-` and at least 40 of `[A-Za-z0-9]` |
 | JWT | left boundary, three `.`-separated segments of `[A-Za-z0-9_-]`: a header of at least 10 characters, a payload of at least 10, and a signature of at least 16; the header base64url-decodes, padding optional, to a JSON object with a string member `alg` |
+| Credential URL | `scheme://user:password@host` anywhere, with a non-empty password that is not a placeholder (below) and not, case-insensitive, `password`, `pass`, or `secret` |
 | Env secret | a line `NAME=value`, below |
 
 A private-key header with no key body after it (code that parses PEM,
-a document about key formats) does not match; a body with no header is
-DER bytes, which no pattern reads. The minimums sit at or below each
-issuer's real token length, so a longer future format still matches.
+a document about key formats) does not match. A body with no header is
+base64 text that decodes to DER, in which no pattern matches. The
+minimums sit at or below each issuer's real token length, so a longer
+future format still matches.
 
 **Env secret.** A line, after leading whitespace and an optional
 `export `, of the form `NAME = value` (spaces around `=` optional),
-where `NAME` is `[A-Za-z_][A-Za-z0-9_]*` and contains `SECRET`,
-`PASSWORD`, or `TOKEN`, case-insensitive. The value is taken without
+where `NAME` is `[A-Za-z_][A-Za-z0-9_]*`. `NAME` is split into words at
+`_` and at each lowercase-to-uppercase step, and it is a secret name
+when a word, case-insensitive, is one of `SECRET`, `SECRETS`,
+`PASSWORD`, `PASSWD`, `PASS`, `PWD`, `TOKEN`, `KEY`, `APIKEY`,
+`SECRETKEY`, `ACCESSKEY`, `PRIVATEKEY`, `AUTHTOKEN`, `CREDENTIAL`,
+`CREDENTIALS`, or `AUTH`, and no word is `PUBLIC` or `PUB`. Whole words
+keep `MONKEY`, `AUTHOR`, and `BYPASS` out. The value is taken without
 surrounding quotes; an unquoted value ends at ` #`. It matches when the
 value:
 
-- is at least 12 characters;
+- is at least 16 characters;
 - has Shannon entropy over its characters of at least 3.0 bits per
   character;
-- draws from at least two of lowercase letters, uppercase letters, and
-  digits;
 - is not all digits;
 - is not a placeholder: empty, or containing (case-insensitive)
   `changeme`, `change_me`, `example`, `placeholder`, `redacted`, or
   `your_`/`your-`, or consisting only of `x`, `X`, `*`, `.`, or `-`, or
   beginning `${`, `$(`, `{{`, `<`, or `%` and closing with the matching
   `}`, `)`, `}}`, `>`, or `%`;
-- is not a URL with a scheme and no `user:password@`, or a path
-  beginning `/`, `./`, `../`, or `~/`.
+- is not a URL without a password, or a path beginning `/`, `./`,
+  `../`, or `~/`;
+- is not identifier-shaped.
+
+A value is identifier-shaped when it holds only `[A-Za-z0-9._-]` and,
+split into tokens at `.`, `_`, `-`, each letter-digit step, each
+lowercase-to-uppercase step, and before the last capital of a capital
+run followed by a lowercase letter (`CSRFToken` gives `CSRF`, `Token`),
+no letter token is a single letter. Names of things split into words
+(`Argon2PasswordHasher` gives `Argon`, `2`, `Password`, `Hasher`);
+random strings almost always leave a lone letter between digits or case
+changes (`a1B2c3`, `9f8e`, `550e8400`).
 
 The implementation carries these as test tables.
 
@@ -140,21 +178,33 @@ The implementation carries these as test tables.
 | `API_TOKEN=<your-token-here>` | placeholder |
 | `DB_PASSWORD=your_password_here` | placeholder |
 | `SECRET_KEY=xxxxxxxxxxxxxxxx` | placeholder |
-| `SECRET_NAME=prod-db-credentials` | one character class |
-| `TOKEN_URL=https://login.microsoftonline.com/common/oauth2/v2.0/token` | URL without credentials |
+| `SECRET_NAME=prod-db-credentials` | identifier-shaped |
+| `TOKEN_URL=https://login.microsoftonline.com/common/oauth2/v2.0/token` | URL without a password |
 | `PASSWORD_FILE=/run/secrets/db_password` | path |
+| `CSRF_TOKEN_HEADER=X-CSRF-Token` | short (12) |
+| `PASSWORD_HASH_ALGORITHM=PBKDF2-SHA256` | short (13) |
+| `PASSWORD_HASHER=Argon2PasswordHasher` | identifier-shaped |
+| `SSH_PUBLIC_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGk3…` | `PUBLIC` in the name |
+| `DATABASE_URL=postgres://app:${DB_PASSWORD}@db/app` | placeholder password |
 
-| Must match |
-|---|
-| `DB_PASSWORD=Xk9#mQ2v!pL7wR4z` |
-| `export API_TOKEN="a1B2c3D4e5F6g7H8i9J0"` |
-| `SECRET_KEY='9f8e7d6c5b4a39281706f5e4d3c2b1a0'` |
-| `session_token = Zm9vYmFyYmF6cXV4MTIz` |
-| `TOKEN=550e8400-e29b-41d4-a716-446655440000` |
+| Must match | Through |
+|---|---|
+| `DB_PASSWORD=Xk9#mQ2v!pL7wR4z` | `#` and `!` are not identifier characters |
+| `export API_TOKEN="a1B2c3D4e5F6g7H8i9J0"` | lone letters |
+| `SECRET_KEY='9f8e7d6c5b4a39281706f5e4d3c2b1a0'` | lone letters |
+| `session_token = Zm9vYmFyYmF6cXV4MTIz` | lone letters (`v`, `F`) |
+| `TOKEN=550e8400-e29b-41d4-a716-446655440000` | lone letter `e` |
+| `OPENAI_API_KEY=sk-proj-4fK9x2LmQ8vR7tY1wZ3nB6cD` | `KEY`; lone letters |
+| `PAYMENTS_KEY=Hq7T9xKzY2bR4mWvN8pL3cD5` | `KEY`; lone letters |
+| `DB_PASS=Tr0ub4dor&3xQ9mP` | `PASS`; `&` |
+| `DATABASE_URL=postgres://u:p@h/db` | credential URL, whatever the name |
 
-A long single-case passphrase (`PASSWORD=correcthorsebatterystaple`) is
-a known miss: the class-mix rule that keeps resource names out lets it
-through. The env class is a net for a pasted `.env`, not a boundary.
+Every must-match value other than the credential URL is at least 16
+characters with entropy of at least 3.3 bits per character. Two kinds of secret are known misses: a
+passphrase of plain words (`PASSWORD=correcthorsebatterystaple`) and a
+random string with no lone letter (all lowercase, say) are both
+identifier-shaped. The env class is a net for a pasted `.env`, not a
+boundary.
 
 **Decoding.** Encoded content is decoded, and the decoded bytes go
 through the full pattern set and the decoders again.
@@ -171,35 +221,46 @@ through the full pattern set and the decoders again.
 - **Hex.** A run of at least 40 hex digits, decoded at both alignments.
 - **URL-encoding.** A maximal non-whitespace span containing a `%XX`
   escape is percent-decoded; `+` is left as is.
-- **Gzip.** Bytes that begin with `1f 8b 08`, at the start of a file or
-  of any decoded output, are inflated.
+- **Gzip.** Every occurrence of `1f 8b 08` in a file's bytes or in any
+  decoded output starts an inflate attempt, so gzip glued behind other
+  bytes, including the bytes a glued base64 prefix of four or more
+  characters decodes to, is still inflated. An attempt that fails
+  costs only what it produced.
 
 There is no precedence between decoders. A span more than one decoder
-recognizes (a hex run is also a base64 run) is decoded by each, and a
-match through any of them blocks.
+recognizes (every hex run is also a base64 run) is decoded by each, in a
+fixed order: base64 at alignments 0 to 3, then hex at alignments 0 and
+1, then URL-decoding; gzip occurrences inside each output follow in
+offset order. A match through any of them blocks.
 
 Decoding goes to depth 3: the content as sent is depth 0, and output at
 depth 3 is matched but not decoded again. A budget of 32 MiB of decoded
 output per call covers every field and depth together. It is counted on
 the output as it is produced, so inflation stops at the budget whatever
 the stream claims. The scan runs breadth-first: every field at depth 0
-(the text, the file names, each file's bytes, in that order), then all
-of depth 1, and so on, with runs in offset order. The first match ends
-the scan as a block. Content that exhausts the budget without a match
-is refused as unscannable: nothing is sent, and no quarantine or strike
-follows. A match found before the budget runs out is a block, never
-unscannable.
+(the text forms, the file names, each file's bytes, in that order), then
+all of depth 1, and so on, with spans in offset order and decoders in
+the order above. The first match ends the scan as a block. Content that
+exhausts the budget without a match is refused as unscannable: nothing
+is sent, and no quarantine or strike follows. A match found before the
+budget runs out is a block, never unscannable. A small input can be
+unscannable too: gzip nested inside base64 inside gzip expands at each
+level, so a few kilobytes can reach the budget. That fails closed, at
+no cost beyond the refused call.
 
 Base64 costs about three times its own size in decoded output, since
 each of four alignments yields three-quarters of the run, so a call
-carries roughly 10 MiB of base64 before it is unscannable. Notebooks
-with embedded plots (`.ipynb`), HTTP archives (`.har`), SVGs with
-embedded images, and email files (`.eml`) are mostly base64 and reach
-that first. Their decoded payloads are images and attachments, which
-rarely contain an alphabet run long enough to decode again. A `.har`
-also carries the request headers and cookies it captured, and blocks
-on them, correctly. The budget is sized for these files: at 8 MiB, under
-3 MiB of base64 would already be unscannable.
+carries roughly 10 MiB of base64 before it is unscannable. Hex costs
+about four times its size: the base64 decoders read it too, for three
+times, and the hex decoder adds half its size at each of two
+alignments. Notebooks with embedded plots (`.ipynb`), HTTP archives
+(`.har`), SVGs with embedded images, and email files (`.eml`) are
+mostly base64 and reach the budget first. Their decoded payloads are
+images and attachments, which rarely contain an alphabet run long
+enough to decode again. A `.har` also carries the request headers and
+cookies it captured, and blocks on them, correctly. The budget is sized
+for these files: at 8 MiB, under 3 MiB of base64 would already be
+unscannable.
 
 No model is in the loop. The patterns are compiled into the binary, and
 the same input gives the same answer. A match on any class is a
@@ -230,30 +291,36 @@ conversations: a quarantined person's public channels stay writable.
 
 The check is by conversation and by membership, however the
 destination was named, and it runs on what the target names before any
-`conversations.open`:
+`conversations.open`.
 
-- A `#channel` or bare channel name resolves from the cache to a
-  conversation ID, which is checked.
-- A person (`@handle`, or a bare word that resolves to one) resolves to
-  a user ID through ADR-005's ladder, and that person is checked. Their
-  DM, if one exists, is not consulted: the person key covers it. A DM
-  that does not exist yet is opened only after every check and the gate
-  pass, immediately before the send. The resolver therefore yields a
-  user ID on the write path and leaves opening to the send.
-- A raw `C` ID is checked as a conversation.
-- A raw `D` ID is checked as a conversation and through its other
-  member: the `user` field from the cache, else from
-  `conversations.info`.
-- A raw `G` ID is fetched with `conversations.info`. A private channel
-  is checked as a conversation; a group DM is checked as a conversation
-  and through each member, from `conversations.members`, every page.
-- A `thread:` target on `mark-read` is checked by its channel ID as
-  above.
+A person (`@handle`, or a bare word that resolves to one) resolves to a
+user ID through ADR-005's ladder, and that person is checked; the person
+key covers every DM and group DM with them. A DM that does not exist yet
+is opened only after every check and the gate pass, immediately before
+the send, so the resolver yields a user ID on the write path and leaves
+opening to the send.
 
-A membership lookup that fails refuses the call: "Could not confirm
-that this conversation is open to writes; nothing was sent." It counts
-no strike, issues no pending request, and may be retried. The fetch
-serves the rest of the call too: gate case 1 reuses it.
+Anything else resolves to a conversation ID: a `#channel` or bare
+channel name from the cache, a raw ID as given, a `thread:` target on
+`mark-read` by its channel ID. The conversation is checked by its ID,
+then classified by its `is_im` and `is_mpim` flags, from the cache when
+it holds the conversation and from `conversations.info` otherwise; the
+ID's prefix decides nothing, since a private channel can carry a `C` ID
+and a `G` conversation can become a channel. Group DMs are in the cache
+under their `mpdm-…` names, so `#mpdm-…` reaches one as surely as a
+raw `G` ID does.
+
+- A DM is also checked through its other member, its `user` field.
+- A group DM is also checked through each member, from
+  `conversations.members`, every page, fetched on each gated call.
+- A channel is checked by its ID alone.
+
+A lookup this step needs that fails refuses the call: "Could not
+confirm that this conversation is open to writes; nothing was sent." It
+counts no strike, issues no pending request, and may be retried. A
+failed lookup in the gate step is different: there it makes the
+destination external, and the call becomes a pending request (gate case
+1). A fetch made in this step serves the gate step too.
 
 `mark-read` never opens a conversation. A `dm:` target naming a person
 with no DM answers that there is no DM with them and does nothing. The
@@ -348,7 +415,8 @@ Two surfaces carry the state to the agent:
 
 The banner is the first thing in the result, above ADR-009's echo line,
 on success and error results alike. A `batch` result carries it once,
-above the first item, and its items do not repeat it; the state is read
+as the first lines of the result, above `batch`'s own echo line, and its
+items do not repeat it; the state is read
 once per call. With nothing in force there is no banner. Its lines,
 each present only when it applies:
 
@@ -404,8 +472,10 @@ A block returns a result that says, in this order:
 
 - **BLOCKED**, and nothing was sent;
 - the pattern class that matched, and the field: `the message text`,
-  `the reaction`, `the name of file report.txt`, or `file report.txt`.
-  Nothing else about the match: no offset, no matched value, no decode
+  `the reaction`, `the upload's title or comment`, `the name of the 2nd
+  attached file`, or `the 2nd attached file`. Files are named by
+  position, never by name, since the name may be what matched. Nothing
+  else about the match: no offset, no matched value, no decode
   chain, and not whether the match was in decoded content. Those go to
   the quarantine file, and the class and location to the log line, for
   the operator;
@@ -450,27 +520,32 @@ on the scanner.
 For case 1, the server decides at gate time from data fetched then, not
 from its caches, which a channel's sharing can outrun. The own
 organization is the `team_id`, and the `enterprise_id` when there is
-one, that `auth.test` returned at startup. A person is external when
-`users.info` reports `is_stranger`, or a `team_id` other than the own
-team without an `enterprise_user.enterprise_id` equal to the own
-enterprise. Enterprise Grid users on a sibling workspace of the same
-organization are therefore internal. A destination is external when:
+one, that `auth.test` returned at startup; the implementation keeps both
+(`captureIdentity` keeps the team ID today and drops the enterprise ID).
+A person is external when `users.info` reports `is_stranger`, or reports
+a `team_id` other than the own team, unless the own `enterprise_id` is
+non-empty and equal to the person's `enterprise_user.enterprise_id`.
+Enterprise Grid users on a sibling workspace of the same organization
+are therefore internal, and outside Grid any other team is external.
+`is_stranger` alone is not enough: it is false for an external user who
+shares a channel with the account. A destination is external when:
 
 - for a channel, `conversations.info` reports `is_ext_shared` or
   `is_pending_ext_shared`, or `is_shared` without `is_org_shared`.
   `is_org_shared` alone, a channel shared across the workspaces of one
   Grid organization, is internal; `is_shared` with neither flag is
   ambiguous and treated as external;
-- for a DM, `conversations.info` reports `is_ext_shared`, or the other
-  member is external;
+- for a DM, however it was named (a raw ID, or a person whose DM
+  exists), `conversations.info` on the DM reports `is_ext_shared`, or
+  `users.info` finds the other member external;
 - for a group DM, `conversations.info` reports `is_ext_shared`, or any
   member from `conversations.members` is external;
 - for a person with no DM yet, that person is external.
 
 The self-DM is never external. A failed `conversations.info`,
-`conversations.members`, or `users.info` call makes the destination
-external, so the call issues a pending request rather than sending. A
-fetch made earlier in the same call for the quarantine check is reused.
+`conversations.members`, or `users.info` call in this step makes the
+destination external, so the call issues a pending request rather than
+sending. A fetch the quarantine step made in the same call is reused.
 
 For case 2, `download` records provenance when it writes: the exchange
 name, the SHA-256 of the bytes, the Slack file ID, and every
