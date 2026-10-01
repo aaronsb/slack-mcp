@@ -5,8 +5,9 @@
 Accepted
 
 Builds on ADR-012, which is its first layer. Gates the two
-Slack-visible writes on ADR-009's surface, `say` and `mark-read`, and
-adds no tool: the operator's controls are CLI subcommands. ADR-014 sets
+Slack-visible writes on ADR-009's surface, `say` and `mark-read`. The
+operator's controls are CLI subcommands and, since the #132 amendment, a
+local page that the `unlock` tool opens. ADR-014 sets
 the notice wording and how hard a block escalates. Lands in the same
 release as ADR-012's implementation and file upload on `say` (#92).
 
@@ -114,6 +115,14 @@ The MCP client's permission prompt approves a call as a whole, and an
 unattended deployment has no one at the prompt. Whatever stops these
 routes has to run in the server, on what the call carries, and give the
 same answer every time.
+
+The deployment this ADR designs for is a desktop client (Claude
+Desktop or another desktop agent app) whose agent has this server's tools
+and perhaps a browser, but no shell. The person at the keyboard is the
+operator. An agent with a shell running as the same user, such as a coding
+agent working in a terminal, can reach every file and binary this ADR
+relies on; that deployment is covered under Risks and limits, not by the
+design.
 
 This ADR assumes a well-designed host loop. The host may restart the
 server or reinitialize its tools, after a context compaction for
@@ -557,6 +566,16 @@ when `auth` loads a workspace, the server switches to that workspace's
 file and rebuilds the tool descriptions. The server instructions keep
 what they said at startup until the server restarts.
 
+Amendment (2026-10-01, local clearing page, #132): most installs run
+in a desktop client whose agent has no shell, so the person at the
+keyboard has no terminal habit. Quarantines and the strike lock can also
+be cleared from a local web page that a new tool, `unlock`, opens. The
+page and the CLI write the same clear entry, marked by its source. The
+tool reads and writes no safety state itself. Elicitation still never
+lifts. An agent that runs as the operator's user with a shell can defeat
+every file-based control, and that deployment is accepted, not designed
+against. Under Context, Clearing, and Risks and limits.
+
 ### What the operator and the agent see
 
 At block time the server writes a log line:
@@ -617,13 +636,36 @@ clearable:
   <who>`, where `<who>` is `@handle`, `#channel`, or `strikes`. A `say`
   or `mark-read` refused by a quarantine or the lock also issues a
   pending lift request (gate case 3) for `slack-mcp approve`.
+- **Local page**: the `unlock` tool starts a web server on 127.0.0.1,
+  opens the operator's browser at a link that carries a random token
+  for this instance, and returns the link. The page lists each
+  quarantined person and conversation and the strike count or lock, each
+  with the failure type: the scanner class and where it matched, the
+  only facts the file keeps. It never shows a matched value, which the
+  file does not store, or a Slack ID. Each row has a checkbox. **Clear**
+  appends a clear entry for each checked row, marked `by=web`; **Done**
+  closes the page without clearing. Either one stops that server
+  instance, so a later request to the same link fails, and another
+  clear needs a new link from the tool. An instance nobody answers stops
+  after fifteen minutes, and a new `unlock` call stops the instance
+  before it.
+
+  The tool's result carries the link and says only that the page is
+  open; it never reports what was cleared, and its description and the
+  server instructions tell the agent to offer it when the operator asks
+  to clear a lock. The agent's next call runs the full order. The page
+  is not a pending request: it clears directly, as the CLI's `clear`
+  does, and a lift request left pending is still answerable at the CLI
+  afterward. Under SLACK_MCP_DEPLOYMENT=remote the tool refuses, since
+  the page would open on the server's host.
 - **Editing or removing the file.** This is documented in the README
   and nowhere else: never in a tool description, the server
   instructions, or tool output. It takes effect on a running server at
   its next read of the file. It is documentation for the operator, not
   a control.
 
-Lifting is CLI-only; elicitation never lifts (see Elicitation). A clear
+Lifting is the CLI or the local page; elicitation never lifts (see
+Elicitation). A clear
 appends a clear entry rather than deleting the block, so the file stays
 a history. A lift lets no call through: the agent calls again, and the
 new call runs the full order, scanner included. Lifting never counts a
@@ -1051,7 +1093,8 @@ the log.
   operator acts.
 - Every block leaves a record in the quarantine file that no tool can
   remove.
-- No new tool; the surface stays at nine.
+- One new tool, `unlock`, which only opens the local page; the gated
+  writes are unchanged.
 - A destination the operator has vetted stops costing an approval on
   every send, without loosening the scanner or the quarantine there.
 
@@ -1127,7 +1170,23 @@ the log.
   through a pseudo-terminal. The client's permissions should deny the
   agent writes to the data directory and execution of `slack-mcp`
   subcommands. A forged trust entry skips the approval gate only; the
-  scanner and the quarantine still run.
+  scanner and the quarantine still run. This is the shell-equipped
+  deployment Context sets aside: an agent running as the operator's
+  user with a shell can always clear a lock, and the design accepts
+  that rather than resisting it.
+- **The local page.** An agent with browser automation can open the
+  link the tool returns and click Clear; the page is no barrier to it,
+  and is meant to be the path a desktop operator can take, not a guard.
+  A GET changes nothing, so an agent whose only web tool fetches pages
+  cannot clear; a clear is a POST whose `Origin` must be the page's own.
+  Another site in the operator's browser cannot clear either: the link's
+  token is random per instance, a request whose `Host` is not the
+  loopback address and port is refused, so DNS rebinding finds nothing,
+  and the `Origin` check refuses a cross-site form. The token travels
+  only in the link: in the tool result, in the browser launch's command
+  line, and in the log when the launch is suppressed. Another user on a
+  shared host may see a command line; a shared host is outside the
+  deployment this ADR designs for.
 - **Trust added by elicitation.** In `soft` a host that lets the model
   answer elicitation lets the agent add trust. `soft` is the attended
   posture, and `strict` both refuses to offer trust by elicitation and
@@ -1188,6 +1247,14 @@ unread.
   answer every time.
 - **A desktop notification for pending requests.** See Pending
   requests.
+- **A challenge on the local page** (a timed gesture, a lockout after
+  failed attempts, a passkey). A multimodal agent with browser
+  automation can read the page and time a click, so a gesture slows it
+  without stopping it; a passkey would stop it but needs registration
+  first. Left out until use shows the plain page is not enough.
+- **Clearing through the `unlock` tool's parameters.** A tool that
+  clears on the agent's call is a lift the agent under attack can
+  answer. The tool opens the page; the person at the keyboard clears.
 - **Provenance in a sidecar file in the exchange directory.** The
   agent's client tools could edit or delete it, and `say files=` could
   name it.
