@@ -186,7 +186,7 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 				"timestamp": formatTimestamp(msgTime),
 				"threadId":  fmt.Sprintf("%s:%s", channel.ID, msg.Timestamp),
 				"responded": responded,
-				"context":   fmt.Sprintf("Channel: #%s", channelName),
+				"context":   fmt.Sprintf("Channel: %s", channelName),
 			}
 
 			// Apply urgency filter

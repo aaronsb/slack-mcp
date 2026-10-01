@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
@@ -278,10 +279,14 @@ const maxClientLines = 64
 // clip bounds a client-supplied string for a log line.
 func clip(v string) string {
 	const max = 64
-	if len(v) > max {
-		return v[:max] + "…"
+	if len(v) <= max {
+		return v
 	}
-	return v
+	cut := max
+	for cut > 0 && !utf8.RuneStart(v[cut]) {
+		cut--
+	}
+	return v[:cut] + "…"
 }
 
 // approvalForm is the input-required result asking the operator to answer

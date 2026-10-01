@@ -135,3 +135,11 @@ func TestClientLogLinesAreQuotedAndCapped(t *testing.T) {
 		t.Errorf("the cap was not announced:\n%s", buf.String())
 	}
 }
+
+// A clipped client string ends on a whole character.
+func TestClipKeepsWholeCharacters(t *testing.T) {
+	got := clip(strings.Repeat("a", 63) + "é" + "tail")
+	if got != strings.Repeat("a", 63)+"…" {
+		t.Errorf("clip = %q, want the split character dropped", got)
+	}
+}
