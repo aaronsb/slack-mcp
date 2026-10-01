@@ -193,16 +193,16 @@ func TestEnvSecretLineRules(t *testing.T) {
 		want bool
 	}{
 		{"  export   API_TOKEN = a1B2c3D4e5F6g7H8i9J0", true},
-		{"apiKey=a1B2c3D4e5F6g7H8i9J0", true},                // lower-to-upper step makes KEY a word
-		{"MONKEY=a1B2c3D4e5F6g7H8i9J0", false},               // whole words only
-		{"AUTHOR=a1B2c3D4e5F6g7H8i9J0", false},               // whole words only
-		{"BYPASS=a1B2c3D4e5F6g7H8i9J0", false},               // whole words only
-		{"PUB_KEY=a1B2c3D4e5F6g7H8i9J0", false},              // PUB excludes
-		{"API_TOKEN=a1B2c3D4e5F6g7H8i9J0 # comment", true},   // unquoted ends at ` #`
-		{"API_TOKEN=a1B2c3D4e5F6g7H8i9J0\t# comment", true},  // or a tab and `#`
-		{"API_TOKEN=a1B2c3D4e5F6g7H8i9J0\r# comment", false}, // a carriage return is no comment separator
-		{"API_TOKEN=a1B2c3 # D4e5F6g7H8i9J0", false},         // too short once the comment is cut
-		{"API_TOKEN=0000000000000000000000", false},          // all digits
+		{"apiKey=a1B2c3D4e5F6g7H8i9J0", true},               // lower-to-upper step makes KEY a word
+		{"MONKEY=a1B2c3D4e5F6g7H8i9J0", false},              // whole words only
+		{"AUTHOR=a1B2c3D4e5F6g7H8i9J0", false},              // whole words only
+		{"BYPASS=a1B2c3D4e5F6g7H8i9J0", false},              // whole words only
+		{"PUB_KEY=a1B2c3D4e5F6g7H8i9J0", false},             // PUB excludes
+		{"API_TOKEN=a1B2c3D4e5F6g7H8i9J0 # comment", true},  // unquoted ends at ` #`
+		{"API_TOKEN=a1B2c3D4e5F6g7H8i9J0\t# comment", true}, // or a tab and `#`
+		{"API_TOKEN=a1B2c3D4e5F6g7H8i9J0\r# comment", true}, // or a carriage return and `#`
+		{"API_TOKEN=a1B2c3 # D4e5F6g7H8i9J0", false},        // too short once the comment is cut
+		{"API_TOKEN=0000000000000000000000", false},         // all digits
 		{"API_TOKEN=$(vault read -field=token secret/x)", false},
 		{"API_TOKEN=%API_TOKEN_FROM_ENV_VARIABLE%", false},
 		{"API_TOKEN=../relative/a1B2c3D4e5F6", false},
