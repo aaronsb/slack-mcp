@@ -304,3 +304,28 @@ func TestBareAtMeReadsTheSelfDM(t *testing.T) {
 		t.Errorf("read %v, want only the self-DM", read)
 	}
 }
+
+// A DM the cache has not seen yet is still read by '@handle', as since=
+// reads it, rather than reported missing.
+func TestBareAtReadsAnUncachedDM(t *testing.T) {
+	srv := slacktest.New(t)
+	srv.SeedUsers(slack.User{ID: "U2", Name: "schen", RealName: "Sam Chen"})
+	srv.Handle("conversations.open", func(*http.Request) any {
+		return map[string]any{"ok": true, "channel": map[string]any{"id": "D9"}}
+	})
+	var read []string
+	srv.Handle("conversations.history", func(r *http.Request) any {
+		_ = r.ParseForm()
+		read = append(read, r.Form.Get("channel"))
+		return map[string]any{
+			"ok": true, "has_more": false,
+			"messages": []any{slacktest.Message("U2", "lunch?", "1782246200.000000")},
+		}
+	})
+	ap := bootedProvider(t, srv)
+
+	out := runTool(t, features.Messages, ap, map[string]any{"target": "@schen"})
+	if !strings.Contains(out, "lunch?") || len(read) != 1 || read[0] != "D9" {
+		t.Fatalf("@schen did not read the DM (read %v):\n%s", read, out)
+	}
+}
