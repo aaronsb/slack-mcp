@@ -386,8 +386,11 @@ the call carries.
 - The file is written in full into a staging directory inside the
   exchange directory. The staging directory's name holds a format
   character (U+2060 WORD JOINER), which the bare-name rule refuses, so
-  no file parameter can name it or a file in it, and no caller's file
-  can occupy its name. The file is then hard-linked to its name through
+  no file parameter can name it or a file in it, and no server
+  parameter can occupy its name. A client's own file tools can; the
+  staging name must `Lstat` as a plain directory, and anything else
+  there (a symlink back into the exchange directory, a file) makes
+  `put` fail and write nothing. The file is then hard-linked to its name through
   the root. A link never replaces an existing name, so a taken name is
   suffixed as under Writes and the rename stated. The staged name is
   then removed. A `say` running meanwhile finds no file, or a file with
@@ -397,7 +400,12 @@ the call carries.
 - On a filesystem without hard links (FAT, some network mounts) every
   `put` fails and writes nothing. NTFS supports them; this path has not
   been exercised on Windows. The staging directory stays once made; the
-  miss answer under Reads never lists it.
+  miss answer under Reads never lists it. A crash mid-write leaves a
+  staged copy nothing can reach, and a crash between the link and the
+  unstage leaves one holding a second link on the named file, which
+  Reads refuses. Each `put` first removes staged copies older than ten
+  minutes; the link comes after the write, so that leaves the named
+  file whole and readable.
 - The result gives the name used, the byte count, the display path, and
   the next call, `say to='<destination>' files=['<name>']`. Under the
   remote deployment it adds that the path is on the server's host.

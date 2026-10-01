@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // stagingDir holds files being written before they take their name. Its
@@ -23,9 +24,10 @@ const stagingDir = ".⁠staging"
 type Staged struct {
 	// File is open for writing. The caller closes it before Commit or
 	// Discard.
-	File *os.File
-	d    *Dir
-	tmp  string
+	File  *os.File
+	d     *Dir
+	tmp   string
+	stuck bool
 }
 
 // Stage creates an empty staged file at mode 0600.
@@ -33,6 +35,16 @@ func (d *Dir) Stage() (*Staged, error) {
 	if err := d.root.Mkdir(stagingDir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, fmt.Errorf("create the exchange directory's staging area: %w", err)
 	}
+	// No file parameter can create the staging name, but a client's own
+	// file tools can. A symlink there would be followed inside the root and
+	// land the partial file under a reachable name, so anything other than
+	// a plain directory is refused.
+	if fi, err := d.root.Lstat(stagingDir); err != nil {
+		return nil, fmt.Errorf("check the exchange directory's staging area: %w", err)
+	} else if !fi.IsDir() || fi.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+		return nil, fmt.Errorf("the exchange directory's staging area %q is not a plain directory; remove it", stagingDir)
+	}
+	d.sweepStaging()
 	var b [12]byte
 	for i := 0; i < 3; i++ {
 		if _, err := rand.Read(b[:]); err != nil {
@@ -63,7 +75,8 @@ func (s *Staged) Commit(name string) (*CreateResult, error) {
 	if err := s.d.root.Remove(s.tmp); err != nil {
 		// With two links the file is refused on read; take the name back.
 		if rmErr := s.d.root.Remove(got); rmErr != nil {
-			return nil, fmt.Errorf("unstage %s: %v; %s keeps a second link and is refused on read until it is removed: %v", got, err, got, rmErr)
+			s.stuck = true
+			return nil, fmt.Errorf("unstage %s: %v; %s keeps a second link and is refused on read until the staged copy is removed: %v", got, err, got, rmErr)
 		}
 		return nil, fmt.Errorf("unstage %s: %w", got, err)
 	}
@@ -71,9 +84,44 @@ func (s *Staged) Commit(name string) (*CreateResult, error) {
 }
 
 // Discard removes the staged file. One already removed is not an error.
+// After a Commit that could take back neither name, Discard leaves the
+// staged copy alone: removing it would turn the named file, which the
+// error reported refused, into an attachable one.
 func (s *Staged) Discard() error {
+	if s.stuck {
+		return nil
+	}
 	if err := s.d.root.Remove(s.tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+// stagingOrphanAge is how old a staged file must be before Stage treats it
+// as left by a write that never finished.
+const stagingOrphanAge = 10 * time.Minute
+
+// sweepStaging removes staged files older than stagingOrphanAge. A crash
+// mid-write leaves one nothing else can reach; a crash between Commit's
+// link and its unstage leaves one that holds a second link on a named
+// file, which Reads refuses until the staged name is gone. The link comes
+// after the write, so removing it leaves that file whole.
+func (d *Dir) sweepStaging() {
+	f, err := d.root.Open(stagingDir)
+	if err != nil {
+		return
+	}
+	entries, err := f.ReadDir(-1)
+	f.Close()
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-stagingOrphanAge)
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		_ = d.root.Remove(filepath.Join(stagingDir, e.Name()))
+	}
 }
