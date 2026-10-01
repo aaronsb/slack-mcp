@@ -93,6 +93,9 @@ func pdfExempt(b []byte) [][2]int {
 		return nil
 	}
 	var spans [][2]int
+	// floor is the end of the previous stream's data. A dictionary is never
+	// looked for behind it, so each byte is walked back over at most once.
+	floor := 0
 	for i := 0; i < len(b); {
 		switch c := b[i]; {
 		case c == '%':
@@ -107,13 +110,15 @@ func pdfExempt(b []byte) [][2]int {
 			}
 			end := findEndstream(b, data)
 			if end < 0 {
-				i += 6
-				continue
+				// No endstream follows anywhere, so no later stream has
+				// data either.
+				return spans
 			}
-			if dict, ok := dictBefore(b, i); ok && imageDict(dict) {
+			if dict, ok := dictBefore(b, i, floor); ok && imageDict(dict) {
 				spans = append(spans, [2]int{data, end})
 			}
 			i = end + len("endstream")
+			floor = i
 		default:
 			i++
 		}
@@ -198,19 +203,16 @@ func findEndstream(b []byte, i int) int {
 }
 
 // dictBefore finds the `<<…>>` that ends, with only whitespace after it, at
-// the keyword at kw, within 4 KiB before it, nesting counted.
-func dictBefore(b []byte, kw int) ([]byte, bool) {
+// the keyword at kw, within 4 KiB before it and after floor, nesting counted.
+func dictBefore(b []byte, kw, floor int) ([]byte, bool) {
 	k := kw
-	for k > 0 && isPDFSpace(b[k-1]) {
+	for k > floor && isPDFSpace(b[k-1]) {
 		k--
 	}
 	if k < 2 || b[k-2] != '>' || b[k-1] != '>' {
 		return nil, false
 	}
-	lo := kw - 4096
-	if lo < 0 {
-		lo = 0
-	}
+	lo := max(kw-4096, floor)
 	depth := 1
 	for p := k - 3; p-1 >= lo; {
 		switch {

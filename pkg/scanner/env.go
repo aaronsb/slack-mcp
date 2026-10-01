@@ -12,110 +12,114 @@ import (
 // findEnvSecret matches a line `NAME = value` whose NAME names a secret and
 // whose value looks like one (ADR-013, Env secret). Lines start at the input's
 // start and after each `\n`; in a joined rich_text form, each inline
-// element's start also counts as a line start. A value runs to the end of its
-// line; for a NAME at an element start, the value ending where the next
-// element starts is tried as well, so a code element inside a sentence is
-// judged on its own.
+// element's start also counts as a line start.
+//
+// Each candidate is parsed within its own segment: a line start's segment is
+// its line, an element start's runs to the next element start or the line's
+// end, whichever comes first. Element segments partition the line, so the
+// work stays linear however many elements a line holds; and a code element
+// inside a sentence is judged on its own.
 func findEnvSecret(b []byte, elementStarts []int) int {
-	starts := elementStarts
-	if len(starts) > 0 {
+	var starts []int
+	if len(elementStarts) > 0 {
 		starts = append([]int(nil), elementStarts...)
 		sort.Ints(starts)
 	}
 	ei := 0
-	nextElement := func(after int) int {
-		k := sort.SearchInts(starts, after+1)
-		if k < len(starts) {
-			return starts[k]
-		}
-		return len(b)
-	}
-	try := func(s int, element bool) bool {
-		end := lineEnd(b, s)
-		if envLine(b[s:end]) {
-			return true
-		}
-		if element {
-			if e := nextElement(s); e < end {
-				return envLine(b[s:e])
-			}
-		}
-		return false
-	}
-	// Walk line starts and element starts together, in offset order.
-	line := 0
-	for {
+	for line := 0; line < len(b); {
+		end := lineEnd(b, line)
 		for ei < len(starts) && starts[ei] < line {
-			if s := starts[ei]; s >= 0 && (ei == 0 || starts[ei-1] != s) && try(s, true) {
-				return s
-			}
 			ei++
 		}
-		if line >= len(b) {
-			break
-		}
-		element := false
-		for ei < len(starts) && starts[ei] == line {
-			element = true
-			ei++
-		}
-		if try(line, element) {
+		// The line start, and any element start at the same offset.
+		if envSegment(b[line:end]) {
 			return line
 		}
-		nl := bytes.IndexByte(b[line:], '\n')
-		if nl < 0 {
-			break
+		for ei < len(starts) && starts[ei] < end {
+			s := starts[ei]
+			for ei < len(starts) && starts[ei] == s {
+				ei++
+			}
+			segEnd := end
+			if ei < len(starts) && starts[ei] < end {
+				segEnd = starts[ei]
+			}
+			if envSegment(b[s:segEnd]) {
+				return s
+			}
 		}
-		line += nl + 1
-	}
-	for ; ei < len(starts); ei++ {
-		if s := starts[ei]; s >= 0 && s < len(b) && (ei == 0 || starts[ei-1] != s) && try(s, true) {
-			return s
-		}
+		line = end + 1
 	}
 	return -1
 }
 
-// envLine reports whether line, after leading whitespace and an optional
-// `export `, is `NAME = value` with a secret NAME and a secret-looking value.
-func envLine(line []byte) bool {
-	l := strings.TrimRight(string(line), "\r")
-	l = strings.TrimLeft(l, " \t")
-	if strings.HasPrefix(l, "export ") {
-		l = strings.TrimLeft(l[len("export "):], " \t")
+func isBlank(c byte) bool { return c == ' ' || c == '\t' }
+
+// envSegment reports whether seg, after leading spaces and tabs and an
+// optional `export `, is `NAME = value` with a secret NAME and a
+// secret-looking value. It works on the bytes and stops early: NAME and `=`
+// are parsed first, and an unquoted value ends at the first whitespace.
+func envSegment(seg []byte) bool {
+	i := 0
+	for i < len(seg) && isBlank(seg[i]) {
+		i++
 	}
-	n := 0
-	for n < len(l) && (l[n] == '_' || l[n] >= 'A' && l[n] <= 'Z' || l[n] >= 'a' && l[n] <= 'z' ||
-		n > 0 && l[n] >= '0' && l[n] <= '9') {
+	if bytes.HasPrefix(seg[i:], []byte("export ")) {
+		i += len("export ")
+		for i < len(seg) && isBlank(seg[i]) {
+			i++
+		}
+	}
+	n := i
+	if n >= len(seg) || !(seg[n] == '_' || isLetter(seg[n])) {
+		return false
+	}
+	for n < len(seg) && (seg[n] == '_' || isAlnum(seg[n])) {
 		n++
 	}
-	if n == 0 {
+	name := seg[i:n]
+	for n < len(seg) && isBlank(seg[n]) {
+		n++
+	}
+	if n >= len(seg) || seg[n] != '=' {
 		return false
 	}
-	name := l[:n]
-	rest := strings.TrimLeft(l[n:], " \t")
-	if !strings.HasPrefix(rest, "=") {
+	if !secretName(string(name)) {
 		return false
 	}
-	if !secretName(name) {
-		return false
+	n++
+	for n < len(seg) && isBlank(seg[n]) {
+		n++
 	}
-	return secretValue(envValue(strings.TrimLeft(rest[1:], " \t")))
+	v, ok := envValue(seg[n:])
+	return ok && secretValue(string(v))
 }
 
-// envValue takes the value without surrounding quotes; an unquoted value
-// ends at ` #`.
-func envValue(raw string) string {
+// envLine is envSegment over one line, for tests and callers that hold one.
+func envLine(line []byte) bool { return envSegment(line) }
+
+// envValue takes the value without surrounding quotes. An unquoted value
+// ends at the first whitespace; it holds whitespace (and does not match)
+// unless only blanks, a line ending, or a ` #` comment follow.
+func envValue(raw []byte) ([]byte, bool) {
 	if len(raw) > 0 && (raw[0] == '"' || raw[0] == '\'') {
-		if j := strings.IndexByte(raw[1:], raw[0]); j >= 0 {
-			return raw[1 : 1+j]
+		if j := bytes.IndexByte(raw[1:], raw[0]); j >= 0 {
+			return raw[1 : 1+j], true
 		}
-		return raw[1:]
+		return bytes.TrimRight(raw[1:], "\r"), true
 	}
-	if j := strings.Index(raw, " #"); j >= 0 {
-		raw = raw[:j]
+	w := 0
+	for w < len(raw) && !isSpace(raw[w]) {
+		w++
 	}
-	return strings.TrimRight(raw, " \t")
+	k := w
+	for k < len(raw) && (isBlank(raw[k]) || raw[k] == '\r') {
+		k++
+	}
+	if k < len(raw) && !(raw[k] == '#' && k > w) {
+		return nil, false // whitespace inside the value
+	}
+	return raw[:w], true
 }
 
 var secretWords = map[string]bool{
@@ -167,28 +171,30 @@ func isUpper(c byte) bool  { return c >= 'A' && c <= 'Z' }
 func isDigit(c byte) bool  { return c >= '0' && c <= '9' }
 func isLetter(c byte) bool { return isLower(c) || isUpper(c) }
 
-// secretValue applies ADR-013's value tests.
+// secretValue applies ADR-013's value tests, cheapest first: length,
+// whitespace, the shape exclusions, and entropy last.
 func secretValue(v string) bool {
 	if utf8.RuneCountInString(v) < 16 {
-		return false
-	}
-	if entropy(v) < 3.0 {
-		return false
-	}
-	if allDigits(v) || isPlaceholder(v) {
 		return false
 	}
 	if strings.IndexFunc(v, unicode.IsSpace) >= 0 {
 		return false
 	}
+	if allDigits(v) || isPlaceholder(v) {
+		return false
+	}
 	if isURL(v) || strings.HasPrefix(v, "arn:") || isPath(v) {
 		return false
 	}
-	return !identifierShaped(v)
+	if identifierShaped(v) {
+		return false
+	}
+	return entropy(v) >= 3.0
 }
 
 // entropy is the Shannon entropy of v over its characters, in bits per
-// character.
+// character. The terms are summed over the sorted counts, so the float result
+// does not depend on map iteration order.
 func entropy(v string) float64 {
 	counts := map[rune]int{}
 	n := 0
@@ -199,8 +205,13 @@ func entropy(v string) float64 {
 	if n == 0 {
 		return 0
 	}
-	h := 0.0
+	sorted := make([]int, 0, len(counts))
 	for _, c := range counts {
+		sorted = append(sorted, c)
+	}
+	sort.Ints(sorted)
+	h := 0.0
+	for _, c := range sorted {
 		p := float64(c) / float64(n)
 		h -= p * math.Log2(p)
 	}

@@ -58,6 +58,29 @@ replaces the attempt cap. Pixel data the scanner has parsed in a
 well-formed PNG or PDF is exempt from inflation; nothing else is. Under
 Decoding.
 
+Amendment (2026-10-01, scanner implementation, #127): settles what
+building the scanner showed the text left open or got wrong. The
+sections below carry the rules.
+
+- Base64: a trailing group of two or three characters decodes to the
+  bytes it holds; only a lone final character is dropped.
+- Field order: the text forms, then the reaction's emoji, the upload's
+  title and comment, the file names, and each file's bytes.
+- Private keys: a JSON-escaped `\n` or `\r\n` in a PEM body counts as
+  a line break, so a cloud service-account key file matches. A PuTTY
+  key's body is the `N` lines `Private-Lines: N` declares, with at least
+  40 base64 characters, so Ed25519 and ECDSA keys match.
+- Credential URL: a user part holding `?`, `#`, `&`, or `=` is a query
+  or fragment, not userinfo.
+- JWT: only a header start that can begin a JSON object's base64 counts
+  toward a cap of 16 starts per run.
+- Budget: every decoded buffer costs at least 64 bytes, so memory
+  follows the budget whatever the input's shape.
+- Env secret: in the joined `rich_text` form an element's line ends at
+  the next element.
+- Accepted limits: the false positives the patterns imply by design,
+  and a small crafted PDF whose image stream exempts its zlib data.
+
 ## Context
 
 The agent this server serves can run for hours, and reading other
@@ -135,15 +158,15 @@ boundary means it ends the input or precedes such a byte.
 
 | Class | Matches |
 |---|---|
-| Private key | `-----BEGIN ` and any run of `[A-Z0-9 ]` ending `PRIVATE KEY-----` (PKCS#1, PKCS#8, `ENCRYPTED`, `EC`, `DSA`, `OPENSSH`), or `-----BEGIN PGP PRIVATE KEY BLOCK-----`, followed within the next 512 bytes by at least 64 base64-alphabet characters, line breaks and `Key: value` header lines ignored; or a PuTTY key, `PuTTY-User-Key-File-` followed within 4096 bytes by `Private-Lines:` and then by at least 64 base64-alphabet characters on the lines after it |
+| Private key | `-----BEGIN ` and any run of `[A-Z0-9 ]` ending `PRIVATE KEY-----` (PKCS#1, PKCS#8, `ENCRYPTED`, `EC`, `DSA`, `OPENSSH`), or `-----BEGIN PGP PRIVATE KEY BLOCK-----`, followed within the next 512 bytes by at least 64 base64-alphabet characters, line breaks and `Key: value` header lines ignored, a JSON-escaped `\n` or `\r\n` counting as a line break; or a PuTTY key, `PuTTY-User-Key-File-` followed within 4096 bytes by `Private-Lines: N`, with at least 40 base64-alphabet characters on the `N` lines after it |
 | Slack token | left boundary, `xox` and one of `a b c d e o p r s`, `-`, then at least 20 of `[A-Za-z0-9-]`; or `xapp-` and at least 20 of `[A-Za-z0-9-]` |
 | Slack cookie | left boundary, `xoxd-`, then at least 20 of `[A-Za-z0-9%/+=_-]` |
 | Slack webhook | `hooks.slack.com/services/`, `/workflows/`, or `/triggers/`, then at least 20 of `[A-Za-z0-9/]` |
 | AWS access key | left boundary, `AKIA` or `ASIA`, exactly 16 of `[A-Z0-9]`, right boundary |
 | GitHub token | left boundary, `ghp_`, `gho_`, `ghu_`, `ghs_`, or `ghr_` and at least 36 of `[A-Za-z0-9]`; or `github_pat_` and at least 82 of `[A-Za-z0-9_]` |
 | Model-provider key | left boundary, `sk-`, a lowercase word `[a-z]+`, `-`, and at least 32 of `[A-Za-z0-9_-]` (`sk-ant-`, `sk-proj-`, `sk-svcacct-`, `sk-admin-`); or `sk-` and at least 40 of `[A-Za-z0-9]` |
-| JWT | left boundary, three `.`-separated segments of `[A-Za-z0-9_-]`: a header of at least 10 characters, a payload of at least 10, and a signature of at least 16; the header base64url-decodes, padding optional, to a JSON object with a string member `alg` |
-| Credential URL | `scheme://user:password@host` anywhere, with a non-empty password that is not a placeholder (below) and not, case-insensitive, `password`, `pass`, or `secret` |
+| JWT | left boundary, three `.`-separated segments of `[A-Za-z0-9_-]`: a header of at least 10 characters, a payload of at least 10, and a signature of at least 16; the header base64url-decodes, padding optional, to a JSON object with a string member `alg`. Inside a run of `[A-Za-z0-9_-]` a header can start only at the run's start or after a `-` or `_`; only starts whose first character is `e`, `I`, `C`, or `D` (the base64 of `{` or of a leading space, tab, newline, or carriage return) are tried, at most 16 per run |
+| Credential URL | `scheme://user:password@host` anywhere, with a non-empty password that is not a placeholder (below) and not, case-insensitive, `password`, `pass`, or `secret`, and a user part (possibly empty) holding none of `?`, `#`, `&`, or `=`; the password may hold `#` |
 | Env secret | a line `NAME=value`, below |
 
 A private-key header with no key body after it (code that parses PEM
@@ -154,6 +177,14 @@ future format still matches. Placeholders in vendors' own documentation
 (`xoxb-1234-…` filled out to length, a webhook URL of
 `T00000000/B00000000/XXXX…`) have the real shape and match; that cost is
 accepted, since the scanner cannot tell a sample from a token.
+
+The patterns also match by design where no secret is meant, and these
+are accepted: the default credentials in a `docker-compose.yml`
+(`postgres://postgres:postgres@db`), a kebab-case identifier that
+starts `sk-` and runs long enough (`sk-feature-flag-…`), and an env
+line whose value is random hex (`CACHE_KEY=` and 32 hex digits, which
+leaves lone letters). Each costs a block and a strike on content that
+was safe to send.
 
 **Env secret.** A line, after leading whitespace and an optional
 `export `, of the form `NAME = value` (spaces around `=` optional),
@@ -166,8 +197,9 @@ when a word, case-insensitive, is one of `SECRET`, `SECRETS`,
 keep `MONKEY`, `AUTHOR`, and `BYPASS` out. The value is taken without
 surrounding quotes; an unquoted value ends at ` #`. `NAME` must start a
 line in at least one scanned form. In the joined `rich_text` form, the
-start of each inline element counts as a line start, so a whole code
-element (`` `API_TOKEN=…` ``) is caught inside a sentence; a `NAME=value`
+start of each inline element counts as a line start, and that line ends
+at the next element's start, so a whole code element
+(`` `API_TOKEN=…` ``) is caught inside a sentence; a `NAME=value`
 inside running prose is not. It matches when the value:
 
 - is at least 16 characters;
@@ -249,7 +281,10 @@ through the full pattern set and the decoders again.
   decoded at each of the four alignments, dropping 0 to 3 leading
   characters, so a run with alphabet characters glued to its front
   still decodes; `-` and `_` decode as `+` and `/`, padding is ignored,
-  and a final partial quantum is dropped.
+  a trailing group of two or three characters decodes to the one or two
+  bytes it holds, and only a lone final character, which holds no whole
+  byte, is dropped. Dropping every partial group would cut the last one
+  or two bytes off each padded string, a secret at its end included.
 - **Hex.** A run of at least 40 hex digits, decoded at both alignments.
 - **URL-encoding.** A maximal non-whitespace span containing a `%XX`
   escape is percent-decoded; `+` is left as is.
@@ -332,8 +367,15 @@ through a reader with no read-ahead (a `bytes.Reader`, which
 `bufio.Reader`), so a false attempt charges the bytes it read, not a
 buffer. The budget is counted as the output is
 produced, so inflation stops at the budget whatever
-the stream claims. The scan runs breadth-first: every field at depth 0
-(the text forms, the file names, each file's bytes, in that order), then
+the stream claims. Every decoded buffer costs at least 64 bytes, its
+length when that is more: a flood of tiny outputs, a `%41` every four
+bytes or a short base64 run every 25, reaches the budget instead of
+holding millions of small buffers in memory, so the scanner's memory
+follows the budget whatever the input's shape. Spans are found as the
+scan reaches them, never listed up front. The scan runs breadth-first:
+every field at depth 0 (the text forms, then the reaction's emoji, the
+upload's title and comment, the file names, and each file's bytes, in
+that order), then
 all of depth 1, and so on, with spans in offset order and decoders in
 the order above. The first match ends the scan as a block. Content that
 exhausts the budget without a match is refused as unscannable: nothing
@@ -1006,6 +1048,12 @@ the log.
   with a custom encoding, which inflates to glyph codes rather than
   characters. The layers raise the cost; they do not make exfiltration
   impossible.
+- **A crafted PDF exempts its own streams.** The exemption needs only
+  `%PDF-` in the first 1024 bytes and a stream whose dictionary names
+  an image filter: a few lines of text wrapped around a zlib stream
+  under `<< /Filter /DCTDecode >>` keep that stream from being inflated.
+  This is the pixel-data limit below, reached with a fake container
+  rather than a real one.
 - **Exempt pixel data.** A secret deliberately compressed into the
   pixel chunks of a well-formed PNG, or into a PDF stream whose
   dictionary marks it as an image, is not found: the scanner parsed

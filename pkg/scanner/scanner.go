@@ -174,14 +174,18 @@ type Result struct {
 	Unscannable bool
 	// UnscannableField is the field whose decoding exhausted the budget.
 	UnscannableField *FieldRef
-	// BudgetUsed is how much of the budget the scan charged.
-	BudgetUsed int64
 
-	record *Record
+	budgetUsed int64
+	record     *Record
 }
 
 // Blocked reports whether a pattern matched.
 func (r Result) Blocked() bool { return len(r.Findings) > 0 }
+
+// BudgetUsedForLog is how much of the decode budget the scan charged. It is
+// for the operator's log only: an agent told how close a refused call came
+// to the budget learns how to size a split (ADR-013, Layer 4).
+func (r Result) BudgetUsedForLog() int64 { return r.budgetUsed }
 
 // Record returns the quarantine-file record of a block. It is for the
 // operator's record only; never pass it, or anything derived from it beyond
@@ -200,8 +204,19 @@ type node struct {
 	data          []byte
 	field         int // index into the sorted fields
 	depth         int
-	chain         []Step
+	parent        *node // nil at depth 0
+	step          Step  // how parent's bytes decoded to these
 	elementStarts []int
+}
+
+// chain walks n's parents to the decode chain from the field as sent. It is
+// built only for a block.
+func (n *node) chain() []Step {
+	chain := make([]Step, n.depth)
+	for p := n; p.parent != nil; p = p.parent {
+		chain[p.depth-1] = p.step
+	}
+	return chain
 }
 
 // Scan scans every field and returns the first match, or reports the content
@@ -248,19 +263,19 @@ func Scan(fields []Field, opts Options) Result {
 			}
 			if exhausted {
 				ref := sorted[n.field].Ref()
-				return Result{Unscannable: true, UnscannableField: &ref, BudgetUsed: s.used}
+				return Result{Unscannable: true, UnscannableField: &ref, budgetUsed: s.used}
 			}
 		}
 		level = next
 	}
-	return Result{BudgetUsed: s.used}
+	return Result{budgetUsed: s.used}
 }
 
 func (s *scan) block(fields []Field, n *node, class Class, off int) Result {
 	ref := fields[n.field].Ref()
 	return Result{
 		Findings:   []Finding{{Class: class, Field: ref}},
-		BudgetUsed: s.used,
-		record:     &Record{Class: class, Field: ref, Offset: off, Chain: n.chain},
+		budgetUsed: s.used,
+		record:     &Record{Class: class, Field: ref, Offset: off, Chain: n.chain()},
 	}
 }

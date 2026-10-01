@@ -24,7 +24,7 @@ func TestPerformanceLargeJPEGLike(t *testing.T) {
 	d := time.Since(start)
 	mustClean(t, r)
 	t.Logf("50 MiB JPEG-like: %v, %.1f MiB/s, budget used %d bytes (%.2f%%)",
-		d, 50/d.Seconds(), r.BudgetUsed, 100*float64(r.BudgetUsed)/float64(len(buf)))
+		d, 50/d.Seconds(), r.BudgetUsedForLog(), 100*float64(r.BudgetUsedForLog())/float64(len(buf)))
 	if d > 2*time.Minute {
 		t.Fatalf("took %v", d)
 	}
@@ -39,7 +39,7 @@ func benchScan(b *testing.B, fields []Field) {
 	b.ReportAllocs()
 	var used int64
 	for b.Loop() {
-		used = Scan(fields, Options{}).BudgetUsed
+		used = Scan(fields, Options{}).BudgetUsedForLog()
 	}
 	b.ReportMetric(float64(used), "budget-bytes")
 }

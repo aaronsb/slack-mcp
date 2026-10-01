@@ -13,6 +13,7 @@ type scan struct {
 	used     int64
 	maxDepth int
 
+	rd  bytes.Reader // reused for every inflate attempt
 	gz  gzip.Reader
 	fl  io.ReadCloser // a flate decompressor, reused through flate.Resetter
 	buf []byte
@@ -49,13 +50,82 @@ func (s *scan) exhausted() bool { return s.used >= s.budget }
 // stops the scan (a match).
 type emitFunc func(*node) bool
 
+// childOverhead is the least any decoded buffer costs against the budget.
+// A child costs max(len, childOverhead), so a flood of tiny outputs (a `%41`
+// every four bytes, a short base64 run every 25) exhausts the budget instead
+// of holding millions of small buffers in memory.
+const childOverhead = 64
+
 // Span kinds, in the pinned decoder order that breaks ties at one offset.
 const (
 	spanBase64 = iota
 	spanHex
 	spanURL
 	spanInflate
+	spanKinds
 )
+
+// cursors finds each decoder's spans lazily, one ahead, so nothing is listed
+// up front: memory stays bounded by the budget whatever the input's shape.
+type cursors struct {
+	b       []byte
+	inflate bool
+	exempt  [][2]int
+
+	pos  [spanKinds]int  // where each decoder resumes its search
+	off  [spanKinds]int  // offset of each decoder's pending span
+	have [spanKinds]bool // whether a span is pending
+	done [spanKinds]bool // whether the decoder has no more spans
+
+	b64      b64Run
+	hex      [2]int
+	url      [2]int
+	urlEnd   int // end of the previous URL span
+	infl     inflateAt
+	exemptIx int
+}
+
+// fill makes sure decoder k has a pending span, unless it is done.
+func (c *cursors) fill(k int) {
+	if c.have[k] || c.done[k] {
+		return
+	}
+	var ok bool
+	switch k {
+	case spanBase64:
+		c.b64, c.pos[k], ok = nextBase64(c.b, c.pos[k])
+		c.off[k] = c.b64.start
+	case spanHex:
+		c.hex, c.pos[k], ok = nextHex(c.b, c.pos[k])
+		c.off[k] = c.hex[0]
+	case spanURL:
+		c.url, c.pos[k], ok = nextURL(c.b, c.pos[k], c.urlEnd)
+		c.urlEnd = c.pos[k]
+		c.off[k] = c.url[0]
+	case spanInflate:
+		if c.inflate {
+			c.infl, c.pos[k], ok = nextInflate(c.b, c.pos[k], c.exempt, &c.exemptIx)
+			c.off[k] = c.infl.off
+		}
+	}
+	c.have[k], c.done[k] = ok, !ok
+}
+
+// next returns the pending span with the lowest offset, ties going to the
+// earlier decoder, and consumes it.
+func (c *cursors) next() (int, bool) {
+	kind := -1
+	for k := 0; k < spanKinds; k++ {
+		c.fill(k)
+		if c.have[k] && (kind < 0 || c.off[k] < c.off[kind]) {
+			kind = k
+		}
+	}
+	if kind >= 0 {
+		c.have[kind] = false
+	}
+	return kind, kind >= 0
+}
 
 // decode runs every decoder over n's buffer, spans in offset order and
 // decoders in the pinned order at a shared offset, emitting each output. It
@@ -63,79 +133,54 @@ const (
 // exhaustion, when emit stops the scan.
 func (s *scan) decode(n *node, inflate bool, emit emitFunc) (exhausted bool) {
 	b := n.data
-	b64 := base64Runs(b)
-	hex := hexRuns(b)
-	url := urlSpans(b)
-	var infl []inflateAt
+	c := &cursors{b: b, inflate: inflate}
 	if inflate {
-		infl = inflateOffsets(b, exemptSpans(b))
+		c.exempt = exemptSpans(b)
 	}
 
-	child := func(data []byte, step Step) *node {
-		chain := make([]Step, len(n.chain)+1)
-		copy(chain, n.chain)
-		chain[len(n.chain)] = step
-		return &node{data: data, field: n.field, depth: n.depth + 1, chain: chain}
-	}
 	// out emits a (possibly partial) output and says whether to go on.
 	stop := false
 	out := func(data []byte, step Step) bool {
-		if len(data) > 0 && !emit(child(data, step)) {
-			stop = true
-			return false
+		if len(data) > 0 {
+			if len(data) < childOverhead {
+				s.charge(int64(childOverhead - len(data)))
+			}
+			child := &node{data: data, field: n.field, depth: n.depth + 1, parent: n, step: step}
+			if !emit(child) {
+				stop = true
+				return false
+			}
 		}
 		return !s.exhausted()
 	}
 
-	var ib, ih, iu, ii int
-	for !stop {
-		kind, off := -1, 0
-		pick := func(k, o int) {
-			if kind < 0 || o < off {
-				kind, off = k, o
-			}
-		}
-		if ib < len(b64) {
-			pick(spanBase64, b64[ib].start)
-		}
-		if ih < len(hex) {
-			pick(spanHex, hex[ih][0])
-		}
-		if iu < len(url) {
-			pick(spanURL, url[iu][0])
-		}
-		if ii < len(infl) {
-			pick(spanInflate, infl[ii].off)
-		}
-		if kind < 0 {
+	for {
+		kind, ok := c.next()
+		if !ok {
 			return false
 		}
 		switch kind {
 		case spanBase64:
-			r := b64[ib]
-			ib++
+			r := c.b64
 			for a := 0; a < 4; a++ {
 				if !out(s.base64(r.data, a), Step{Decoder: DecoderBase64, Offset: r.start, Align: a}) {
 					return !stop
 				}
 			}
 		case spanHex:
-			r := hex[ih]
-			ih++
+			r := c.hex
 			for a := 0; a < 2; a++ {
 				if !out(s.hex(b[r[0]+a:r[1]]), Step{Decoder: DecoderHex, Offset: r[0], Align: a}) {
 					return !stop
 				}
 			}
 		case spanURL:
-			r := url[iu]
-			iu++
+			r := c.url
 			if !out(s.urlDecode(b[r[0]:r[1]]), Step{Decoder: DecoderURL, Offset: r[0]}) {
 				return !stop
 			}
 		case spanInflate:
-			at := infl[ii]
-			ii++
+			at := c.infl
 			dec := DecoderZlib
 			if at.gzip {
 				dec = DecoderGzip
@@ -145,7 +190,6 @@ func (s *scan) decode(n *node, inflate bool, emit emitFunc) (exhausted bool) {
 			}
 		}
 	}
-	return false
 }
 
 // ---- base64 ----
@@ -171,13 +215,12 @@ type b64Run struct {
 	data  []byte // the run's alphabet characters, joined across lines, padding dropped
 }
 
-// base64Runs finds every base64 run: a maximal span of the alphabet with
-// trailing `=` padding, at least 24 characters long. A line that is wholly
-// alphabet characters, at least 40 of them after spaces and tabs are trimmed
-// from both ends, joins the next line's run.
-func base64Runs(b []byte) []b64Run {
-	var runs []b64Run
-	i := 0
+// nextBase64 finds the next base64 run at or after i: a maximal span of the
+// alphabet with trailing `=` padding, at least 24 characters long. A line that
+// is wholly alphabet characters, at least 40 of them after spaces and tabs are
+// trimmed from both ends, joins the next line's run. It returns the run and
+// where to resume.
+func nextBase64(b []byte, i int) (b64Run, int, bool) {
 	for i < len(b) {
 		if !b64Alphabet[b[i]] {
 			i++
@@ -239,9 +282,22 @@ func base64Runs(b []byte) []b64Run {
 				data = append(data, b[p[0]:p[1]]...)
 			}
 		}
-		runs = append(runs, b64Run{start: start, data: data})
+		return b64Run{start: start, data: data}, i, true
 	}
-	return runs
+	return b64Run{}, len(b), false
+}
+
+// base64Runs lists every base64 run in b.
+func base64Runs(b []byte) []b64Run {
+	var runs []b64Run
+	for i := 0; ; {
+		r, next, ok := nextBase64(b, i)
+		if !ok {
+			return runs
+		}
+		runs = append(runs, r)
+		i = next
+	}
 }
 
 // wholeLine reports whether [s,e) is all of its line once spaces and tabs
@@ -306,10 +362,10 @@ func (s *scan) base64(run []byte, a int) []byte {
 
 var hexDigit = byteSet("0123456789abcdefABCDEF")
 
-// hexRuns finds every maximal run of at least 40 hex digits.
-func hexRuns(b []byte) [][2]int {
-	var runs [][2]int
-	for i := 0; i < len(b); {
+// nextHex finds the next maximal run of at least 40 hex digits at or after
+// i, and where to resume.
+func nextHex(b []byte, i int) ([2]int, int, bool) {
+	for i < len(b) {
 		if !hexDigit[b[i]] {
 			i++
 			continue
@@ -319,10 +375,10 @@ func hexRuns(b []byte) [][2]int {
 			i++
 		}
 		if i-s >= 40 {
-			runs = append(runs, [2]int{s, i})
+			return [2]int{s, i}, i, true
 		}
 	}
-	return runs
+	return [2]int{}, len(b), false
 }
 
 func unhex(c byte) byte {
@@ -351,11 +407,10 @@ func isSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
 }
 
-// urlSpans finds every maximal non-whitespace span containing a `%XX`
-// escape.
-func urlSpans(b []byte) [][2]int {
-	var spans [][2]int
-	from, prevEnd := 0, 0
+// nextURL finds the next maximal non-whitespace span containing a `%XX`
+// escape, searching from `from`; prevEnd is the end of the previous span. It
+// returns the span and its end, which is where to resume.
+func nextURL(b []byte, from, prevEnd int) ([2]int, int, bool) {
 	for from < len(b) {
 		j := bytes.IndexByte(b[from:], '%')
 		if j < 0 {
@@ -376,10 +431,22 @@ func urlSpans(b []byte) [][2]int {
 		for e < len(b) && !isSpace(b[e]) {
 			e++
 		}
-		spans = append(spans, [2]int{s, e})
-		from, prevEnd = e, e
+		return [2]int{s, e}, e, true
 	}
-	return spans
+	return [2]int{}, len(b), false
+}
+
+// urlSpans lists every URL-encoded span in b.
+func urlSpans(b []byte) [][2]int {
+	var spans [][2]int
+	for from, prev := 0, 0; ; {
+		sp, next, ok := nextURL(b, from, prev)
+		if !ok {
+			return spans
+		}
+		spans = append(spans, sp)
+		from, prev = next, next
+	}
 }
 
 // urlDecode percent-decodes src. `+` is left as is; a `%` not followed by
@@ -410,34 +477,33 @@ func validZlib(cmf, flg byte) bool {
 	return cmf&0x0f == 8 && cmf>>4 <= 7 && flg&0x20 == 0 && (uint16(cmf)<<8|uint16(flg))%31 == 0
 }
 
-// inflateOffsets lists every gzip (`1f 8b 08`) and valid zlib header offset
-// in b, in offset order, skipping offsets inside exempt pixel-data spans.
-func inflateOffsets(b []byte, exempt [][2]int) []inflateAt {
-	var out []inflateAt
-	ex := 0
-	for i := 0; i+1 < len(b); i++ {
+// nextInflate finds the next gzip (`1f 8b 08`) or valid zlib header offset
+// at or after i, skipping offsets inside exempt pixel-data spans; ex is the
+// caller's index into exempt. It returns the offset and where to resume.
+func nextInflate(b []byte, i int, exempt [][2]int, ex *int) (inflateAt, int, bool) {
+	for ; i+1 < len(b); i++ {
 		c := b[i]
 		if c != 0x1f && c&0x0f != 8 {
 			continue
 		}
-		for ex < len(exempt) && exempt[ex][1] <= i {
-			ex++
+		for *ex < len(exempt) && exempt[*ex][1] <= i {
+			*ex++
 		}
-		if ex < len(exempt) && exempt[ex][0] <= i {
-			i = exempt[ex][1] - 1
+		if *ex < len(exempt) && exempt[*ex][0] <= i {
+			i = exempt[*ex][1] - 1
 			continue
 		}
 		if c == 0x1f {
 			if b[i+1] == 0x8b && i+2 < len(b) && b[i+2] == 0x08 {
-				out = append(out, inflateAt{off: i, gzip: true})
+				return inflateAt{off: i, gzip: true}, i + 1, true
 			}
 			continue
 		}
 		if validZlib(c, b[i+1]) {
-			out = append(out, inflateAt{off: i})
+			return inflateAt{off: i}, i + 1, true
 		}
 	}
-	return out
+	return inflateAt{}, len(b), false
 }
 
 // inflate runs one gzip or zlib attempt at at.off and returns what it
@@ -447,7 +513,8 @@ func inflateOffsets(b []byte, exempt [][2]int) []inflateAt {
 // are charged as they happen, and inflation stops at the budget.
 func (s *scan) inflate(b []byte, at inflateAt) []byte {
 	src := b[at.off:]
-	r := bytes.NewReader(src)
+	s.rd.Reset(src)
+	r := &s.rd
 	var charged int64
 	chargeInput := func() bool {
 		consumed := int64(len(src)) - int64(r.Len())

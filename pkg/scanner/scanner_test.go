@@ -13,7 +13,7 @@ import (
 func mustBlock(t *testing.T, r Result, class Class) {
 	t.Helper()
 	if !r.Blocked() {
-		t.Fatalf("want a %s block, got clean (unscannable=%v, used=%d)", class, r.Unscannable, r.BudgetUsed)
+		t.Fatalf("want a %s block, got clean (unscannable=%v, used=%d)", class, r.Unscannable, r.BudgetUsedForLog())
 	}
 	if got := r.Findings[0].Class; got != class {
 		t.Fatalf("want class %s, got %s", class, got)
@@ -30,7 +30,7 @@ func mustClean(t *testing.T, r Result) {
 		t.Fatalf("want clean, got %s (chain %+v)", r.Findings[0].Class, rec.Chain)
 	}
 	if r.Unscannable {
-		t.Fatalf("want scannable, got unscannable (used=%d)", r.BudgetUsed)
+		t.Fatalf("want scannable, got unscannable (used=%d)", r.BudgetUsedForLog())
 	}
 }
 
@@ -444,8 +444,8 @@ func TestBudgetExhaustionIsUnscannable(t *testing.T) {
 	if *r.UnscannableField != (FieldRef{Kind: FieldFileBytes, Index: 1}) {
 		t.Fatalf("field %+v", *r.UnscannableField)
 	}
-	if r.BudgetUsed != DefaultBudget {
-		t.Fatalf("used %d", r.BudgetUsed)
+	if r.BudgetUsedForLog() != DefaultBudget {
+		t.Fatalf("used %d", r.BudgetUsedForLog())
 	}
 	if _, ok := r.Record(); ok {
 		t.Fatal("unscannable carries no record")
@@ -454,7 +454,7 @@ func TestBudgetExhaustionIsUnscannable(t *testing.T) {
 
 func TestSmallBudgetBase64(t *testing.T) {
 	r := Scan(text(b64(randomBytes(4096, 2))), Options{Budget: 1024})
-	if !r.Unscannable || r.BudgetUsed != 1024 {
+	if !r.Unscannable || r.BudgetUsedForLog() != 1024 {
 		t.Fatalf("want unscannable at 1024, got %+v", r)
 	}
 }
@@ -503,8 +503,8 @@ func TestRandomBufferLowBudget(t *testing.T) {
 	buf := randomBytes(8<<20, 3)
 	r := Scan(file(buf), Options{})
 	mustClean(t, r)
-	pct := 100 * float64(r.BudgetUsed) / float64(len(buf))
-	t.Logf("8 MiB random: budget used %d bytes (%.2f%% of size)", r.BudgetUsed, pct)
+	pct := 100 * float64(r.BudgetUsedForLog()) / float64(len(buf))
+	t.Logf("8 MiB random: budget used %d bytes (%.2f%% of size)", r.BudgetUsedForLog(), pct)
 	if pct > 5 {
 		t.Fatalf("budget used %.2f%% of size", pct)
 	}

@@ -97,10 +97,11 @@ func indexAll(b []byte, sep string, fn func(i int) bool) int {
 
 // findPrivateKey matches a PEM or PGP private-key header followed within 512
 // bytes by at least 64 base64-alphabet characters (line breaks and
-// `Key: value` header lines ignored), or a PuTTY key whose `Private-Lines:`
-// falls within 4096 bytes of its header and is followed by at least 64
-// base64-alphabet characters on the lines after it. A header with no body
-// does not match.
+// `Key: value` header lines ignored; a JSON-escaped `\n` or `\r\n`, as in
+// a cloud service-account key file, counts as a line break), or a PuTTY key
+// whose `Private-Lines: N` falls within 4096 bytes of its header and whose N
+// lines after it hold at least 40 base64-alphabet characters. A header with
+// no body does not match.
 func findPrivateKey(b []byte) int {
 	pem := indexAll(b, "-----BEGIN ", func(i int) bool {
 		j := i + len("-----BEGIN ")
@@ -113,34 +114,84 @@ func findPrivateKey(b []byte) int {
 			return false
 		}
 		start := k + 5
-		end := start + 512
-		if end > len(b) {
-			end = len(b)
-		}
-		return bodyChars(b[start:end], true) >= 64
+		end := min(start+512, len(b))
+		return bodyChars(unescapeLineBreaks(b[start:end]), true) >= 64
 	})
+	// The next `Private-Lines:` at or after the current header, found once
+	// and reused, so a run of PuTTY headers is not searched quadratically.
+	privateLines := -1
 	putty := indexAll(b, "PuTTY-User-Key-File-", func(i int) bool {
-		end := i + 4096
-		if end > len(b) {
-			end = len(b)
+		if privateLines < i {
+			if j := bytes.Index(b[i:], []byte("Private-Lines:")); j >= 0 {
+				privateLines = i + j
+			} else {
+				privateLines = len(b)
+			}
 		}
-		j := bytes.Index(b[i:end], []byte("Private-Lines:"))
-		if j < 0 {
+		if privateLines >= len(b) || privateLines-i > 4096 {
 			return false
 		}
-		next := lineEnd(b, i+j)
-		if next >= len(b) {
-			return false
-		}
-		return bodyChars(b[next+1:], false) >= 64
+		return puttyBody(b, privateLines+len("Private-Lines:"))
 	})
-	switch {
-	case pem < 0:
-		return putty
-	case putty < 0 || pem < putty:
-		return pem
+	return minOffset(pem, putty)
+}
+
+// unescapeLineBreaks returns w with each JSON-escaped `\r\n` or `\n`
+// replaced by a line break. w is at most 512 bytes.
+func unescapeLineBreaks(w []byte) []byte {
+	if !bytes.Contains(w, []byte(`\n`)) {
+		return w
 	}
-	return putty
+	w = bytes.ReplaceAll(w, []byte(`\r\n`), []byte("\n"))
+	return bytes.ReplaceAll(w, []byte(`\n`), []byte("\n"))
+}
+
+// puttyMinBody is the fewest base64 characters a PuTTY private body must
+// hold: an Ed25519 key's single private line is 44.
+const puttyMinBody = 40
+
+// puttyBody reads `N` after `Private-Lines:` at p and counts the
+// base64-alphabet characters on the N lines after it, stopping at the first
+// character outside the alphabet and as soon as puttyMinBody is reached, so a
+// check reads a bounded number of bytes.
+func puttyBody(b []byte, p int) bool {
+	for p < len(b) && isBlank(b[p]) {
+		p++
+	}
+	lines, digits := 0, 0
+	for p < len(b) && isDigit(b[p]) && digits < 6 {
+		lines = lines*10 + int(b[p]-'0')
+		p++
+		digits++
+	}
+	if lines == 0 {
+		return false
+	}
+	for p < len(b) && (isBlank(b[p]) || b[p] == '\r') {
+		p++
+	}
+	if p >= len(b) || b[p] != '\n' {
+		return false
+	}
+	p++
+	n := 0
+	for line := 0; line < lines && p < len(b); line++ {
+		for p < len(b) && pemBodySet[b[p]] {
+			n++
+			p++
+			if n >= puttyMinBody {
+				return true
+			}
+		}
+		if p < len(b) && b[p] == '\r' {
+			p++
+		}
+		if p >= len(b) || b[p] != '\n' {
+			return false
+		}
+		p++
+	}
+	return false
 }
 
 // bodyChars counts the base64-alphabet characters at the start of w, line by
@@ -287,8 +338,9 @@ func findModelKey(b []byte) int {
 
 // maxJWTHeaderTries bounds the header starts tried per segment run. Inside a
 // run of [A-Za-z0-9_-] a left boundary falls only at the run's start and
-// after each `-` or `_`; the cap keeps a crafted run of `-a-a-a…` from making
-// the scan quadratic.
+// after each `-` or `_`, and only a start that can begin a JSON object's
+// base64 is tried; the cap keeps a crafted run of `-e-e-e…` from making the
+// scan quadratic.
 const maxJWTHeaderTries = 16
 
 // findJWT matches three `.`-separated segments of [A-Za-z0-9_-] at a left
@@ -319,7 +371,10 @@ func findJWT(b []byte) int {
 		}
 		tries := 0
 		for s := hs; dot-s >= 10 && tries < maxJWTHeaderTries; s++ {
-			if !leftBoundary(b, s) {
+			// A JSON object's base64 starts `e` (`{`), or `I`, `C`, or `D`
+			// (a leading space, tab or newline, or carriage return). Only
+			// those starts count toward the cap.
+			if !leftBoundary(b, s) || strings.IndexByte("eICD", b[s]) < 0 {
 				continue
 			}
 			tries++
@@ -384,6 +439,12 @@ func findCredentialURL(b []byte) int {
 		}
 		colon := bytes.IndexByte(auth[:at], ':')
 		if colon < 0 {
+			continue
+		}
+		// A user part holding `?`, `#`, `&`, or `=` is a query or fragment
+		// that happens to hold `:` and `@`, not userinfo. The password may
+		// hold `#`.
+		if bytes.ContainsAny(auth[:colon], "?#&=") {
 			continue
 		}
 		if credentialPassword(string(auth[colon+1 : at])) {
