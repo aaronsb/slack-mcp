@@ -90,6 +90,11 @@ written fails the download; provenance that cannot be read, or has a
 malformed line, gates unrecorded attachments. Under The strike lock and
 The approval gate.
 
+Amendment (2026-10-01, put): ADR-012's `put` writes content the agent
+composed into the exchange directory, a fifth route below. It keeps
+working under a quarantine and the strike lock, and it weakens case 2 as
+stated under Risks.
+
 ## Context
 
 The agent this server serves can run for hours, and reading other
@@ -100,7 +105,7 @@ component under attack is the agent's judgment. A guard that asks the
 agent to recognize the attack is a guard the attack is built to pass.
 
 ADR-012 removed one route: no tool parameter can name a file outside
-the exchange directory. Four routes remain, all through parameters the
+the exchange directory. Five routes remain, all through parameters the
 server sees:
 
 - The agent reads a secret with its own client tools and puts it in
@@ -110,6 +115,9 @@ server sees:
 - The agent downloads a file from one conversation and attaches it in
   another, entirely through this server's tools.
 - The agent posts to someone outside the organization.
+- The agent writes content it composed, text or binary up to 5 MiB, into
+  the exchange directory with `put` (ADR-012's 2026-10-01 amendment),
+  then attaches it with `say files=`.
 
 The MCP client's permission prompt approves a call as a whole, and an
 unattended deployment has no one at the prompt. Whatever stops these
@@ -465,7 +473,8 @@ Whether a given block quarantines is set by ADR-014's safety posture.
 
 A quarantined destination refuses `say` and `mark-read`. Reads,
 `dismiss`, and `download` from it keep working, so the agent can still
-see the conversation and explain. A quarantine does not reach other
+see the conversation and explain. `put`, which names no destination,
+keeps working too; a file it writes leaves only through a `say`. A quarantine does not reach other
 conversations: a quarantined person's public channels stay writable.
 
 The check is by conversation and by membership, however the
@@ -708,7 +717,8 @@ Blocks count as strikes across all destinations since the last
 `clear strikes`, in every posture. At ADR-014's strike limit the strike
 lock engages: every `say` and `mark-read` is refused, to anyone, until
 the operator clears it. The count comes from the file, so a restart does
-not reset it. Reads keep working.
+not reset it. Reads, `download`, and `put` keep working; a file staged
+with `put` during the lock still needs a `say` to be sent.
 
 A block the file cannot record (a lock timeout, a failed append) is still
 refused, but its strike is not in the file, so the server holds every
@@ -1213,14 +1223,20 @@ the log.
   dictionary marks it as an image, is not found: the scanner parsed
   that span as pixel data and does not inflate it. The scanner is a net
   for content sent without intent to evade, not a boundary against an
-  agent that sets out to evade it.
+  agent that sets out to evade it. ADR-012's `put` makes such a file
+  constructible by a client with no file access at all, a code sandbox
+  included; accepted on the same ground.
 - **Provenance is by hash.** A one-byte edit with the client's file
   tools gives a downloaded file a new hash and no record, and case 2
   no longer applies to it. This is accepted: case 2 is a speed bump for
   a file moved without intent to evade, and the scanner still reads
   every byte of the edited file. An agent that edits a file to shed its
   record has taken a separate client-side step that the client's
-  permissions govern.
+  permissions govern. ADR-012's `put` removes that step: a client that
+  may read files but not write them can read a download, change a byte,
+  and `put` it, up to 5 MiB, binary included, where `say text=` carries
+  at most a 40,000-character message. Accepted on the same ground; ADR-012's
+  2026-10-01 amendment states it in full.
 - **The agent's own file reads.** The strongest control over what the
   agent can read is the client's permission configuration, which is out
   of this server's reach. Unattended deployments should deny the
