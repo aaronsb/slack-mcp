@@ -7,7 +7,6 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 	"log"
-	"strings"
 )
 
 // checkUnreadsReal uses internal Slack endpoints to get accurate unread counts
@@ -232,9 +231,8 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				}
 				observeTraffic(apiProvider, mpim.ID, resp.Messages)
 
-				mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 				for _, msg := range resp.Messages {
-					if strings.Contains(msg.Text, mentionPattern) {
+					if mentionsUser(msg, currentUserID) {
 						rm := renderer.Render(msg)
 						authorName := rm.Author
 						msgIsBot := false
@@ -291,11 +289,10 @@ func checkUnreadsReal(ctx context.Context, params map[string]interface{}) (*Feat
 				}
 				observeTraffic(apiProvider, ch.ID, resp.Messages)
 
-				mentionPattern := fmt.Sprintf("<@%s>", currentUserID)
 				foundMentions := 0
 
 				for _, msg := range resp.Messages {
-					if strings.Contains(msg.Text, mentionPattern) {
+					if mentionsUser(msg, currentUserID) {
 						rm := renderer.Render(msg)
 						authorName := rm.Author
 						msgIsBot := false
