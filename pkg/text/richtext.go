@@ -572,11 +572,15 @@ func ToRichText(s string) *slack.RichTextBlock {
 	return &slack.RichTextBlock{Type: slack.MBTRichText, Elements: kept}
 }
 
-// RichTextToPlain flattens rich_text blocks to readable text for previews.
-// Entities come back as raw tag syntax (<@U…>, <#C…>); a caller showing the
-// result to an agent must pass it through ResolveTags first, since internal
-// IDs never reach a user-visible string.
-func RichTextToPlain(blocks []slack.Block) string {
+// RichTextToMrkdwn renders rich_text blocks as Slack mrkdwn, in the escaped
+// form Slack uses for a message's text field. It is how a message's
+// structure is read back: when a message carries a rich_text block, Slack
+// regenerates its text field with every newline replaced by a space, so
+// lists, quotes, and code blocks survive only in the block. Entities come
+// back as raw tag syntax (<@U…>, <#C…>), so a caller showing the result to
+// an agent passes it through ResolveTags and then Unescape, as it would the
+// text field.
+func RichTextToMrkdwn(blocks []slack.Block) string {
 	var lines []string
 	for _, b := range blocks {
 		var rt *slack.RichTextBlock
@@ -592,37 +596,52 @@ func RichTextToPlain(blocks []slack.Block) string {
 			switch e := el.(type) {
 			case *slack.RichTextList:
 				pad := strings.Repeat("  ", e.Indent)
+				n := e.Offset
 				for _, item := range e.Elements {
-					if sec, ok := item.(*slack.RichTextSection); ok {
-						lines = append(lines, pad+"- "+plainInline(sec.Elements))
+					sec, ok := item.(*slack.RichTextSection)
+					if !ok {
+						continue
 					}
+					marker := "- "
+					if e.Style == slack.RTEListOrdered {
+						n++
+						marker = strconv.Itoa(n) + ". "
+					}
+					lines = append(lines, pad+marker+mrkdwnInline(sec.Elements))
 				}
 			case *slack.RichTextQuote:
-				for _, line := range strings.Split(plainInline(e.Elements), "\n") {
+				for _, line := range strings.Split(strings.TrimSuffix(mrkdwnInline(e.Elements), "\n"), "\n") {
 					lines = append(lines, "> "+line)
 				}
 			case *slack.RichTextPreformatted:
-				lines = append(lines, "```"+plainInline(e.Elements)+"```")
+				lines = append(lines, "```"+mrkdwnInline(e.Elements)+"```")
 			case *slack.RichTextSection:
-				lines = append(lines, plainInline(e.Elements))
+				lines = append(lines, strings.TrimSuffix(mrkdwnInline(e.Elements), "\n"))
 			}
 		}
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-func plainInline(elements []slack.RichTextSectionElement) string {
+// Unescape decodes the three entities Slack escapes in a message's text
+// field, for a reader showing it as written. Run it after ResolveTags,
+// which reads the escaped form.
+func Unescape(s string) string { return slackUnescape(s) }
+
+var slackEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+
+func mrkdwnInline(elements []slack.RichTextSectionElement) string {
 	var b strings.Builder
 	for _, el := range elements {
 		switch e := el.(type) {
 		case *slack.RichTextSectionTextElement:
-			b.WriteString(e.Text)
+			b.WriteString(styled(slackEscape(e.Text), e.Style))
 		case *slack.RichTextSectionLinkElement:
-			if e.Text != "" {
-				b.WriteString(e.Text)
-			} else {
-				b.WriteString(e.URL)
+			link := "<" + slackEscape(e.URL) + ">"
+			if e.Text != "" && e.Text != e.URL {
+				link = "<" + slackEscape(e.URL) + "|" + slackEscape(e.Text) + ">"
 			}
+			b.WriteString(styled(link, e.Style))
 		case *slack.RichTextSectionUserElement:
 			b.WriteString("<@" + e.UserID + ">")
 		case *slack.RichTextSectionChannelElement:
@@ -636,4 +655,31 @@ func plainInline(elements []slack.RichTextSectionElement) string {
 		}
 	}
 	return b.String()
+}
+
+// styled wraps s in the mrkdwn markers for st, keeping any edge
+// whitespace outside them: "*bold *" is not bold in mrkdwn.
+func styled(s string, st *slack.RichTextSectionTextStyle) string {
+	if st == nil {
+		return s
+	}
+	core := strings.TrimSpace(s)
+	if core == "" {
+		return s
+	}
+	lead := s[:strings.Index(s, core)]
+	trail := s[len(lead)+len(core):]
+	if st.Code {
+		core = "`" + core + "`"
+	}
+	if st.Strike {
+		core = "~" + core + "~"
+	}
+	if st.Italic {
+		core = "_" + core + "_"
+	}
+	if st.Bold {
+		core = "*" + core + "*"
+	}
+	return lead + core + trail
 }
