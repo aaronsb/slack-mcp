@@ -116,13 +116,18 @@ unattended deployment has no one at the prompt. Whatever stops these
 routes has to run in the server, on what the call carries, and give the
 same answer every time.
 
-The deployment this ADR designs for is a desktop client (Claude
-Desktop or another desktop agent app) whose agent has this server's tools
-and perhaps a browser, but no shell. The person at the keyboard is the
-operator. An agent with a shell running as the same user, such as a coding
-agent working in a terminal, can reach every file and binary this ADR
-relies on; that deployment is covered under Risks and limits, not by the
-design.
+Two deployments shape the design. The attended one is a desktop client
+(Claude Desktop or another desktop agent app) whose agent has this
+server's tools and perhaps a browser, but no shell, with the operator at
+the keyboard; the operator chose it as the case the clearing paths are
+built for, and the local page (Clearing) is its default. The unattended
+one is an agent nobody watches, usually under ADR-014's `strict`; there
+the client's permissions should deny the agent the `unlock` tool and any
+browser automation, which leaves the CLI as the only way to clear (Risks
+and limits). An agent with a shell running as the same user, such as a
+coding agent working in a terminal, can reach every file and binary this
+ADR relies on; that deployment is covered under Risks and limits, not by
+the design.
 
 This ADR assumes a well-designed host loop. The host may restart the
 server or reinitialize its tools, after a context compaction for
@@ -566,15 +571,19 @@ when `auth` loads a workspace, the server switches to that workspace's
 file and rebuilds the tool descriptions. The server instructions keep
 what they said at startup until the server restarts.
 
-Amendment (2026-10-01, local clearing page, #132): most installs run
-in a desktop client whose agent has no shell, so the person at the
-keyboard has no terminal habit. Quarantines and the strike lock can also
-be cleared from a local web page that a new tool, `unlock`, opens. The
-page and the CLI write the same clear entry, marked by its source. The
-tool reads and writes no safety state itself. Elicitation still never
-lifts. An agent that runs as the operator's user with a shell can defeat
-every file-based control, and that deployment is accepted, not designed
-against. Under Context, Clearing, and Risks and limits.
+Amendment (2026-10-01, local clearing page, #132): the design assumes
+an attended desktop client whose agent has no shell, with an operator
+who has no terminal habit. Quarantines and the strike lock can also be
+cleared from a local web page that a new tool, `unlock`, opens in the
+operator's browser. The page and the CLI write the same clear entry,
+marked by its source. The tool reads and writes no safety state, and no
+tool result carries the page's link. Elicitation still never lifts.
+Unattended deployments should deny the agent the tool. An agent that
+runs as the operator's user with a shell can defeat every file-based
+control, and that deployment is accepted, not designed against. A lift
+request approved after its key was cleared another way no longer wipes
+what was recorded since. Under Context, Clearing, The strike lock, and
+Risks and limits.
 
 ### What the operator and the agent see
 
@@ -636,31 +645,44 @@ clearable:
   <who>`, where `<who>` is `@handle`, `#channel`, or `strikes`. A `say`
   or `mark-read` refused by a quarantine or the lock also issues a
   pending lift request (gate case 3) for `slack-mcp approve`.
-- **Local page**: the `unlock` tool starts a web server on 127.0.0.1,
-  opens the operator's browser at a link that carries a random token
-  for this instance, and returns the link. The page lists each
-  quarantined person and conversation and the strike count or lock, each
-  with the failure type: the scanner class and where it matched, the
-  only facts the file keeps. While the server holds writes after a block
-  it could not record, the strike row shows too, and clearing it writes
-  the clear of strikes that releases the hold where places compare (The
-  strike lock). It never shows a matched value, which the
-  file does not store, or a Slack ID. Each row has a checkbox. **Clear**
-  appends a clear entry for each checked row, marked `by=web`; **Done**
-  closes the page without clearing. Either one stops that server
-  instance, so a later request to the same link fails, and another
-  clear needs a new link from the tool. An instance nobody answers stops
-  after fifteen minutes, and a new `unlock` call stops the instance
-  before it.
+- **Local page**: the `unlock` tool starts a web server on 127.0.0.1
+  and opens the operator's browser at a link that carries a random
+  token for this instance. The link goes to the browser only: no tool
+  result carries it. When no browser can be opened (the launch fails,
+  or `SLACK_MCP_NO_BROWSER` is set), the tool stops the page and refuses,
+  pointing at the CLI. The page lists each quarantined person and
+  conversation and the strike count or lock. Each row names the key, by
+  current name where the cache has one, and its failure type: the
+  scanner class, the field it matched in, the destination's recorded
+  name, and the block's time. It never shows a matched value, which the
+  file does not store, an offset, a decode chain, a hash, or a Slack ID;
+  two rows the cache cannot name are told apart by block time. While the
+  server holds writes after a block it could not record, the strike row
+  shows too, and clearing it writes the clear of strikes that releases
+  the hold where places compare (The strike lock). When the file cannot
+  be read, the page says so and offers only **Done**.
 
-  The tool's result carries the link and says only that the page is
-  open; it never reports what was cleared, and its description and the
-  server instructions tell the agent to offer it when the operator asks
-  to clear a lock. The agent's next call runs the full order. The page
-  is not a pending request: it clears directly, as the CLI's `clear`
-  does, and a lift request left pending is still answerable at the CLI
-  afterward. Under SLACK_MCP_DEPLOYMENT=remote the tool refuses, since
-  the page would open on the server's host.
+  Each row has a checkbox whose value names its key by an ID keyed to
+  the instance, not by position. **Clear** appends a clear entry for
+  each checked row, marked `by=web`; **Done** closes the page without
+  clearing. A Clear answering a page whose locks have changed since it
+  was loaded (a later block, another clear) applies nothing and shows
+  the current state to answer again. Clear or Done stops that server
+  instance, so a later request to the same link fails, and another clear
+  needs the tool again. An instance nobody loads or answers for fifteen
+  minutes stops, and a new `unlock` call stops the instance before it.
+
+  The tool's result says only that the page is open; it never reports
+  what was cleared, and its description and the server instructions
+  tell the agent to call it when the operator asks to clear a lock. The
+  agent's next call runs the full order. The page is not a pending
+  request and lifts without gate case 3: it clears directly, as the
+  CLI's `clear` does. A lift request left pending stays answerable at
+  the CLI; approving it skips any key cleared since the request was
+  issued, so a later block recorded after the page's clear survives the
+  approval. The tool refuses under `SLACK_MCP_DEPLOYMENT=remote` and on
+  SSE, where the page would open on a host that need not be the
+  operator's.
 - **Editing or removing the file.** This is documented in the README
   and nowhere else: never in a tool description, the server
   instructions, or tool output. It takes effect on a running server at
@@ -668,7 +690,7 @@ clearable:
   a control.
 
 Lifting is the CLI or the local page; elicitation never lifts (see
-Elicitation). A clear
+Elicitation, which says why the page differs). A clear
 appends a clear entry rather than deleting the block, so the file stays
 a history. A lift lets no call through: the agent calls again, and the
 new call runs the full order, scanner included. Lifting never counts a
@@ -691,9 +713,10 @@ pending. The hold lifts when:
 - the operator approves that request, which needs the quarantine file
   writable again: if approval fails because it is not, the operator
   fixes the file (permissions, disk) and approves again;
-- the operator runs `slack-mcp quarantine clear strikes`, which always
-  writes a clear, and the server reads it at a later place in the file
-  than where the hold engaged. Place, not time, orders them, so no clock
+- the operator runs `slack-mcp quarantine clear strikes`, or clears the
+  strike row on the local page; either always writes a clear, and the
+  server reads it at a later place in the file than where the hold
+  engaged. Place, not time, orders them, so no clock
   releases the hold early; if the file was replaced or edited since the
   hold engaged, or could not be read when it engaged, places no longer
   compare and only approval or a restart releases it;
@@ -704,7 +727,12 @@ pending. The hold lifts when:
 Approving the request clears strikes like any strike lift: it wipes every
 recorded strike and releases a real strike lock. It is the same request
 as a pending strike-lock lift, so one approval lifts both, and a request
-left over from before a restart still clears strikes when approved.
+left over from before a restart still clears strikes when approved,
+unless strikes were cleared after it was issued (by the page, the CLI,
+or another approval). Then the approval writes no clear: the strikes
+recorded since that clear belong to later blocks the request never
+named. The same holds for a lifted person or conversation. Clears are
+ordered against the request by their recorded times.
 
 ### Layer 4: the tool result
 
@@ -874,6 +902,15 @@ on the server waits for the answer. It never asks for case 3: a host may
 let the model answer an elicitation, and a lift answered by the agent
 under attack would undo the quarantine that attack produced.
 
+The local page lifts where elicitation may not because the two put
+different steps between the agent and the lift. An elicitation is
+answered inside the agent's own client turn, possibly with no human
+step at all. The page needs a separate browser window and a click a
+person sees, at a link no tool result carries. An agent driving a
+browser can still take that step; Risks and limits accepts that for
+attended desktops and tells unattended deployments to deny the agent the
+`unlock` tool and browser automation.
+
 The server asks only a client on protocol 2026-07-28 or later whose
 current request declares elicitation in its capabilities, never
 inferring them from an earlier request. For that client the tool
@@ -940,7 +977,7 @@ Trust never skips the floor. Every send to a trusted destination runs
 the full order: the strike lock, ADR-012's name and file checks, the
 quarantine, and the scanner, before the gate step where trust is
 consulted. Trust never applies to case 3: lifting a quarantine or the
-lock stays CLI-only.
+lock stays with the operator, at the CLI or on the local page.
 
 Quarantine wins over trust. A block on a trusted destination
 quarantines it as any block would under the posture, and a quarantined
@@ -1093,7 +1130,7 @@ the log.
   is a net, not a boundary against deliberate evasion (Exempt pixel
   data, under Risks).
 - Escalation is bounded: a few blocks lock all writes until the
-  operator acts.
+  operator acts, at the CLI or on the local page.
 - Every block leaves a record in the quarantine file that no tool can
   remove.
 - One new tool, `unlock`, which only opens the local page; the gated
@@ -1172,24 +1209,32 @@ the log.
   delete the files, which a running server now honors, or drive the CLI
   through a pseudo-terminal. The client's permissions should deny the
   agent writes to the data directory and execution of `slack-mcp`
-  subcommands. A forged trust entry skips the approval gate only; the
+  subcommands, and in an unattended deployment the `unlock` tool and
+  browser automation too (The local page, below). A forged trust entry skips the approval gate only; the
   scanner and the quarantine still run. This is the shell-equipped
   deployment Context sets aside: an agent running as the operator's
   user with a shell can always clear a lock, and the design accepts
   that rather than resisting it.
-- **The local page.** An agent with browser automation can open the
-  link the tool returns and click Clear; the page is no barrier to it,
-  and is meant to be the path a desktop operator can take, not a guard.
-  A GET changes nothing, so an agent whose only web tool fetches pages
-  cannot clear; a clear is a POST whose `Origin` must be the page's own.
-  Another site in the operator's browser cannot clear either: the link's
-  token is random per instance, a request whose `Host` is not the
-  loopback address and port is refused, so DNS rebinding finds nothing,
-  and the `Origin` check refuses a cross-site form. The token travels
-  only in the link: in the tool result, in the browser launch's command
-  line, and in the log when the launch is suppressed. Another user on a
-  shared host may see a command line; a shared host is outside the
-  deployment this ADR designs for.
+- **The local page.** The page is friction, not a barrier. An agent
+  with browser automation can find the tab the tool opened and click
+  Clear, so in an attended desktop the operator accepts that a
+  steered agent may lift its own lock that way; in an unattended or
+  `strict` deployment the client's permissions should deny the agent the
+  `unlock` tool and browser automation, which leaves the CLI. An agent
+  without browser automation cannot clear: no tool result carries the
+  link, the token is random per instance, a GET changes nothing, and a
+  clear is a POST whose `Origin` must be the page's own and whose Fetch
+  Metadata, when sent, must say same-origin. Another site in the
+  operator's browser cannot clear either: a request whose `Host` is not
+  the loopback address and port is refused, so DNS rebinding finds
+  nothing, and the `Origin` check refuses a cross-site form. The check
+  depends on the browser sending `Origin` on a same-origin form POST,
+  which current Chromium and Firefox do under the page's
+  `Referrer-Policy: same-origin`; under `no-referrer` they send `null`,
+  which the check refuses. The token leaves the server only in the
+  browser launch's command line; another user on a shared host may see a
+  command line, and a shared host is outside the deployments this ADR
+  designs for.
 - **Trust added by elicitation.** In `soft` a host that lets the model
   answer elicitation lets the agent add trust. `soft` is the attended
   posture, and `strict` both refuses to offer trust by elicitation and
@@ -1250,6 +1295,10 @@ unread.
   answer every time.
 - **A desktop notification for pending requests.** See Pending
   requests.
+- **Returning the page's link in the tool result.** It let any agent
+  with an HTTP tool that sets headers clear its own lock, with no
+  browser and no person involved. The tool opens the browser and
+  returns nothing to follow.
 - **A challenge on the local page** (a timed gesture, a lockout after
   failed attempts, a passkey). A multimodal agent with browser
   automation can read the page and time a click, so a gesture slows it
