@@ -310,7 +310,21 @@ func defaultFixture(r *http.Request, method, selfURL string, channels []slack.Ch
 			"response_metadata": map[string]any{"next_cursor": ""},
 		}
 
-	case "users.conversations", "conversations.list":
+	case "users.conversations":
+		// Only the caller's own conversations, as Slack returns them.
+		var member []slack.Channel
+		for _, ch := range channels {
+			if ch.IsMember || ch.IsIM || ch.IsMpIM {
+				member = append(member, ch)
+			}
+		}
+		return map[string]any{
+			"ok":                true,
+			"channels":          member,
+			"response_metadata": map[string]any{"next_cursor": ""},
+		}
+
+	case "conversations.list":
 		return map[string]any{
 			"ok":                true,
 			"channels":          channels,

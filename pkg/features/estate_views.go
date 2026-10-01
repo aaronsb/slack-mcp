@@ -62,7 +62,7 @@ var EstateViews = &Feature{
 			},
 			"filter": map[string]interface{}{
 				"type":        "string",
-				"description": "channels: 'member' (default), 'all', 'public', 'private', 'dm', 'group-dm'",
+				"description": "channels: 'member' (default; 'all' when searching), 'all', 'public', 'private', 'dm', 'group-dm'",
 			},
 			"forceRefresh": map[string]interface{}{
 				"type":        "boolean",
