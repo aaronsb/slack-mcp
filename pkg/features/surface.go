@@ -208,7 +208,7 @@ func conversationOf(target string) string {
 
 var Say = &Feature{
 	Name:        "say",
-	Description: "Contribute content, Slack-visible: text posts a message (to a channel, DM, or thread); emoji+messageTs adds or removes a reaction — a reaction is a small say. This is a write; everything it posts is attributed to your user.",
+	Description: "Contribute content, Slack-visible: text posts a message (to a channel, DM, or thread — a thread reply can also go to the channel); emoji+messageTs adds or removes a reaction — a reaction is a small say. This is a write; everything it posts is attributed to your user.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -223,6 +223,11 @@ var Say = &Feature{
 			"thread": map[string]interface{}{
 				"type":        "string",
 				"description": "Thread timestamp to reply into",
+			},
+			"broadcast": map[string]interface{}{
+				"type":        "boolean",
+				"description": "With thread: also post the reply to the channel (Slack's 'Also send to #channel'). An error without thread, or with emoji.",
+				"default":     false,
 			},
 			"emoji": map[string]interface{}{
 				"type":        "string",
@@ -248,6 +253,23 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 	text, _ := params["text"].(string)
 	emoji, _ := params["emoji"].(string)
 
+	broadcast, _ := params["broadcast"].(bool)
+	thread, _ := params["thread"].(string)
+	if broadcast {
+		if emoji != "" {
+			return &FeatureResult{
+				Success: false,
+				Message: "broadcast applies to a thread reply with text; it can't be combined with emoji (a reaction). Drop broadcast, or reply with text='...' thread='<ts>' broadcast=true.",
+			}, nil
+		}
+		if thread == "" {
+			return &FeatureResult{
+				Success: false,
+				Message: "broadcast needs thread='<ts>': it sends a thread reply to the channel too. A top-level message already reaches the channel.",
+			}, nil
+		}
+	}
+
 	switch {
 	case emoji != "":
 		if ts, _ := params["messageTs"].(string); ts == "" {
@@ -265,7 +287,7 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 		if th, ok := params["thread"].(string); ok && th != "" {
 			params["threadTs"] = th
 		}
-		echo := echoLine("say", "to='"+to+"'", params, "thread")
+		echo := echoLine("say", "to='"+to+"'", params, "thread", "broadcast")
 		return delegate(ctx, WriteMessage, params, echo)
 	default:
 		return &FeatureResult{

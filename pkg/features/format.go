@@ -632,6 +632,9 @@ func formatSendMessage(result *FeatureResult) string {
 
 	channel := str(data, "channel")
 	s := fmt.Sprintf("Message sent to %s.", channel)
+	if b, _ := data["broadcast"].(bool); b {
+		s = fmt.Sprintf("Replied in a thread and also sent to %s.", channel)
+	}
 	s += footer(result)
 	return s
 }
