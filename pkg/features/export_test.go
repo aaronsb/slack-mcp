@@ -89,3 +89,11 @@ func SetPreWriteLocalForTest(fn func() string) func() {
 	}
 	return func() { preWriteLocal = prev }
 }
+
+// SetPutWriteForTest stands in for put's write of the staged file. It
+// returns a restore func.
+func SetPutWriteForTest(fn func(w io.Writer, b []byte) (int, error)) func() {
+	prev := putWrite
+	putWrite = fn
+	return func() { putWrite = prev }
+}

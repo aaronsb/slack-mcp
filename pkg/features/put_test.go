@@ -3,7 +3,11 @@ package features_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +16,7 @@ import (
 
 	"github.com/aaronsb/slack-mcp/pkg/exchange"
 	"github.com/aaronsb/slack-mcp/pkg/features"
+	"github.com/aaronsb/slack-mcp/pkg/safety"
 )
 
 // put (ADR-012, amendment 2026-10-01): a write-only way into the exchange
@@ -35,15 +40,23 @@ func runPut(t *testing.T, params map[string]any) (*features.FeatureResult, strin
 	return res, features.FormatResult("put", res)
 }
 
+// exchangeEntries lists every file under the exchange directory, staged
+// copies included, relative to it.
 func exchangeEntries(t *testing.T) []string {
 	t.Helper()
-	entries, err := os.ReadDir(exchangeDir())
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read exchange dir: %v", err)
-	}
 	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
+	err := filepath.WalkDir(exchangeDir(), func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			rel, _ := filepath.Rel(exchangeDir(), p)
+			names = append(names, rel)
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("walk exchange dir: %v", err)
 	}
 	return names
 }
@@ -60,6 +73,10 @@ func TestPutWrites(t *testing.T) {
 		{"base64 padded", map[string]any{"name": "chart.png", "base64": base64.StdEncoding.EncodeToString(png)}, "chart.png", png},
 		{"base64 unpadded", map[string]any{"name": "chart.png", "base64": base64.RawStdEncoding.EncodeToString(png)}, "chart.png", png},
 		{"base64 wrapped", map[string]any{"name": "a.bin", "base64": "aGVsbG8g\nd29ybGQ=\n"}, "a.bin", []byte("hello world")},
+		{"base64 wrapped CRLF", map[string]any{"name": "a.bin", "base64": "aGVs\r\nbG8=\r\n"}, "a.bin", []byte("hello")},
+		{"null content beside base64", map[string]any{"name": "x.txt", "content": nil, "base64": "eA=="}, "x.txt", []byte("x")},
+		{"empty content beside base64", map[string]any{"name": "x.txt", "content": "", "base64": "eA=="}, "x.txt", []byte("x")},
+		{"empty base64 beside content", map[string]any{"name": "x.txt", "content": "x", "base64": ""}, "x.txt", []byte("x")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,6 +157,15 @@ func TestPutRefusals(t *testing.T) {
 		{"content over cap", map[string]any{"name": "a.txt", "content": over}, "over put's 5242880 byte (5 MiB) limit"},
 		{"base64 over cap", map[string]any{"name": "a.bin", "base64": base64.StdEncoding.EncodeToString([]byte(over))}, "over put's 5242880 byte (5 MiB) limit"},
 		{"content not a string", map[string]any{"name": "a.txt", "content": 3.0}, "content must be a string"},
+		{"base64 not a string", map[string]any{"name": "a.bin", "base64": []any{"eA=="}}, "base64 must be a string"},
+		{"name not a string", map[string]any{"name": 3.0, "content": "x"}, "name must be a string"},
+		{"both empty", map[string]any{"name": "a.txt", "content": "", "base64": ""}, "content is empty"},
+		{"nonzero padding bits", map[string]any{"name": "a.bin", "base64": "QR=="}, "not valid standard base64"},
+		{"short first line", map[string]any{"name": "a.bin", "base64": "aG\nVsbG8="}, "line breaks"},
+		{"blank line", map[string]any{"name": "a.bin", "base64": "aGVs\n\nbG8="}, "line breaks"},
+		{"lone CR", map[string]any{"name": "a.bin", "base64": "aGVs\rbG8="}, "line breaks"},
+		{"data after padding", map[string]any{"name": "a.bin", "base64": "QQ==\nQQ=="}, "not valid standard base64"},
+		{"over cap before decoding", map[string]any{"name": "a.bin", "base64": strings.Repeat("*", 7<<20)}, "over put's 5242880 byte (5 MiB) limit"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,5 +187,65 @@ func TestPutAtTheCapIsWritten(t *testing.T) {
 	res, out := runPut(t, map[string]any{"name": "max.bin", "content": strings.Repeat("a", 5<<20)})
 	if !res.Success {
 		t.Fatalf("a file at the cap was refused:\n%s", out)
+	}
+}
+
+func TestPutWriteFailureKeepsNothing(t *testing.T) {
+	putEnv(t)
+	defer features.SetPutWriteForTest(func(w io.Writer, b []byte) (int, error) {
+		n, _ := w.Write(b[:2])
+		return n, errors.New("disk full")
+	})()
+	res, out := runPut(t, map[string]any{"name": "a.txt", "content": "partial content"})
+	if res.Success {
+		t.Fatalf("a failed write succeeded:\n%s", out)
+	}
+	mustContain(t, out, "disk full", "Nothing was written")
+	if got := exchangeEntries(t); len(got) != 0 {
+		t.Fatalf("a failed write left files: %v", got)
+	}
+}
+
+func TestPutStatesTheServerHostWhenRemote(t *testing.T) {
+	putEnv(t)
+	t.Setenv("SLACK_MCP_DEPLOYMENT", "remote")
+	res, out := runPut(t, map[string]any{"name": "a.txt", "content": "x"})
+	if !res.Success {
+		t.Fatalf("put refused:\n%s", out)
+	}
+	mustContain(t, out, "The path is on the server's host", "files=['a.txt']")
+}
+
+// A file put writes faces say's scanner like any other attachment.
+func TestPutFileIsScannedWhenSaid(t *testing.T) {
+	f := newSafetyFake(t, strictHuman())
+	uploads := attachUploads(t, f)
+	if res, out := runPut(t, map[string]any{"name": "notes.txt", "content": "token: " + fakeToken()}); !res.Success {
+		t.Fatalf("put refused:\n%s", out)
+	}
+	res := f.say(t, context.Background(), map[string]any{"to": "#eng", "files": []any{"notes.txt"}})
+	wantIn(t, res.Message, "BLOCKED: nothing was sent")
+	if uploads() != 0 {
+		t.Fatalf("a blocked file reached Slack")
+	}
+}
+
+// put records no provenance, but bytes equal to a recorded download hash
+// to its record: gate case 2 still sees the move.
+func TestPutBytesOfADownloadAreGatedAsAMove(t *testing.T) {
+	f := newSafetyFake(t, strictHuman())
+	uploads := attachUploads(t, f)
+	data := []byte("quarterly numbers")
+	sum := sha256.Sum256(data)
+	if err := f.workspace(t).Provenance.Record(safety.Provenance{SHA256: hex.EncodeToString(sum[:]), Name: "q3.txt", FileID: "F9", Conversations: []string{"C2"}}); err != nil {
+		t.Fatalf("provenance: %v", err)
+	}
+	if res, out := runPut(t, map[string]any{"name": "copy.txt", "base64": base64.StdEncoding.EncodeToString(data)}); !res.Success {
+		t.Fatalf("put refused:\n%s", out)
+	}
+	res := f.say(t, context.Background(), map[string]any{"to": "#eng", "files": []any{"copy.txt"}})
+	wantIn(t, res.Message, "Needs operator approval", "from #platform to #eng")
+	if uploads() != 0 {
+		t.Fatalf("gated upload reached Slack")
 	}
 }
