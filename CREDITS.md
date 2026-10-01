@@ -8,6 +8,10 @@ This project is based on the excellent work by Dmitry Korotovsky ([korotovsky/sl
 
 The semantic intent-based approach and OODA (Observe-Orient-Decide-Act) loop pattern was inspired by design patterns in [wordpress-author-mcp](https://github.com/aaronsb/wordpress-author).
 
+## Rich Text Authoring
+
+The Markdown → mrkdwn normalizer and the mrkdwn → Block Kit `rich_text` converter (`pkg/text/mrkdwn.go`, `pkg/text/richtext.go`), and their test suites, are ported from Clayton Chancey's [slack-stealth-mcp](https://github.com/forayconsulting/slack-stealth-mcp) (MIT License, commit `6c28687`: `packages/python/src/slack_stealth_mcp/mrkdwn.py` and `rich_text.py`).
+
 ## Contributors
 
 - Original implementation: Dmitry Korotovsky (korotovsky)
