@@ -296,8 +296,16 @@ func TestSafetyMalformedProvenanceGatesUnrecorded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(safety.Dir("T1"), safety.ProvenanceFile), []byte("{\"sha256\": torn\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wantIn(t, f.say(t, context.Background(), map[string]any{"to": "#eng", "files": []any{"notes.txt"}}).Message,
-		"Needs operator approval", "from another conversation")
+	res := f.say(t, context.Background(), map[string]any{"to": "#eng", "files": []any{"notes.txt"}})
+	wantIn(t, res.Message, "Needs operator approval", "from another conversation")
+	if strings.Contains(res.Message+res.Guidance, "provenance") {
+		t.Fatalf("the agent was told about the provenance file:\n%s", res.Message)
+	}
+	// The operator's listing says why: the file needs repair.
+	reqs := f.workspace(t).Pending.List(time.Now())
+	if len(reqs) != 1 || len(reqs[0].From) != 1 || !strings.Contains(reqs[0].From[0], "provenance.jsonl has a malformed line") {
+		t.Fatalf("request: %+v", reqs)
+	}
 }
 
 // slack-mcp quarantine clear strikes, from another process, releases the
@@ -314,7 +322,6 @@ func TestSafetyStrikesClearReleasesTheHold(t *testing.T) {
 	if err := os.Remove(lock); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(10 * time.Millisecond)
 	if _, err := f.workspace(t).Quarantine.Clear(safety.StrikesKey, safety.ByCLI, "", time.Now()); err != nil {
 		t.Fatalf("clear strikes: %v", err)
 	}

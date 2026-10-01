@@ -21,6 +21,13 @@ type Provenance struct {
 	Conversations []string  `json:"conversations"`
 }
 
+// Lookup's errors: the gate names which in its PENDING line and in the
+// request the operator reads, so they know to repair the file.
+var (
+	ErrProvenanceUnreadable = errors.New("provenance cannot be read")
+	ErrProvenanceMalformed  = errors.New("provenance has a malformed line")
+)
+
 // ProvenanceStore is one workspace's provenance file and its fold: for each
 // content hash, the conversations every download of it was shared in.
 type ProvenanceStore struct {
@@ -91,13 +98,13 @@ func (s *ProvenanceStore) Lookup(sha string) ([]string, bool, error) {
 	defer s.mu.Unlock()
 	s.j.refresh(s.reset, s.apply)
 	if s.j.err != nil {
-		return nil, false, fmt.Errorf("provenance cannot be read: %w", s.j.err)
+		return nil, false, fmt.Errorf("%w: %v", ErrProvenanceUnreadable, s.j.err)
 	}
 	set, ok := s.byHash[sha]
 	if !ok {
 		if bad := s.j.malformedLines(); len(bad) > 0 {
 			// A skipped line may be this file's record.
-			return nil, false, fmt.Errorf("provenance has %d unreadable line(s); a record may be among them", len(bad))
+			return nil, false, fmt.Errorf("%w (%d skipped; a record may be among them)", ErrProvenanceMalformed, len(bad))
 		}
 		return nil, false, nil
 	}

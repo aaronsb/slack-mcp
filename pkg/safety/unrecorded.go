@@ -12,23 +12,25 @@ import (
 //
 // It lifts through ADR-013's clearing path, observed on the next check: an
 // operator approval of the lift request issued with it (slack-mcp
-// approve), or a clear of strikes written after it engaged (slack-mcp
-// quarantine clear strikes, from any process). It is in memory, so a
-// restart also lifts it.
+// approve), or a clear of strikes appended to the quarantine file after the
+// position where it engaged (slack-mcp quarantine clear strikes, from any
+// process). Position, not time, orders the two, so no clock can release it
+// early; a rebuild of the file's fold since then leaves only the approval
+// and a restart. It is in memory, so a restart also lifts it.
 type unrecordedHold struct {
 	mu      sync.Mutex
 	held    bool
-	engaged time.Time
+	engaged Position
 	liftID  string
 }
 
-// HoldUnrecorded engages the hold after a block failed to record at now.
-// liftID names the lift request issued for it, or is empty when none
-// could be.
-func (w *Workspace) HoldUnrecorded(liftID string, now time.Time) {
+// HoldUnrecorded engages the hold after a block failed to record. liftID
+// names the lift request issued for it, or is empty when none could be.
+func (w *Workspace) HoldUnrecorded(liftID string) {
+	pos := w.Quarantine.State().Position
 	w.unrecorded.mu.Lock()
 	defer w.unrecorded.mu.Unlock()
-	w.unrecorded.held, w.unrecorded.engaged, w.unrecorded.liftID = true, now, liftID
+	w.unrecorded.held, w.unrecorded.engaged, w.unrecorded.liftID = true, pos, liftID
 }
 
 // RetryUnrecordedLift names a lift request issued for an engaged hold
@@ -49,13 +51,13 @@ func (w *Workspace) UnrecordedHeld(now time.Time) (bool, string) {
 	if !w.unrecorded.held {
 		return false, ""
 	}
-	release := w.Quarantine.State().StrikesCleared.After(w.unrecorded.engaged)
+	release := w.Quarantine.State().ClearedStrikesAfter(w.unrecorded.engaged)
 	if id := w.unrecorded.liftID; id != "" && !release {
 		r, ok := w.Pending.Lookup(id, now)
 		release = ok && r.Status == StatusConsumed
 	}
 	if release {
-		w.unrecorded.held, w.unrecorded.engaged, w.unrecorded.liftID = false, time.Time{}, ""
+		w.unrecorded.held, w.unrecorded.engaged, w.unrecorded.liftID = false, Position{}, ""
 		return false, ""
 	}
 	return true, w.unrecorded.liftID

@@ -585,7 +585,7 @@ func block(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, 
 		// The file does not hold this block's strike or quarantine, so the
 		// in-process hold makes the refusal below true.
 		id := issueLift(ws, "say", strikesLift, []safety.Key{safety.StrikesKey})
-		ws.HoldUnrecorded(id, time.Now())
+		ws.HoldUnrecorded(id)
 		log.Printf("outbound-safety: BLOCKED say to=%s (%s) class=%s location=%s strike=unrecorded hold=engaged: %v", gd.d.Name, gd.d.ID(), finding.Class, location(finding.Field.Kind), err)
 		b.WriteString("The block could not be recorded, so every say and mark-read is refused " + holdUntil(id) + "\n")
 	} else {
@@ -766,16 +766,22 @@ func assessExternal(ctx context.Context, ap *provider.ApiProvider, org safety.Or
 
 // movedFiles is gate case 2: the files download took from a conversation
 // other than this destination, by the provenance of their bytes' hash,
-// with the conversations they came from. A provenance file that cannot be
-// read counts every file as moved.
-func movedFiles(ws *safety.Workspace, gd *gateDest, out *outbound) (moved bool, from []string) {
+// with the conversations they came from. When the provenance file cannot
+// be read, or a file has no record while a line was skipped as malformed,
+// every file counts as moved and problem names why ("unreadable",
+// "malformed").
+func movedFiles(ws *safety.Workspace, gd *gateDest, out *outbound) (moved bool, from []string, problem string) {
 	seen := map[string]bool{}
 	for _, f := range out.Files {
 		sum := sha256.Sum256(f.Data)
 		convs, found, err := ws.Provenance.Lookup(hex.EncodeToString(sum[:]))
 		if err != nil {
 			log.Printf("outbound-safety: %v; treating attachments as moved", err)
-			return true, from
+			problem = "unreadable"
+			if errors.Is(err, safety.ErrProvenanceMalformed) {
+				problem = "malformed"
+			}
+			return true, from, problem
 		}
 		if !found {
 			continue
@@ -797,7 +803,7 @@ func movedFiles(ws *safety.Workspace, gd *gateDest, out *outbound) (moved bool, 
 			}
 		}
 	}
-	return moved, from
+	return moved, from, ""
 }
 
 // convName names a conversation for the agent and the operator: never an ID.
@@ -887,8 +893,11 @@ func gate(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, g
 		cases = append(cases, safety.CaseExternal)
 	}
 	var fromNames []string
+	provenance := ""
 	if len(out.Files) > 0 {
-		if moved, from := movedFiles(ws, gd, out); moved {
+		moved, from, problem := movedFiles(ws, gd, out)
+		provenance = problem
+		if moved {
 			for _, c := range from {
 				fromNames = append(fromNames, convName(ap, c))
 			}
@@ -941,6 +950,12 @@ func gate(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, g
 		Cases: untrusted, Tool: "say", Destination: gd.d, ContentHash: hash,
 		FileCount: len(out.Files), From: fromNames, Text: out.Text,
 	}
+	switch provenance {
+	case "malformed":
+		req.From = []string{"unknown: provenance.jsonl has a malformed line; repair it"}
+	case "unreadable":
+		req.From = []string{"unknown: provenance.jsonl cannot be read; repair it"}
+	}
 	if out.Emoji != "" {
 		req.Text = reactionText(out)
 	}
@@ -960,6 +975,9 @@ func gate(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, g
 		from := ""
 		if len(fromNames) > 0 {
 			from = " from=" + strings.Join(fromNames, ",")
+		}
+		if provenance != "" {
+			from += " provenance=" + provenance
 		}
 		log.Printf("outbound-safety: PENDING %s case=%s say to=%s (%s) files=%d%s expires=%s",
 			r.ID, safety.CasesString(r.Cases), gd.d.Name, gd.d.ID(), len(out.Files), from, r.Expires.UTC().Format("2006-01-02T15:04Z"))
