@@ -43,11 +43,17 @@ var (
 
 	// Entity targets become user/channel/usergroup elements only when they
 	// look like IDs; <@name> or <#name> would be rejected by Slack (or
-	// render wrong), so they stay literal text instead.
-	userIDRE      = regexp.MustCompile(`^[UW][A-Z0-9]+$`)
-	channelIDRE   = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
-	usergroupIDRE = regexp.MustCompile(`^S[A-Z0-9]+$`)
+	// render wrong), so they stay literal text instead. The shape is the
+	// prefix plus at least 8 more uppercase alphanumerics; looksLikeID also
+	// requires a digit, so an uppercase word like GENERAL or USER is no ID.
+	userIDRE      = regexp.MustCompile(`^[UW][A-Z0-9]{8,}$`)
+	channelIDRE   = regexp.MustCompile(`^[CG][A-Z0-9]{8,}$`)
+	usergroupIDRE = regexp.MustCompile(`^S[A-Z0-9]{8,}$`)
 )
+
+func looksLikeID(re *regexp.Regexp, id string) bool {
+	return re.MatchString(id) && strings.ContainsAny(id, "0123456789")
+}
 
 // slackUnescape decodes the only three entities Slack escapes in mrkdwn.
 // Deliberate divergence from the Python original's html.unescape (and Go's
@@ -90,11 +96,11 @@ func textElement(value string, style inlineStyle) *slack.RichTextSectionTextElem
 func angleElement(body string, style inlineStyle) slack.RichTextSectionElement {
 	target, label, _ := strings.Cut(body, "|")
 	switch {
-	case strings.HasPrefix(target, "@") && userIDRE.MatchString(target[1:]):
+	case strings.HasPrefix(target, "@") && looksLikeID(userIDRE, target[1:]):
 		return &slack.RichTextSectionUserElement{Type: slack.RTSEUser, UserID: target[1:]}
-	case strings.HasPrefix(target, "#") && channelIDRE.MatchString(target[1:]):
+	case strings.HasPrefix(target, "#") && looksLikeID(channelIDRE, target[1:]):
 		return &slack.RichTextSectionChannelElement{Type: slack.RTSEChannel, ChannelID: target[1:]}
-	case strings.HasPrefix(target, "!subteam^") && usergroupIDRE.MatchString(strings.TrimPrefix(target, "!subteam^")):
+	case strings.HasPrefix(target, "!subteam^") && looksLikeID(usergroupIDRE, strings.TrimPrefix(target, "!subteam^")):
 		return &slack.RichTextSectionUserGroupElement{Type: slack.RTSEUserGroup, UsergroupID: strings.TrimPrefix(target, "!subteam^")}
 	// <!date^…> and other <!…> commands are not converted: they fall
 	// through to nil and stay literal text (a known gap; a date element
@@ -206,7 +212,8 @@ func matchEmoji(s []rune, i int) (end int, name string, skin int) {
 }
 
 // matchBareURL matches https?://[^\s<>]+ at i, not inside a word, minus
-// trailing sentence punctuation and any unmatched closing parenthesis. It
+// trailing sentence punctuation and quotes and any unmatched closing
+// bracket. A ';' that ends an &amp;/&lt;/&gt; entity is part of the URL. It
 // returns the end of the URL or -1. Code spans, fences and <…> links never
 // reach here: the scanner consumes them first.
 func matchBareURL(s []rune, i int) int {
@@ -229,17 +236,20 @@ func matchBareURL(s []rune, i int) int {
 	}
 	for end > i+scheme {
 		last := s[end-1]
-		if strings.ContainsRune(".,;:!?", last) {
+		if last == ';' && endsWithEntity(s[i:end]) {
+			break
+		}
+		if strings.ContainsRune(".,;:!?\"'", last) {
 			end--
 			continue
 		}
-		if last == ')' {
+		if opener, ok := closers[last]; ok {
 			open, closed := 0, 0
 			for _, r := range s[i:end] {
 				switch r {
-				case '(':
+				case opener:
 					open++
-				case ')':
+				case last:
 					closed++
 				}
 			}
@@ -254,6 +264,14 @@ func matchBareURL(s []rune, i int) int {
 		return -1
 	}
 	return end
+}
+
+// closers maps each closing bracket a bare URL may end with to its opener.
+var closers = map[rune]rune{')': '(', ']': '[', '}': '{'}
+
+func endsWithEntity(s []rune) bool {
+	t := string(s)
+	return strings.HasSuffix(t, "&amp;") || strings.HasSuffix(t, "&lt;") || strings.HasSuffix(t, "&gt;")
 }
 
 // parseInline parses one run of inline mrkdwn into rich_text section elements.
@@ -395,18 +413,19 @@ func parseLines(lines []string) []slack.RichTextElement {
 	var (
 		blocks     []slack.RichTextElement
 		sec, quote []string
-		items      []string
+		items      []listLine
 		listStyle  slack.RichTextListElementType
 		listIndent int
-		listStart  int
 		orderedRun bool
 	)
 
+	// Blank lines at a section's edges (left over around a list or quote)
+	// are dropped; blank lines inside a paragraph are kept.
 	flushSection := func() {
-		if len(sec) > 0 {
-			blocks = append(blocks, section(strings.Join(sec, "\n")))
-			sec = nil
+		if trimmed := trimBlankLines(sec); len(trimmed) > 0 {
+			blocks = append(blocks, section(strings.Join(trimmed, "\n")))
 		}
+		sec = nil
 	}
 	flushQuote := func() {
 		if len(quote) > 0 {
@@ -422,13 +441,17 @@ func parseLines(lines []string) []slack.RichTextElement {
 			return
 		}
 		list := &slack.RichTextList{Type: slack.RTEList, Style: listStyle, Indent: listIndent}
-		if listStyle == slack.RTEListOrdered && listStart > 1 {
-			list.Offset = listStart - 1
-		}
 		for _, item := range items {
-			if sec := section(item); len(sec.Elements) > 0 {
-				list.Elements = append(list.Elements, sec)
+			sec := section(item.text)
+			if len(sec.Elements) == 0 {
+				continue
 			}
+			// The offset comes from the first item actually emitted, so
+			// "1. \n2. b" still renders b as 2.
+			if len(list.Elements) == 0 && listStyle == slack.RTEListOrdered && item.number > 1 {
+				list.Offset = item.number - 1
+			}
+			list.Elements = append(list.Elements, sec)
 		}
 		if len(list.Elements) > 0 {
 			blocks = append(blocks, list)
@@ -460,17 +483,17 @@ func parseLines(lines []string) []slack.RichTextElement {
 		if li, ok := parseListLine(line, orderedRun); ok {
 			flushSection()
 			flushQuote()
-			if len(items) > 0 && (li.style != listStyle || li.indent != listIndent) {
+			// A different style or depth ends the list, and so does an
+			// ordered number that does not climb ("1) a\n2) b\n\n1. c").
+			if len(items) > 0 && (li.style != listStyle || li.indent != listIndent ||
+				(li.style == slack.RTEListOrdered && li.number <= items[len(items)-1].number)) {
 				flushList()
-			}
-			if len(items) == 0 {
-				listStart = li.number
 			}
 			listStyle, listIndent = li.style, li.indent
 			if li.style == slack.RTEListOrdered {
 				orderedRun = true
 			}
-			items = append(items, li.text)
+			items = append(items, li)
 			continue
 		}
 

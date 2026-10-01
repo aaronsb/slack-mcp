@@ -109,14 +109,16 @@ func TestToRichTextInline(t *testing.T) {
 			{"type":"text","text":"bold","style":{"bold":true}},
 			{"type":"text","text":" "},
 			{"type":"link","url":"https://x.com","text":"docs"}]`},
-		{"entities", "<!here> <@U01> <#C100|general> <!subteam^S1> <https://a.io>", `[
+		{"entities", "<!here> <@U0123ABCD> <#C0123ABCD|general> <!subteam^S0123ABCD> <@W0123ABCD> <https://a.io>", `[
 			{"type":"broadcast","range":"here"},
 			{"type":"text","text":" "},
-			{"type":"user","user_id":"U01"},
+			{"type":"user","user_id":"U0123ABCD"},
 			{"type":"text","text":" "},
-			{"type":"channel","channel_id":"C100"},
+			{"type":"channel","channel_id":"C0123ABCD"},
 			{"type":"text","text":" "},
-			{"type":"usergroup","usergroup_id":"S1"},
+			{"type":"usergroup","usergroup_id":"S0123ABCD"},
+			{"type":"text","text":" "},
+			{"type":"user","user_id":"W0123ABCD"},
 			{"type":"text","text":" "},
 			{"type":"link","url":"https://a.io"}]`},
 		{"html entities are unescaped", "a &amp; b &lt;3 <https://x.com/?a=1&amp;b=2|q>", `[
@@ -189,6 +191,22 @@ func TestToRichTextInline(t *testing.T) {
 		// entities only for ID-shaped targets; date commands literal (W4)
 		{"name-shaped mentions stay literal", "<@bob> <#general> <!subteam^eng>",
 			`[{"type":"text","text":"<@bob> <#general> <!subteam^eng>"}]`},
+		{"uppercase words and short IDs stay literal", "<#GENERAL> <@USER> <@U01> <#C100> <!subteam^SABCDEFGHI>",
+			`[{"type":"text","text":"<#GENERAL> <@USER> <@U01> <#C100> <!subteam^SABCDEFGHI>"}]`},
+		{"bare URL drops trailing quotes and unmatched brackets", `"https://x.io/a" [https://x.io/b] {https://x.io/c}`, `[
+			{"type":"text","text":"\""},
+			{"type":"link","url":"https://x.io/a"},
+			{"type":"text","text":"\" ["},
+			{"type":"link","url":"https://x.io/b"},
+			{"type":"text","text":"] {"},
+			{"type":"link","url":"https://x.io/c"},
+			{"type":"text","text":"}"}]`},
+		{"bare URL keeps balanced brackets", "https://x.io/a[1]{2}",
+			`[{"type":"link","url":"https://x.io/a[1]{2}"}]`},
+		{"bare URL keeps a semicolon that ends an entity", "https://x.io/?a=1&amp;",
+			`[{"type":"link","url":"https://x.io/?a=1&"}]`},
+		{"bare URL drops a plain trailing semicolon", "https://x.io/a;",
+			`[{"type":"link","url":"https://x.io/a"},{"type":"text","text":";"}]`},
 		{"date command stays literal", "<!date^1392734382^{date}|Feb 18>",
 			`[{"type":"text","text":"<!date^1392734382^{date}|Feb 18>"}]`},
 
@@ -248,7 +266,7 @@ func TestToRichTextBoldLineIsNotABullet(t *testing.T) {
 
 // ported: test_plain_preview_round_trip
 func TestRichTextToPlainRoundTrip(t *testing.T) {
-	in := "Hi <@U01>\n- a\n  - b\n> q"
+	in := "Hi <@U0123ABCD>\n- a\n  - b\n> q"
 	if got := RichTextToPlain([]slack.Block{ToRichText(in)}); got != in {
 		t.Fatalf("round trip\n got %q\nwant %q", got, in)
 	}
@@ -351,5 +369,35 @@ func TestToRichTextDropsEmptyListItems(t *testing.T) {
 	}
 	if els := elementsOf(t, "- "); len(els) != 0 {
 		t.Fatalf("an all-empty list was kept: %s", mustJSON(els))
+	}
+}
+
+// The offset follows the first item emitted, not the first line.
+func TestToRichTextOffsetFollowsFirstEmittedItem(t *testing.T) {
+	els := elementsOf(t, "1. \n2. b\n3. c")
+	l, ok := els[0].(*slack.RichTextList)
+	if !ok || len(els) != 1 || len(l.Elements) != 2 || l.Offset != 1 {
+		t.Fatalf("want one list of 2 at offset 1, got %s", mustJSON(els))
+	}
+}
+
+// A number that does not climb restarts the list.
+func TestToRichTextOrderedListRestarts(t *testing.T) {
+	els := elementsOf(t, "1) a\n2) b\n\n1. restart\n2. again")
+	lists := orderedLists(els)
+	if len(els) != 2 || len(lists) != 2 || len(lists[0].Elements) != 2 || len(lists[1].Elements) != 2 || lists[1].Offset != 0 {
+		t.Fatalf("want two ordered lists of 2, got %s", mustJSON(els))
+	}
+}
+
+// Blank lines around a list do not leak into the next paragraph.
+func TestToRichTextSectionAfterListHasNoLeadingBlank(t *testing.T) {
+	els := elementsOf(t, "- a\n\nafter\n\nmore")
+	if len(els) != 2 {
+		t.Fatalf("want list + section, got %s", mustJSON(els))
+	}
+	got := generic(t, els[1].(*slack.RichTextSection).Elements)
+	if !reflect.DeepEqual(got, decode(t, `[{"type":"text","text":"after\n\nmore"}]`)) {
+		t.Fatalf("section: %s", mustJSON(got))
 	}
 }
