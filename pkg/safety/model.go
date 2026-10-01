@@ -96,20 +96,55 @@ func (d Destination) ID() string {
 	return ""
 }
 
-// QuarantineKeys are the keys a block on d closes: the person of a DM, each
-// other member of a group DM, the conversation of a channel, and nothing for
-// the self-DM.
-func (d Destination) QuarantineKeys() []Key {
+// BindingID is the ID a pending request and a request state bind to. A
+// person, and a one-to-one DM, bind by the other person's user ID, so a
+// request issued before the DM existed still matches once it is opened, and
+// a DM named by its ID matches one named by @handle. Everything else binds
+// by conversation ID.
+func (d Destination) BindingID() string {
+	if (d.Kind == DestPerson || d.Kind == DestDM) && len(d.Members) == 1 && d.Members[0].ID != "" {
+		return d.Members[0].ID
+	}
+	return d.ID()
+}
+
+// QuarantineKeys are the keys a block on d closes, for an account whose own
+// user ID is self: the person of a DM, each other member of a group DM, the
+// conversation of a channel, and nothing for the self-DM. The account's own
+// user is never a key. A DM or group DM that names no other member falls
+// back to its conversation ID, so a caller that failed to fill Members still
+// closes the conversation rather than nothing. A DM whose only member is
+// the account is the self-DM.
+func (d Destination) QuarantineKeys(self string) []Key {
 	switch d.Kind {
 	case DestSelf:
 		return nil
 	case DestPerson, DestDM, DestGroupDM:
 		out := make([]Key, 0, len(d.Members))
+		sawSelf := false
 		for _, m := range d.Members {
+			if m.ID == "" {
+				continue
+			}
+			if self != "" && m.ID == self {
+				sawSelf = true
+				continue
+			}
 			out = append(out, Person(m.ID, m.Name))
+		}
+		if len(out) == 0 {
+			if d.Kind == DestDM && sawSelf {
+				return nil
+			}
+			if d.ConversationID != "" {
+				return []Key{Conversation(d.ConversationID, d.Name)}
+			}
 		}
 		return out
 	default:
+		if d.ConversationID == "" {
+			return nil
+		}
 		return []Key{Conversation(d.ConversationID, d.Name)}
 	}
 }

@@ -156,10 +156,10 @@ func TestClearQuarantineAndStrikes(t *testing.T) {
 
 func TestLockRecordedSurvivesPostureRelaxation(t *testing.T) {
 	dir := t.TempDir()
-	strict, _ := OpenDir(dir, "T1", Strict)
+	strict, _ := OpenDir(dir, testOrg, Strict)
 	block(t, strict, channel("C1", "#a"))
 	block(t, strict, channel("C2", "#b"))
-	soft, _ := OpenDir(dir, "T1", Soft)
+	soft, _ := OpenDir(dir, testOrg, Soft)
 	if !soft.Quarantine.State().LockEngaged() {
 		t.Fatal("switching to soft lifted a lock strict engaged")
 	}
@@ -185,9 +185,6 @@ func addTrust(t *testing.T, w *Workspace, a TrustAdd) {
 	t.Helper()
 	if a.Source == "" {
 		a.Source = SourceCLI
-	}
-	if a.Posture == "" {
-		a.Posture = w.Posture
 	}
 	if err := w.Trust.Add(a); err != nil {
 		t.Fatal(err)
@@ -273,14 +270,14 @@ func TestTrustPersonAndGroupDM(t *testing.T) {
 
 func TestTrustStrictIgnoresElicitationEntries(t *testing.T) {
 	dir := t.TempDir()
-	soft, _ := OpenDir(dir, "T1", Soft)
-	strict, _ := OpenDir(dir, "T1", Strict)
+	soft, _ := OpenDir(dir, testOrg, Soft)
+	strict, _ := OpenDir(dir, testOrg, Strict)
 	now := time.Now()
 	d := channel("C1", "#team")
 
 	// A CLI entry for case 2, then an elicitation entry for both cases.
 	addTrust(t, soft, TrustAdd{Key: Conversation("C1", "#team"), Cases: []Case{CaseCrossConversation}, Source: SourceCLI})
-	addTrust(t, soft, TrustAdd{Key: Conversation("C1", "#team"), Cases: []Case{CaseExternal, CaseCrossConversation}, Source: SourceElicitation, Posture: Soft, PendingID: "p7k2", Parties: []string{"TX"}})
+	addTrust(t, soft, TrustAdd{Key: Conversation("C1", "#team"), Cases: []Case{CaseExternal, CaseCrossConversation}, Source: SourceElicitation, PendingID: "p7k2", Parties: []string{"TX"}})
 
 	ext := TrustQuery{Destination: d, Case: CaseExternal, Parties: []string{"TX"}, PartiesKnown: true}
 	if _, ok := soft.Trust.State().Trusted(ext, now); !ok {
@@ -305,7 +302,7 @@ func TestTrustStrictIgnoresElicitationEntries(t *testing.T) {
 	}
 
 	// Strict refuses to add by elicitation at all.
-	err := strict.Trust.Add(TrustAdd{Key: Conversation("C2", ""), Cases: []Case{CaseExternal}, Source: SourceElicitation, Posture: Strict})
+	err := strict.Trust.Add(TrustAdd{Key: Conversation("C2", ""), Cases: []Case{CaseExternal}, Source: SourceElicitation})
 	if !errors.Is(err, ErrStrictElicitationTrust) {
 		t.Fatalf("got %v", err)
 	}
@@ -441,8 +438,8 @@ func TestPendingCLIApprovalSingleUse(t *testing.T) {
 
 func TestPendingConsumeRaceFirstWins(t *testing.T) {
 	dir := t.TempDir()
-	a, _ := OpenDir(dir, "T1", Strict)
-	b, _ := OpenDir(dir, "T1", Strict)
+	a, _ := OpenDir(dir, testOrg, Strict)
+	b, _ := OpenDir(dir, testOrg, Strict)
 	now := time.Now()
 	r, _, _ := a.Pending.Create(externalReq("hi"), now)
 	bind := Binding{DestinationID: "C1", ContentHash: r.ContentHash, Cases: r.Cases}
@@ -508,7 +505,7 @@ func TestPendingExpiry(t *testing.T) {
 		t.Fatal("live request lost after rewrite")
 	}
 	// Another handle rebuilds from the replaced file.
-	w2, _ := OpenDir(w.Dir, "T1", Strict)
+	w2, _ := OpenDir(w.Dir, testOrg, Strict)
 	if _, ok := w2.Pending.Lookup(r.ID, later); ok {
 		t.Fatal("expired request survived")
 	}
@@ -568,34 +565,38 @@ func TestRequestStateSignVerify(t *testing.T) {
 	// Tamper: flip a byte of the payload.
 	bad := []byte(tok)
 	bad[3] ^= 1
-	if _, err := s.Verify(string(bad), "p7k2", b, now); !errors.Is(err, ErrStateTampered) && !errors.Is(err, ErrStateMalformed) {
+	if _, err := s.Verify(string(bad), "p7k2", b, ChoiceApproveOnce, now); !errors.Is(err, ErrStateTampered) && !errors.Is(err, ErrStateMalformed) {
 		t.Fatalf("tampered: %v", err)
 	}
 	// Another process's key (a restart).
 	other, _ := NewSigner()
-	if _, err := other.Verify(tok, "p7k2", b, now); !errors.Is(err, ErrStateTampered) {
+	if _, err := other.Verify(tok, "p7k2", b, ChoiceApproveOnce, now); !errors.Is(err, ErrStateTampered) {
 		t.Fatalf("restart: %v", err)
 	}
 	// Another call.
-	if _, err := s.Verify(tok, "p7k2", Binding{DestinationID: "C2", ContentHash: r.ContentHash, Cases: r.Cases}, now); !errors.Is(err, ErrStateMismatch) {
+	if _, err := s.Verify(tok, "p7k2", Binding{DestinationID: "C2", ContentHash: r.ContentHash, Cases: r.Cases}, ChoiceApproveOnce, now); !errors.Is(err, ErrStateMismatch) {
 		t.Fatalf("mismatch: %v", err)
 	}
-	if _, err := s.Verify(tok, "pxxx", b, now); !errors.Is(err, ErrStateMismatch) {
+	if _, err := s.Verify(tok, "pxxx", b, ChoiceApproveOnce, now); !errors.Is(err, ErrStateMismatch) {
 		t.Fatalf("pending id: %v", err)
 	}
 	// Expiry.
-	if _, err := s.Verify(tok, "p7k2", b, now.Add(RequestStateTTL)); !errors.Is(err, ErrStateExpired) {
+	if _, err := s.Verify(tok, "p7k2", b, ChoiceApproveOnce, now.Add(RequestStateTTL)); !errors.Is(err, ErrStateExpired) {
 		t.Fatalf("expired: %v", err)
 	}
+	// A choice the strict form did not offer.
+	if _, err := s.Verify(tok, "p7k2", b, ChoiceApproveTrust, now); !errors.Is(err, ErrStateMismatch) {
+		t.Fatalf("unoffered choice: %v", err)
+	}
 	// Valid once, then a replay.
-	st, err := s.Verify(tok, "p7k2", b, now.Add(time.Minute))
+	st, err := s.Verify(tok, "p7k2", b, ChoiceApproveOnce, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st.Offers(ChoiceApproveTrust) || !st.Offers(ChoiceApproveOnce) {
 		t.Fatal("strict form offered trust")
 	}
-	if _, err := s.Verify(tok, "p7k2", b, now.Add(2*time.Minute)); !errors.Is(err, ErrStateReplayed) {
+	if _, err := s.Verify(tok, "p7k2", b, ChoiceApproveOnce, now.Add(2*time.Minute)); !errors.Is(err, ErrStateReplayed) {
 		t.Fatalf("replay: %v", err)
 	}
 	if !(len(ChoicesFor(Soft)) == 3) {
@@ -610,7 +611,7 @@ func TestRequestStateReplayFindsNothingToApprove(t *testing.T) {
 	r, _, _ := w.Pending.Create(externalReq("hi"), now)
 	tok, _ := s.Sign(r, ChoicesFor(Soft), now)
 	b := Binding{DestinationID: "C1", ContentHash: r.ContentHash, Cases: r.Cases}
-	if _, err := s.Verify(tok, r.ID, b, now); err != nil {
+	if _, err := s.Verify(tok, r.ID, b, ChoiceApproveOnce, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Pending.Consume(r.ID, b, AnswerElicitation, now); err != nil {
@@ -618,7 +619,7 @@ func TestRequestStateReplayFindsNothingToApprove(t *testing.T) {
 	}
 	// Even a second signer state for the same request finds it consumed.
 	tok2, _ := s.Sign(r, ChoicesFor(Soft), now)
-	if _, err := s.Verify(tok2, r.ID, b, now); err != nil {
+	if _, err := s.Verify(tok2, r.ID, b, ChoiceApproveOnce, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Pending.Consume(r.ID, b, AnswerElicitation, now); !errors.Is(err, ErrNotPending) {

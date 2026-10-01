@@ -3,11 +3,14 @@ package safety
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -17,22 +20,22 @@ import (
 // A write is one small append, so a wait this long means a wedged holder.
 var LockTimeout = 10 * time.Second
 
-// tailCheck is how many bytes before the read offset are compared on an
-// incremental read. Size, mtime, and identity catch a shrink, a replacement,
-// and an in-place edit that kept the size; this catches an in-place edit
-// that also grew the file within one mtime tick.
-const tailCheck = 64
-
 // journal is one append-only JSON-lines file and its reader cursor.
 //
 // Reading (ADR-013, The quarantine file): the cursor keeps the size,
-// modification time, and identity of its last read and reads on from the
-// end of the last complete line. A file that shrank, was replaced, or was
-// modified in place without growing is read again from offset 0 and the
-// state rebuilt. An unterminated final line is a write in progress and is
-// left for the next read; a complete line that does not parse is skipped and
-// remembered by line number; a missing file is empty; a file that exists but
-// cannot be read sets err.
+// modification time, and identity of its last read, and a SHA-256 of every
+// byte it has consumed, and reads on from the end of the last complete line.
+// A file that shrank, was replaced, was modified in place without growing,
+// or whose consumed bytes no longer hash the same (an edit that also grew
+// it) is read again from offset 0 and the state rebuilt. The files are
+// small, so each read takes the whole file and the hash costs one pass.
+//
+// An unterminated final line is a write in progress and is left for the
+// next read; a complete line that does not parse is skipped and remembered
+// by line number; a missing file is empty; a file that exists but cannot be
+// read, or is not a regular file (a symlink, a FIFO), sets err. A
+// non-regular file is refused before it is opened, so a FIFO cannot block
+// the reader.
 //
 // Writing: under an advisory lock on a sibling .lock file, a newline first
 // when the last byte is not one, then the entry, in one write.
@@ -43,9 +46,9 @@ type journal struct {
 	fi     os.FileInfo
 	size   int64 // bytes covered by the last read, torn tail included
 	mtime  time.Time
-	offset int64  // end of the last complete line consumed
-	tail   []byte // up to tailCheck bytes ending at offset
-	lines  int    // complete lines consumed
+	offset int64             // end of the last complete line consumed
+	prefix [sha256.Size]byte // SHA-256 of [0, offset)
+	lines  int               // complete lines consumed
 
 	malformed []int // 1-based line numbers of lines that did not parse
 	err       error // the file exists and cannot be read
@@ -59,16 +62,36 @@ func (j *journal) clearCursor() {
 	j.fi = nil
 	j.size, j.offset, j.lines = 0, 0, 0
 	j.mtime = time.Time{}
-	j.tail = nil
+	j.prefix = sha256.Sum256(nil)
 	j.malformed = nil
 	j.err = nil
+}
+
+// checkRegular refuses a path that exists and is not a regular file,
+// without following a symlink. A missing path passes.
+func checkRegular(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s: not a regular file", filepath.Base(path))
+	}
+	return nil
 }
 
 // refresh brings the caller's fold up to date. reset empties the fold before
 // a rebuild; apply folds one complete, non-blank line and returns an error
 // when it does not parse.
 func (j *journal) refresh(reset func(), apply func([]byte) error) {
-	f, err := os.Open(j.path)
+	if err := checkRegular(j.path); err != nil {
+		j.unreadable(reset, err)
+		return
+	}
+	f, err := os.OpenFile(j.path, os.O_RDONLY|oNoFollow, 0)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			if j.fi != nil || j.err != nil || j.lines > 0 {
@@ -88,31 +111,7 @@ func (j *journal) refresh(reset func(), apply func([]byte) error) {
 		return
 	}
 	if !fi.Mode().IsRegular() {
-		j.unreadable(reset, fmt.Errorf("%s: not a regular file", j.path))
-		return
-	}
-
-	rebuild := j.fi == nil ||
-		!os.SameFile(j.fi, fi) ||
-		fi.Size() < j.size ||
-		(fi.Size() == j.size && !fi.ModTime().Equal(j.mtime))
-	if !rebuild && fi.Size() == j.size {
-		return // nothing new
-	}
-	if !rebuild && len(j.tail) > 0 {
-		got := make([]byte, len(j.tail))
-		if _, err := f.ReadAt(got, j.offset-int64(len(j.tail))); err != nil || !bytes.Equal(got, j.tail) {
-			rebuild = true
-		}
-	}
-	if rebuild {
-		j.clearCursor()
-		reset()
-	}
-
-	start := j.offset
-	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		j.unreadable(reset, err)
+		j.unreadable(reset, fmt.Errorf("%s: not a regular file", filepath.Base(j.path)))
 		return
 	}
 	data, err := io.ReadAll(f)
@@ -121,14 +120,30 @@ func (j *journal) refresh(reset func(), apply func([]byte) error) {
 		return
 	}
 
-	consumed := 0
+	size := int64(len(data))
+	rebuild := j.fi == nil ||
+		!os.SameFile(j.fi, fi) ||
+		size < j.offset ||
+		size < j.size ||
+		(size == j.size && !fi.ModTime().Equal(j.mtime)) ||
+		sha256.Sum256(data[:j.offset]) != j.prefix
+	if rebuild {
+		j.clearCursor()
+		reset()
+	}
+
+	h := sha256.New()
+	h.Write(data[:j.offset])
+	consumed := j.offset
 	for {
 		nl := bytes.IndexByte(data[consumed:], '\n')
 		if nl < 0 {
 			break // torn or in-progress final line: left for the next read
 		}
-		line := bytes.TrimSpace(data[consumed : consumed+nl])
-		consumed += nl + 1
+		end := consumed + int64(nl) + 1
+		line := bytes.TrimSpace(data[consumed : end-1])
+		h.Write(data[consumed:end])
+		consumed = end
 		j.lines++
 		if len(line) == 0 {
 			continue
@@ -137,24 +152,12 @@ func (j *journal) refresh(reset func(), apply func([]byte) error) {
 			j.malformed = append(j.malformed, j.lines)
 		}
 	}
-
-	j.offset = start + int64(consumed)
-	j.size = start + int64(len(data))
+	j.offset = consumed
+	copy(j.prefix[:], h.Sum(nil))
+	j.size = size
 	j.fi = fi
 	j.mtime = fi.ModTime()
 	j.err = nil
-	// The tail is the bytes just before offset, from this read when it
-	// reached back far enough, else from the file.
-	n := int64(tailCheck)
-	if n > j.offset {
-		n = j.offset
-	}
-	j.tail = make([]byte, n)
-	if int64(consumed) >= n {
-		copy(j.tail, data[consumed-int(n):consumed])
-	} else if _, err := f.ReadAt(j.tail, j.offset-n); err != nil {
-		j.tail = nil // no tail check next time; the size and mtime still apply
-	}
 }
 
 func (j *journal) unreadable(reset func(), err error) {
@@ -166,15 +169,18 @@ func (j *journal) unreadable(reset func(), err error) {
 // withLock runs fn holding the journal's advisory lock, shared by every
 // process using the data directory.
 func (j *journal) withLock(fn func() error) error {
+	if err := checkRegular(j.lockPath); err != nil {
+		return fmt.Errorf("lock: %w", err)
+	}
 	lk := flock.New(j.lockPath)
 	ctx, cancel := context.WithTimeout(context.Background(), LockTimeout)
 	defer cancel()
 	ok, err := lk.TryLockContext(ctx, 10*time.Millisecond)
 	if err != nil {
-		return fmt.Errorf("lock %s: %w", j.lockPath, err)
+		return fmt.Errorf("lock %s: %w", filepath.Base(j.lockPath), err)
 	}
 	if !ok {
-		return fmt.Errorf("lock %s: timed out", j.lockPath)
+		return fmt.Errorf("lock %s: timed out", filepath.Base(j.lockPath))
 	}
 	defer func() { _ = lk.Unlock() }()
 	return fn()
@@ -187,7 +193,10 @@ func (j *journal) appendLine(entry []byte) error {
 	if bytes.IndexByte(entry, '\n') >= 0 {
 		return fmt.Errorf("journal entry contains a newline")
 	}
-	f, err := os.OpenFile(j.path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
+	if err := checkRegular(j.path); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(j.path, os.O_RDWR|os.O_CREATE|os.O_APPEND|oNoFollow, 0o600)
 	if err != nil {
 		return err
 	}
@@ -198,6 +207,9 @@ func (j *journal) appendLine(entry []byte) error {
 	fi, err := f.Stat()
 	if err != nil {
 		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s: not a regular file", filepath.Base(j.path))
 	}
 	buf := make([]byte, 0, len(entry)+2)
 	if fi.Size() > 0 {
@@ -217,11 +229,15 @@ func (j *journal) appendLine(entry []byte) error {
 	return f.Sync()
 }
 
+// rewritePrefix names the temporary files rewrite leaves behind if it dies
+// before its rename; OpenDir sweeps old ones.
+const rewritePrefix = ".rewrite-"
+
 // rewrite replaces the file with lines, through a temporary file and a
 // rename, so a reader sees the old file or the new one and, by identity,
 // rebuilds. The caller holds the lock.
 func (j *journal) rewrite(lines [][]byte) error {
-	tmp, err := os.CreateTemp(dirOf(j.path), ".rewrite-*")
+	tmp, err := os.CreateTemp(filepath.Dir(j.path), rewritePrefix+"*")
 	if err != nil {
 		return err
 	}
@@ -255,6 +271,24 @@ func (j *journal) rewrite(lines [][]byte) error {
 			return err
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// sweepRewrites removes temporary files a crashed rewrite left in dir. Only
+// files older than a minute go, so a rewrite in progress in another process
+// keeps its file.
+func sweepRewrites(dir string, now time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), rewritePrefix) {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.Mode().IsRegular() && now.Sub(info.ModTime()) > time.Minute {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
 	}
 }
 

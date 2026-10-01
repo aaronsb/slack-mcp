@@ -47,6 +47,7 @@ type QuarantineStore struct {
 	mu      sync.Mutex
 	j       *journal
 	posture Posture
+	self    string // the account's own user ID, never a quarantine key
 
 	people       map[string]Key
 	convs        map[string]Key
@@ -54,8 +55,8 @@ type QuarantineStore struct {
 	lockRecorded bool
 }
 
-func newQuarantineStore(path string, p Posture) *QuarantineStore {
-	s := &QuarantineStore{j: newJournal(path), posture: p}
+func newQuarantineStore(path string, p Posture, self string) *QuarantineStore {
+	s := &QuarantineStore{j: newJournal(path), posture: p, self: self}
 	s.reset()
 	return s
 }
@@ -266,8 +267,8 @@ func (s *QuarantineStore) RecordBlock(b Block) (BlockOutcome, error) {
 		b.Time = time.Now()
 	}
 	d := b.Destination
-	if d.Kind == DestChannel && d.ConversationID == "" {
-		return BlockOutcome{}, errors.New("block on a channel without a conversation ID")
+	if d.Kind != DestSelf && !isSelfDM(d, s.self) && len(d.QuarantineKeys(s.self)) == 0 {
+		return BlockOutcome{}, errors.New("block on a destination with no conversation ID and no member")
 	}
 
 	s.mu.Lock()
@@ -278,7 +279,7 @@ func (s *QuarantineStore) RecordBlock(b Block) (BlockOutcome, error) {
 		if s.j.err != nil {
 			return fmt.Errorf("%w: %v", ErrUnreadable, s.j.err)
 		}
-		out = decideBlock(s.posture, s.strikes+1, d)
+		out = decideBlock(s.posture, s.strikes+1, d, s.self)
 		q := out.Quarantined
 		call, match := b.Call, b.Match
 		line := quarantineLine{
@@ -307,14 +308,14 @@ func (s *QuarantineStore) RecordBlock(b Block) (BlockOutcome, error) {
 }
 
 // decideBlock is the posture table.
-func decideBlock(p Posture, strike int, d Destination) BlockOutcome {
+func decideBlock(p Posture, strike int, d Destination, self string) BlockOutcome {
 	out := BlockOutcome{Posture: p, Strike: strike, Limit: StrikeLimit(p)}
-	quarantine := d.Kind != DestSelf && (p == Strict || strike >= 2)
-	if quarantine {
-		out.Keys = d.QuarantineKeys()
+	selfDM := d.Kind == DestSelf || isSelfDM(d, self)
+	if !selfDM && (p == Strict || strike >= 2) {
+		out.Keys = d.QuarantineKeys(self)
 		out.Quarantined = len(out.Keys) > 0
 	}
-	out.Warned = !out.Quarantined && d.Kind != DestSelf
+	out.Warned = !out.Quarantined && !selfDM
 	out.LockEngaged = strike >= out.Limit
 	return out
 }
@@ -364,4 +365,17 @@ func (s *QuarantineStore) Clear(target Key, by, pendingID string, now time.Time)
 		return nil
 	})
 	return cleared, err
+}
+
+// isSelfDM reports a DM whose only member is the account itself.
+func isSelfDM(d Destination, self string) bool {
+	if d.Kind != DestDM || self == "" || len(d.Members) == 0 {
+		return false
+	}
+	for _, m := range d.Members {
+		if m.ID != self {
+			return false
+		}
+	}
+	return true
 }

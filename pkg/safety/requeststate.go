@@ -94,7 +94,7 @@ func (s *Signer) Sign(r Request, choices []Choice, now time.Time) (string, error
 	}
 	st := RequestState{
 		PendingID:     r.ID,
-		DestinationID: r.Destination.ID(),
+		DestinationID: r.Destination.BindingID(),
 		ContentHash:   r.ContentHash,
 		Cases:         normCases(r.Cases),
 		Choices:       choices,
@@ -118,10 +118,11 @@ func (s *Signer) mac(payload []byte) []byte {
 
 // Verify checks a returned state against the call it came back on: the
 // signature, the expiry, and the binding (pending ID, destination, content
-// hash, cases). A state verifies once; a second presentation is
+// hash, cases) and the answer given: a choice the form did not offer is
+// ErrStateMismatch. A state verifies once; a second presentation is
 // ErrStateReplayed. The pending request's own consumption is the second
 // guard: a replayed state finds nothing to approve.
-func (s *Signer) Verify(token, pendingID string, b Binding, now time.Time) (RequestState, error) {
+func (s *Signer) Verify(token, pendingID string, b Binding, choice Choice, now time.Time) (RequestState, error) {
 	enc := base64.RawURLEncoding
 	p, m, ok := strings.Cut(token, ".")
 	if !ok {
@@ -146,7 +147,7 @@ func (s *Signer) Verify(token, pendingID string, b Binding, now time.Time) (Requ
 		return RequestState{}, ErrStateExpired
 	}
 	if st.PendingID != pendingID || st.DestinationID != b.DestinationID ||
-		st.ContentHash != b.ContentHash || !sameCases(st.Cases, b.Cases) {
+		st.ContentHash != b.ContentHash || !sameCases(st.Cases, b.Cases) || !st.Offers(choice) {
 		return RequestState{}, ErrStateMismatch
 	}
 

@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +46,39 @@ func cliTokens() (xoxc, xoxd string, err error) {
 	return "", "", fmt.Errorf("no Slack credentials found in config (%s) or environment; run 'slack-mcp setup'", setup.ConfigPath())
 }
 
+// cliTransport builds the CLI's HTTP transport. It honors SLACK_MCP_PROXY
+// and SLACK_MCP_SERVER_CA as the server does, and always verifies TLS:
+// SLACK_MCP_SERVER_CA adds a root to the system pool, and
+// SLACK_MCP_SERVER_CA_INSECURE is never honored, since the tokens ride on
+// every request.
+func cliTransport(getenv func(string) string, readFile func(string) ([]byte, error)) (*http.Transport, error) {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	if raw := getenv("SLACK_MCP_PROXY"); raw != "" {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			// The URL may carry user:pass, so it is never printed.
+			return nil, errors.New("invalid SLACK_MCP_PROXY: not a valid URL")
+		}
+		t.Proxy = http.ProxyURL(u)
+	}
+	roots, _ := x509.SystemCertPool()
+	if roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if path := getenv("SLACK_MCP_SERVER_CA"); path != "" {
+		pem, err := readFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("SLACK_MCP_SERVER_CA: %v", err)
+		}
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, errors.New("SLACK_MCP_SERVER_CA: no certificate found in the file")
+		}
+	}
+	t.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	return t, nil
+}
+
 // slackDirectory resolves destinations with the configured tokens. Names
 // come from the server's user and channel caches first, then Slack.
 type slackDirectory struct {
@@ -61,7 +97,14 @@ func connectSlackDirectory() (directory, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: 30 * time.Second, Transport: transport.New(http.DefaultTransport, cliUserAgent, xoxd)}
+	rt, err := cliTransport(os.Getenv, os.ReadFile)
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv("SLACK_MCP_SERVER_CA_INSECURE") != "" {
+		fmt.Fprintln(os.Stderr, "slack-mcp: SLACK_MCP_SERVER_CA_INSECURE is ignored here; the CLI always verifies TLS")
+	}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: transport.New(rt, cliUserAgent, xoxd)}
 	api := slack.New(xoxc, slack.OptionHTTPClient(client))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

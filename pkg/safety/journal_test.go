@@ -16,9 +16,11 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/estate"
 )
 
+var testOrg = Org{TeamID: "T1", UserID: "UME"}
+
 func openTest(t *testing.T, p Posture) *Workspace {
 	t.Helper()
-	w, err := OpenDir(t.TempDir(), "T1", p)
+	w, err := OpenDir(t.TempDir(), testOrg, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +117,7 @@ func TestJournalTornFinalLineIgnoredThenRepaired(t *testing.T) {
 	}
 
 	// A fresh reader agrees.
-	w2, _ := OpenDir(w.Dir, "T1", Strict)
+	w2, _ := OpenDir(w.Dir, testOrg, Strict)
 	if st2 := w2.Quarantine.State(); st2.Strikes != 2 || len(st2.Malformed) != 1 {
 		t.Fatalf("fresh reader: %+v", st2)
 	}
@@ -332,8 +334,8 @@ func TestJournalFileMode(t *testing.T) {
 
 func TestJournalTwoHandlesShareState(t *testing.T) {
 	dir := t.TempDir()
-	a, _ := OpenDir(dir, "T1", Soft)
-	b, _ := OpenDir(dir, "T1", Soft)
+	a, _ := OpenDir(dir, testOrg, Soft)
+	b, _ := OpenDir(dir, testOrg, Soft)
 	block(t, a, channel("C1", "#a"))
 	out := block(t, b, channel("C2", "#b"))
 	if out.Strike != 2 {
@@ -352,7 +354,7 @@ func TestHelperAppender(t *testing.T) {
 		t.Skip("helper process only")
 	}
 	n, _ := strconv.Atoi(os.Getenv("SAFETY_HELPER_N"))
-	w, err := OpenDir(dir, "T1", Strict)
+	w, err := OpenDir(dir, testOrg, Strict)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +393,7 @@ func TestJournalConcurrentProcesses(t *testing.T) {
 		}
 	}
 
-	w, _ := OpenDir(dir, "T1", Strict)
+	w, _ := OpenDir(dir, testOrg, Strict)
 	st := w.Quarantine.State()
 	if len(st.Malformed) != 0 {
 		t.Fatalf("interleaved writes: malformed lines %v", st.Malformed)

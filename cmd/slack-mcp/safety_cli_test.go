@@ -42,7 +42,7 @@ func newHarness(t *testing.T) *cliHarness {
 }
 
 func (h *cliHarness) workspace(p safety.Posture) *safety.Workspace {
-	w, err := safety.OpenDir(h.dir, "T1", p)
+	w, err := safety.OpenDir(h.dir, safety.Org{TeamID: "T1", UserID: "UME"}, p)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -71,11 +71,11 @@ func (h *cliHarness) run(stdin string, args ...string) int {
 			h.connected = true
 			return fd, nil
 		},
-		open: func(teamID string, p safety.Posture) (*safety.Workspace, error) {
-			if teamID != "T1" {
-				h.t.Fatalf("workspace keyed by %q, want the auth.test team ID", teamID)
+		open: func(org safety.Org, p safety.Posture) (*safety.Workspace, error) {
+			if org.TeamID != "T1" {
+				h.t.Fatalf("workspace keyed by %q, want the auth.test team ID", org.TeamID)
 			}
-			return safety.OpenDir(h.dir, teamID, p)
+			return safety.OpenDir(h.dir, org, p)
 		},
 	}
 	return c.run(args)
@@ -243,7 +243,7 @@ func TestSafetyCLITrustAddRemoveList(t *testing.T) {
 
 	// An elicitation entry from a soft session, listed as ignored in strict.
 	soft := h.workspace(safety.Soft)
-	soft.Trust.Add(safety.TrustAdd{Key: safety.Conversation("C2", "#general"), Cases: []safety.Case{safety.CaseExternal}, Source: safety.SourceElicitation, Posture: safety.Soft, PendingID: "pabc"})
+	soft.Trust.Add(safety.TrustAdd{Key: safety.Conversation("C2", "#general"), Cases: []safety.Case{safety.CaseExternal}, Source: safety.SourceElicitation, PendingID: "pabc"})
 
 	h.run("", "trust", "list")
 	out := h.out.String()

@@ -317,16 +317,22 @@ func (t TrustState) Entries(k Key) bool {
 	return ok && (slot.last != nil || slot.lastCLI != nil)
 }
 
-// TrustAdd is an entry to add.
+// InEffect reports whether an entry for k is in force under the state's
+// posture now: what `quarantine clear` says applies again.
+func (t TrustState) InEffect(k Key, now time.Time) bool {
+	_, ok := t.effective(k, now)
+	return ok
+}
+
+// TrustAdd is an entry to add. The posture recorded is the store's, never
+// the caller's.
 type TrustAdd struct {
 	Time     time.Time
 	Key      Key
 	DestKind DestKind
 	Cases    []Case
 	Source   TrustSource
-	// Posture the entry was added under, and for an elicitation the
-	// pending ID it answered.
-	Posture   Posture
+	// PendingID is the request an elicitation answered.
 	PendingID string
 	Expires   *time.Time
 	Parties   []string
@@ -353,7 +359,7 @@ func (s *TrustStore) Add(a TrustAdd) error {
 	switch a.Source {
 	case SourceCLI:
 	case SourceElicitation:
-		if a.Posture != Soft {
+		if s.posture != Soft {
 			return ErrStrictElicitationTrust
 		}
 	default:
@@ -364,7 +370,7 @@ func (s *TrustStore) Add(a TrustAdd) error {
 	}
 	line := trustLine{
 		Time: a.Time.UTC(), Kind: kindAdd, Key: a.Key, DestKind: a.DestKind, Cases: cases,
-		Source: a.Source, Posture: a.Posture, PendingID: a.PendingID, Expires: a.Expires,
+		Source: a.Source, Posture: s.posture, PendingID: a.PendingID, Expires: a.Expires,
 		Parties: normStrings(a.Parties),
 	}
 	return s.write(line)
@@ -378,6 +384,9 @@ func (s *TrustStore) Remove(k Key, now time.Time) (bool, error) {
 	removed := false
 	err := s.j.withLock(func() error {
 		s.j.refresh(s.reset, s.apply)
+		if s.j.err != nil {
+			return fmt.Errorf("trust list cannot be read: %w", s.j.err)
+		}
 		slot := s.slots[slotKey(k)]
 		if slot == nil || (slot.last == nil && slot.lastCLI == nil) {
 			return nil

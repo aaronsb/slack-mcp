@@ -60,22 +60,30 @@ type Request struct {
 func (r Request) IsLift() bool { return hasCase(r.Cases, CaseLift) }
 
 // Binding is what a later call must match to use a request: the
-// destination, the content hash, and the set of gate cases.
+// destination, the content hash, and the set of gate cases. DestinationID is
+// Destination.BindingID(): a person or one-to-one DM by the person's user
+// ID, so a request issued before the DM was opened still matches after.
+// BindingFor builds one.
 type Binding struct {
 	DestinationID string
 	ContentHash   string
 	Cases         []Case
 }
 
+// BindingFor is the binding of a call to d with this content and cases.
+func BindingFor(d Destination, contentHash string, cases []Case) Binding {
+	return Binding{DestinationID: d.BindingID(), ContentHash: contentHash, Cases: normCases(cases)}
+}
+
 func (r Request) matches(b Binding) bool {
-	return r.Destination.ID() == b.DestinationID && r.ContentHash == b.ContentHash && sameCases(r.Cases, b.Cases)
+	return r.Destination.BindingID() == b.DestinationID && r.ContentHash == b.ContentHash && sameCases(r.Cases, b.Cases)
 }
 
 // sameCall is the repeat rule: a repeat of the same call while its request
 // is pending names the same ID. A lift is the same call when it lifts the
 // same keys, whatever its content.
 func (r Request) sameCall(o Request) bool {
-	if r.Destination.ID() != o.Destination.ID() || !sameCases(r.Cases, o.Cases) {
+	if r.Destination.BindingID() != o.Destination.BindingID() || !sameCases(r.Cases, o.Cases) {
 		return false
 	}
 	if r.IsLift() {
@@ -262,7 +270,14 @@ func (s *PendingStore) List(now time.Time) []Request {
 // Create issues a request for a gated call and returns it, with created
 // false when a pending request for the same call already exists (its ID is
 // named again; the caller logs PENDING only when created). Content is held
-// only for case 1. A request expires PendingTTL after issue.
+// only for case 1. A request expires PendingTTL after issue; Create first
+// drops every expired request, with its content, from the file.
+//
+// Order at the gate: call ConsumeApproved first, and Create only when it
+// finds no approval. Create does not look at approved requests, so a gate
+// that calls Create first issues a fresh pending request for a call the
+// operator already approved (the approval stays unused until
+// ConsumeApproved is called).
 func (s *PendingStore) Create(req Request, now time.Time) (Request, bool, error) {
 	req.Cases = normCases(req.Cases)
 	if len(req.Cases) == 0 {
@@ -284,6 +299,9 @@ func (s *PendingStore) Create(req Request, now time.Time) (Request, bool, error)
 		s.refreshLocked()
 		if s.j.err != nil {
 			return fmt.Errorf("pending requests cannot be read: %w", s.j.err)
+		}
+		if _, err := s.expireLocked(now); err != nil {
+			return err
 		}
 		for _, id := range s.order {
 			v := view(s.reqs[id], now)
@@ -373,16 +391,6 @@ func (s *PendingStore) resolve(id, kind, by string, now time.Time, check func(Re
 	return out, err
 }
 
-// approve marks a pending request approved; a lift is consumed by it.
-func (s *PendingStore) approve(id, by string, now time.Time) (Request, error) {
-	return s.resolve(id, kindApprove, by, now, func(r Request) error {
-		if r.Status != StatusPending {
-			return fmt.Errorf("%w: %s", ErrNotPending, r.Status)
-		}
-		return nil
-	})
-}
-
 // Deny marks a request denied. A repeat of the call then issues a new one.
 func (s *PendingStore) Deny(id, by string, now time.Time) (Request, error) {
 	return s.resolve(id, kindDeny, by, now, nil)
@@ -438,7 +446,8 @@ func (s *PendingStore) ConsumeApproved(b Binding, now time.Time) (Request, bool,
 
 // Expire drops every request whose 24 hours have run out, with the content
 // held for it, by rewriting the file without them. It returns how many were
-// dropped.
+// dropped. Create runs it on every issue, and the CLI on every approve and
+// deny, so held content does not outlive its request for long.
 func (s *PendingStore) Expire(now time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -448,22 +457,31 @@ func (s *PendingStore) Expire(now time.Time) (int, error) {
 		if s.j.err != nil {
 			return fmt.Errorf("pending requests cannot be read: %w", s.j.err)
 		}
-		var keep [][]byte
-		for _, id := range s.order {
-			if !now.Before(s.reqs[id].Expires) {
-				dropped++
-				continue
-			}
-			keep = append(keep, s.raw[id]...)
-		}
-		if dropped == 0 {
-			return nil
-		}
-		if err := s.j.rewrite(keep); err != nil {
-			return err
-		}
-		s.refreshLocked()
-		return nil
+		var err error
+		dropped, err = s.expireLocked(now)
+		return err
 	})
 	return dropped, err
+}
+
+// expireLocked does Expire's work; the caller holds the mutex and the lock
+// and has refreshed.
+func (s *PendingStore) expireLocked(now time.Time) (int, error) {
+	dropped := 0
+	var keep [][]byte
+	for _, id := range s.order {
+		if !now.Before(s.reqs[id].Expires) {
+			dropped++
+			continue
+		}
+		keep = append(keep, s.raw[id]...)
+	}
+	if dropped == 0 {
+		return 0, nil
+	}
+	if err := s.j.rewrite(keep); err != nil {
+		return 0, err
+	}
+	s.refreshLocked()
+	return dropped, nil
 }

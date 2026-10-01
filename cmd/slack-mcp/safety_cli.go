@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mattn/go-isatty"
 
@@ -81,7 +82,7 @@ type safetyCLI struct {
 	lookupEnv  func(string) (string, bool)
 	now        func() time.Time
 	connect    func() (directory, error)
-	open       func(teamID string, p safety.Posture) (*safety.Workspace, error)
+	open       func(org safety.Org, p safety.Posture) (*safety.Workspace, error)
 
 	posture safety.Posture
 	dir     directory
@@ -163,7 +164,7 @@ func (c *safetyCLI) run(args []string) int {
 	if c.dir, err = c.connect(); err != nil {
 		return c.fail("%v", err)
 	}
-	if c.ws, err = c.open(c.dir.Org().TeamID, c.posture); err != nil {
+	if c.ws, err = c.open(c.dir.Org(), c.posture); err != nil {
 		return c.fail("%v", err)
 	}
 	c.in = bufio.NewReader(c.stdin)
@@ -180,11 +181,13 @@ func (c *safetyCLI) run(args []string) int {
 	case "trust remove":
 		return c.trustRemove(rest[0])
 	case "approve ":
+		c.expirePending()
 		if len(rest) == 0 {
 			return c.pendingList()
 		}
 		return c.answer(rest[0], true)
 	default: // deny
+		c.expirePending()
 		return c.answer(rest[0], false)
 	}
 }
@@ -205,12 +208,18 @@ func (c *safetyCLI) confirm(prompt, want string) bool {
 // marked as such, else the ID.
 func (c *safetyCLI) label(k safety.Key, when string) string {
 	if n, ok := c.dir.CurrentName(k); ok && n != "" {
-		return n
+		return termSafe(n)
 	}
 	if k.Name != "" {
-		return k.Name + " (name at " + when + ")"
+		return termSafe(k.Name) + " (name at " + when + ")"
 	}
-	return k.ID
+	return termSafe(k.ID)
+}
+
+// header names the workspace, the posture, and the data directory the
+// state was read from.
+func (c *safetyCLI) header() {
+	fmt.Fprintf(c.stdout, "Workspace %s, posture %s, data %s\n", c.ws.TeamID, c.posture, c.ws.Dir)
 }
 
 // display is the name an operator types back: the recorded name, else the
@@ -220,370 +229,69 @@ func display(k safety.Key) string {
 		return "strikes"
 	}
 	if k.Name != "" {
-		return k.Name
+		return termSafe(k.Name)
 	}
-	return k.ID
+	return termSafe(k.ID)
 }
 
-// matchKey finds the key arg names among ks: by ID, or by recorded name
-// with or without its @ or #.
+// matchKey finds the key arg names among ks: by ID, or by recorded name.
+// A sigil narrows the kind: #name matches conversations only, @name people
+// only; a bare word matches either.
 func matchKey(arg string, ks []safety.Key) (safety.Key, bool) {
-	bare := strings.TrimLeft(arg, "@#")
+	want := safety.KeyKind("")
+	bare := arg
+	switch {
+	case strings.HasPrefix(arg, "#"):
+		want, bare = safety.KeyConversation, arg[1:]
+	case strings.HasPrefix(arg, "@"):
+		want, bare = safety.KeyPerson, arg[1:]
+	}
 	for _, k := range ks {
-		if k.ID == arg || (bare != "" && strings.TrimLeft(k.Name, "@#") == bare) {
+		if want != "" && k.Kind != want {
+			continue
+		}
+		if k.ID == bare || (bare != "" && strings.TrimLeft(k.Name, "@#") == bare) {
 			return k, true
 		}
 	}
 	return safety.Key{}, false
 }
 
-// --- quarantine ---
-
-func (c *safetyCLI) quarantineList() int {
-	st := c.ws.Quarantine.State()
-	fmt.Fprintf(c.stdout, "Workspace %s, posture %s.\n", c.ws.TeamID, c.posture)
-	if st.Err != nil {
-		fmt.Fprintf(c.stdout, "Quarantine state could not be read (%v): every say and mark-read is refused.\n", rootErr(st.Err))
-		return 0
-	}
-	switch {
-	case st.LockEngaged():
-		fmt.Fprintf(c.stdout, "Strike lock engaged (%d of %d): every say and mark-read is refused. Clear with: quarantine clear strikes\n", st.Strikes, st.Limit)
-	case st.Strikes > 0:
-		fmt.Fprintf(c.stdout, "Strikes: %d of %d.\n", st.Strikes, st.Limit)
-	}
-	if len(st.People) == 0 && len(st.Conversations) == 0 {
-		fmt.Fprintln(c.stdout, "Nothing quarantined.")
-	}
-	for _, k := range st.People {
-		fmt.Fprintf(c.stdout, "  %s  %s  person (every DM and group DM with them)\n", c.label(k, "block time"), k.ID)
-	}
-	for _, k := range st.Conversations {
-		fmt.Fprintf(c.stdout, "  %s  %s  conversation\n", c.label(k, "block time"), k.ID)
-	}
-	if len(st.Malformed) > 0 {
-		fmt.Fprintf(c.stdout, "Skipped %d unreadable line(s): %s\n", len(st.Malformed), joinInts(st.Malformed))
-	}
-	return 0
-}
-
-func (c *safetyCLI) quarantineClear(arg string) int {
-	st := c.ws.Quarantine.State()
-	if st.Err != nil {
-		return c.fail("quarantine state could not be read (%v); fix that first", rootErr(st.Err))
-	}
-	var k safety.Key
-	if arg == "strikes" {
-		if !st.LockEngaged() && st.Strikes == 0 {
-			fmt.Fprintln(c.stdout, "No strikes to clear.")
-			return 0
-		}
-		k = safety.StrikesKey
-		fmt.Fprintf(c.stdout, "Clearing %d strike(s)", st.Strikes)
-		if st.LockEngaged() {
-			fmt.Fprint(c.stdout, " and the strike lock")
-		}
-		fmt.Fprintln(c.stdout, ".")
-	} else {
-		found, ok := matchKey(arg, append(append([]safety.Key{}, st.People...), st.Conversations...))
-		if !ok {
-			t, err := c.dir.Resolve(arg)
-			if err != nil {
-				return c.fail("%v", err)
-			}
-			if found, ok = st.IsQuarantined(t.Key.ID); !ok {
-				return c.fail("%s is not quarantined; nothing changed", arg)
-			}
-		}
-		k = found
-		fmt.Fprintf(c.stdout, "Clearing the quarantine on %s (%s, %s).\n", c.label(k, "block time"), k.ID, k.Kind)
-	}
-	if !c.confirm("", display(k)) {
-		return 1
-	}
-	ok, err := c.ws.Quarantine.Clear(k, safety.ByCLI, "", c.now())
-	if err != nil {
-		return c.fail("%v", err)
-	}
-	if !ok {
-		fmt.Fprintln(c.stdout, "Already clear.")
-		return 0
-	}
-	fmt.Fprintln(c.stdout, "Cleared.")
-	if k.Kind != safety.KeyStrikes && c.ws.Trust.State().Entries(k) {
-		fmt.Fprintf(c.stdout, "%s is a trusted destination; its trust applies again now.\n", display(k))
-	}
-	return 0
-}
-
-// --- trust ---
-
-type trustAddArgs struct {
-	dest  string
-	cases []safety.Case
-	dur   time.Duration
-}
-
-func parseTrustAdd(args []string) (trustAddArgs, error) {
-	a := trustAddArgs{cases: []safety.Case{safety.CaseExternal, safety.CaseCrossConversation}}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		name, val, hasVal := strings.Cut(arg, "=")
-		if name == "--case" || name == "--for" {
-			if !hasVal {
-				if i+1 >= len(args) {
-					return a, fmt.Errorf("%s needs a value", name)
-				}
-				i++
-				val = args[i]
-			}
-			switch name {
-			case "--case":
-				switch val {
-				case "all":
-					a.cases = []safety.Case{safety.CaseExternal, safety.CaseCrossConversation}
-				case string(safety.CaseExternal), string(safety.CaseCrossConversation):
-					a.cases = []safety.Case{safety.Case(val)}
-				default:
-					return a, fmt.Errorf("--case %q: want external, cross-conversation, or all", val)
-				}
-			case "--for":
-				d, err := parseDuration(val)
-				if err != nil {
-					return a, err
-				}
-				a.dur = d
-			}
-			continue
-		}
-		if strings.HasPrefix(arg, "-") || a.dest != "" {
-			return a, fmt.Errorf("unexpected argument %q", arg)
-		}
-		a.dest = arg
-	}
-	if a.dest == "" {
-		return a, errors.New("trust add needs a destination")
-	}
-	return a, nil
-}
-
-// parseDuration takes Go durations and whole days ("30d").
-func parseDuration(s string) (time.Duration, error) {
-	if n, ok := strings.CutSuffix(s, "d"); ok {
-		days, err := strconv.Atoi(n)
-		if err == nil && days > 0 {
-			return time.Duration(days) * 24 * time.Hour, nil
-		}
-	} else if d, err := time.ParseDuration(s); err == nil && d > 0 {
-		return d, nil
-	}
-	return 0, fmt.Errorf("--for %q: want a duration like 12h or 30d", s)
-}
-
-func (c *safetyCLI) trustAdd(a trustAddArgs) int {
-	t, err := c.dir.Resolve(a.dest)
-	if err != nil {
-		return c.fail("%v", err)
-	}
-	if t.DestKind == safety.DestSelf {
-		return c.fail("the self-DM is never external and needs no trust")
-	}
-	fmt.Fprintf(c.stdout, "Destination: %s (%s, %s)\n", display(t.Key), t.Key.ID, t.DestKind)
-	if t.External {
-		fmt.Fprintf(c.stdout, "External parties: %s\n", orNone(t.Parties))
-	} else {
-		fmt.Fprintln(c.stdout, "External parties: none (internal now)")
-	}
-	fmt.Fprintf(c.stdout, "Cases: %s\n", safety.CasesString(a.cases))
-	var exp *time.Time
-	if a.dur > 0 {
-		e := c.now().Add(a.dur).UTC()
-		exp = &e
-		fmt.Fprintf(c.stdout, "Expires: %s\n", e.Format(time.RFC3339))
-	} else {
-		fmt.Fprintln(c.stdout, "Expires: never")
-	}
-	if !c.confirm("", display(t.Key)) {
-		return 1
-	}
-	var parties []string
-	if t.Key.Kind == safety.KeyConversation {
-		parties = t.Parties
-	}
-	err = c.ws.Trust.Add(safety.TrustAdd{
-		Time: c.now(), Key: t.Key, DestKind: t.DestKind, Cases: a.cases,
-		Source: safety.SourceCLI, Posture: c.posture, Expires: exp, Parties: parties,
-	})
-	if err != nil {
-		return c.fail("%v", err)
-	}
-	fmt.Fprintf(c.stdout, "Trusted %s for %s. Requests already pending still need approve or deny.\n", display(t.Key), safety.CasesString(a.cases))
-	return 0
-}
-
-func (c *safetyCLI) trustRemove(arg string) int {
-	ts := c.ws.Trust.State()
-	var keys []safety.Key
-	for _, l := range ts.List(c.now(), safety.QuarantineState{}) {
-		keys = append(keys, l.Entry.Key)
-	}
-	k, ok := matchKey(arg, keys)
-	if !ok {
-		t, err := c.dir.Resolve(arg)
-		if err != nil {
-			return c.fail("%v", err)
-		}
-		k = t.Key
-	}
-	removed, err := c.ws.Trust.Remove(k, c.now())
-	if err != nil {
-		return c.fail("%v", err)
-	}
-	if !removed {
-		return c.fail("no trust recorded for %s", arg)
-	}
-	fmt.Fprintf(c.stdout, "Removed trust for %s.\n", display(k))
-	return 0
-}
-
-func (c *safetyCLI) trustList() int {
-	ts := c.ws.Trust.State()
-	src := "default"
-	if v, ok := c.lookupEnv(safety.SafetyEnv); ok && strings.TrimSpace(v) != "" {
-		src = safety.SafetyEnv
-	}
-	fmt.Fprintf(c.stdout, "Posture: %s (%s); entries are labeled by it.\n", c.posture, src)
-	if ts.Err != nil {
-		fmt.Fprintf(c.stdout, "Trust list could not be read (%v): nothing is trusted.\n", rootErr(ts.Err))
-		return 0
-	}
-	now := c.now()
-	list := ts.List(now, c.ws.Quarantine.State())
-	if len(list) == 0 {
-		fmt.Fprintln(c.stdout, "No trusted destinations.")
-	}
-	for _, l := range list {
-		e := l.Entry
-		how := string(e.Source)
-		if e.Source == safety.SourceElicitation {
-			how += " (" + string(e.Posture)
-			if e.PendingID != "" {
-				how += ", " + e.PendingID
-			}
-			how += ")"
-		}
-		exp := "never"
-		if e.Expires != nil {
-			exp = e.Expires.Format(time.RFC3339)
-		}
-		fmt.Fprintf(c.stdout, "  %s  %s  %s  cases=%s  added=%s by %s  expires=%s  [%s]\n",
-			c.label(e.Key, "add time"), e.Key.ID, kindLabel(e), safety.CasesString(e.Cases),
-			e.Added.Format(time.RFC3339), how, exp, l.State)
-		if len(e.Parties) > 0 {
-			fmt.Fprintf(c.stdout, "      external parties recorded: %s\n", strings.Join(e.Parties, ", "))
-		}
-	}
-	if len(ts.Malformed) > 0 {
-		fmt.Fprintf(c.stdout, "Skipped %d unreadable line(s): %s\n", len(ts.Malformed), joinInts(ts.Malformed))
-	}
-	return 0
-}
-
-func kindLabel(e safety.TrustEntry) string {
-	if e.DestKind != "" {
-		return string(e.DestKind)
-	}
-	return string(e.Key.Kind)
-}
-
-// --- pending ---
-
-func (c *safetyCLI) pendingList() int {
-	now := c.now()
-	if err := c.ws.Pending.Err(); err != nil {
-		return c.fail("pending requests could not be read: %v", rootErr(err))
-	}
-	reqs := c.ws.Pending.List(now)
-	if len(reqs) == 0 {
-		fmt.Fprintln(c.stdout, "No pending requests.")
-		return 0
-	}
-	for _, r := range reqs {
-		state := ""
-		if r.Status == safety.StatusApproved {
-			state = "  approved, awaiting the call"
-		}
-		fmt.Fprintf(c.stdout, "  %s  %s  %s  age %s  expires in %s%s\n", r.ID, safety.CasesString(r.Cases),
-			summary(r), now.Sub(r.Created).Round(time.Minute), r.Expires.Sub(now).Round(time.Minute), state)
-	}
-	return 0
-}
-
-func summary(r safety.Request) string {
-	d := r.Destination
-	s := fmt.Sprintf("%s to %s (%s)", r.Tool, d.Name, d.ID())
-	if r.FileCount > 0 {
-		s += fmt.Sprintf(" files=%d", r.FileCount)
-	}
-	if len(r.From) > 0 {
-		s += " from=" + strings.Join(r.From, ",")
-	}
-	if r.IsLift() {
-		var ks []string
-		for _, k := range r.Lift {
-			ks = append(ks, display(k))
-		}
-		s += " lift=" + strings.Join(ks, ",")
-	}
-	return s
-}
-
-// answer approves or denies a request after showing it in full: for case 1
-// the text and file names, not a hash.
-func (c *safetyCLI) answer(id string, approve bool) int {
-	now := c.now()
-	r, ok := c.ws.Pending.Lookup(id, now)
-	if !ok {
-		return c.fail("%s: %v", id, safety.ErrNoRequest)
-	}
-	if r.Status != safety.StatusPending && !(r.Status == safety.StatusApproved && !approve) {
-		return c.fail("%s is %s; nothing changed", id, r.Status)
-	}
-	fmt.Fprintf(c.stdout, "Request %s: %s\n", r.ID, safety.CasesString(r.Cases))
-	fmt.Fprintf(c.stdout, "  %s\n", summary(r))
-	fmt.Fprintf(c.stdout, "  issued %s, expires %s\n", r.Created.Format(time.RFC3339), r.Expires.Format(time.RFC3339))
-	if r.Text != "" {
-		fmt.Fprintf(c.stdout, "  text:\n%s\n", indent(r.Text))
-	}
-	for i, n := range r.FileNames {
-		fmt.Fprintf(c.stdout, "  file %d: %s\n", i+1, n)
-	}
-	verb := "deny"
-	if approve {
-		verb = "approve"
-	}
-	if !c.confirm("To "+verb+" it:", r.ID) {
-		return 1
-	}
-	if !approve {
-		if _, err := c.ws.Pending.Deny(id, safety.AnswerCLI, now); err != nil {
-			return c.fail("%v", err)
-		}
-		fmt.Fprintf(c.stdout, "Denied %s.\n", id)
-		return 0
-	}
-	if _, err := c.ws.Approve(id, now); err != nil {
-		return c.fail("%v", err)
-	}
-	if r.IsLift() {
-		fmt.Fprintf(c.stdout, "Approved %s: lifted. Nothing was sent; the agent calls again.\n", id)
-	} else {
-		fmt.Fprintf(c.stdout, "Approved %s: the next matching call goes through once.\n", id)
-	}
-	return 0
-}
-
 // --- helpers ---
+
+// termSafe escapes control characters before text reaches the operator's
+// terminal: C0 controls other than newline and tab, DEL, C1 controls, and
+// bytes that are not UTF-8, so text an agent supplied cannot move the
+// cursor, retitle the window, or write the clipboard (OSC 52).
+func termSafe(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size <= 1:
+			fmt.Fprintf(&b, "\\x%02x", s[i])
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, "\\x%02x", r)
+		case r >= 0x80 && r <= 0x9f:
+			fmt.Fprintf(&b, "\\u%04x", r)
+		default:
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
+}
+
+// termSafeAll escapes each string.
+func termSafeAll(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = termSafe(s)
+	}
+	return out
+}
 
 func indent(s string) string {
 	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
