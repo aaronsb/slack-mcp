@@ -100,8 +100,8 @@ func envLine(line []byte) bool { return envSegment(line) }
 
 // envValue takes the value without surrounding quotes. An unquoted value
 // ends at the first whitespace; it holds whitespace (and does not match)
-// unless only blanks, a line ending, or a comment (`#` after a space or tab)
-// follow.
+// unless only blanks, a line ending, or a comment (`#` after a space, tab,
+// or carriage return) follow.
 func envValue(raw []byte) ([]byte, bool) {
 	if len(raw) > 0 && (raw[0] == '"' || raw[0] == '\'') {
 		if j := bytes.IndexByte(raw[1:], raw[0]); j >= 0 {

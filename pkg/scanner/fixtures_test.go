@@ -217,3 +217,16 @@ func tinyIDATPNG(n int) []byte {
 	b.Write(pngChunk("IEND", nil))
 	return b.Bytes()
 }
+
+// urlSpans lists every URL-encoded span in b.
+func urlSpans(b []byte) [][2]int {
+	var spans [][2]int
+	for from, prev := 0, 0; ; {
+		sp, next, ok := nextURL(b, from, prev)
+		if !ok {
+			return spans
+		}
+		spans = append(spans, sp)
+		from, prev = next, next
+	}
+}

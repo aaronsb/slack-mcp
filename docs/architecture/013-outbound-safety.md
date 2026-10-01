@@ -196,8 +196,9 @@ when a word, case-insensitive, is one of `SECRET`, `SECRETS`,
 `SECRETKEY`, `ACCESSKEY`, `PRIVATEKEY`, `AUTHTOKEN`, `CREDENTIAL`,
 `CREDENTIALS`, or `AUTH`, and no word is `PUBLIC` or `PUB`. Whole words
 keep `MONKEY`, `AUTHOR`, and `BYPASS` out. The value is taken without
-surrounding quotes; an unquoted value ends at a `#` after a space or
-tab, as dotenv parsers and the shell read a comment. `NAME` must start a
+surrounding quotes; an unquoted value ends at a `#` after a space,
+tab, or carriage return, as dotenv parsers and the shell read a comment
+(the carriage return errs toward matching). `NAME` must start a
 line in at least one scanned form. In the joined `rich_text` form, the
 start of each inline element counts as a line start, and that line ends
 at the next element's start, so a whole code element

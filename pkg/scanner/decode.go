@@ -286,19 +286,6 @@ func nextBase64(b []byte, i int) (b64Run, int, bool) {
 	return b64Run{}, len(b), false
 }
 
-// base64Runs lists every base64 run in b.
-func base64Runs(b []byte) []b64Run {
-	var runs []b64Run
-	for i := 0; ; {
-		r, next, ok := nextBase64(b, i)
-		if !ok {
-			return runs
-		}
-		runs = append(runs, r)
-		i = next
-	}
-}
-
 // wholeLine reports whether [s,e) is all of its line once spaces and tabs
 // are trimmed (a trailing `\r` counts as part of the line ending).
 func wholeLine(b []byte, s, e int) bool {
@@ -433,19 +420,6 @@ func nextURL(b []byte, from, prevEnd int) ([2]int, int, bool) {
 		return [2]int{s, e}, e, true
 	}
 	return [2]int{}, len(b), false
-}
-
-// urlSpans lists every URL-encoded span in b.
-func urlSpans(b []byte) [][2]int {
-	var spans [][2]int
-	for from, prev := 0, 0; ; {
-		sp, next, ok := nextURL(b, from, prev)
-		if !ok {
-			return spans
-		}
-		spans = append(spans, sp)
-		from, prev = next, next
-	}
 }
 
 // urlDecode percent-decodes src. `+` is left as is; a `%` not followed by
