@@ -42,6 +42,9 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 		threadTs = ts
 	}
 
+	broadcast, _ := params["broadcast"].(bool)
+	broadcast = broadcast && threadTs != ""
+
 	// Get the API provider
 	apiProvider, ok := params["_provider"].(*provider.ApiProvider)
 	if !ok {
@@ -74,6 +77,9 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 	// Add thread timestamp if replying to a thread
 	if threadTs != "" {
 		options = append(options, slack.MsgOptionTS(threadTs))
+		if broadcast {
+			options = append(options, slack.MsgOptionBroadcast())
+		}
 	}
 
 	// Send the message
@@ -97,6 +103,7 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 			"timestamp": timestamp,
 			"threadTs":  threadTs,
 			"message":   message,
+			"broadcast": broadcast,
 		},
 	}
 

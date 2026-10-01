@@ -31,7 +31,7 @@ make npm-publish NPM_TOKEN=... # Publish to npm
 | `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` full Slack search syntax |
 | `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'` |
 | `batch` | executor | Run a held plan of reads in one call: `commands=[{tool, params}...]`; playbooks via `save=`/`run=`/`list=`/`delete=` |
-| `say` | verb | Contribute content (Slack-visible): a message, or an emoji reaction |
+| `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), or an emoji reaction |
 | `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
 | `mark-read` | verb | Fire read receipts — the one visibly-public read signal |
 | `auth` | verb | Interactive token setup (localhost only) |
