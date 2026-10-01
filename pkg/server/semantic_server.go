@@ -371,7 +371,12 @@ func (s *SemanticMCPServer) NewSSEHTTPServer(host, port, apiKey string) (*http.S
 // The caller owns signals and the lifecycle watchers (pkg/lifecycle); tool
 // calls run under ctx, so cancelling it also reaches in-flight Slack calls.
 func (s *SemanticMCPServer) ServeStdio(ctx context.Context, in io.Reader) error {
-	return server.NewStdioServer(s.server).Listen(ctx, in, os.Stdout)
+	stdio := server.NewStdioServer(s.server)
+	// mcp-go's stdio server writes errors to its own os.Stderr logger by
+	// default, which would bypass the log file and its redaction. Route it
+	// through the process logger. (Its SSE server already uses log.Printf.)
+	stdio.SetErrorLogger(log.Default())
+	return stdio.Listen(ctx, in, os.Stdout)
 }
 
 // Shutdown shuts down the current provider, if any, giving up after timeout.

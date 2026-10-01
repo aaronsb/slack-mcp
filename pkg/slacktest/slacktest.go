@@ -49,6 +49,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	handlers map[string]Handler
+	headers  map[string]http.Header
 	calls    map[string]int
 
 	inflight     int
@@ -68,6 +69,7 @@ func New(t *testing.T) *Server {
 
 	s := &Server{
 		handlers: make(map[string]Handler),
+		headers:  make(map[string]http.Header),
 		calls:    make(map[string]int),
 		channels: []slack.Channel{
 			memberChannel("C1", "eng"),
@@ -112,6 +114,18 @@ func (s *Server) Handle(method string, h Handler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handlers[method] = h
+}
+
+// HandleHeader adds a response header to one endpoint, named as for Handle.
+// Real Slack responses carry headers that matter to tests, such as the
+// Set-Cookie that holds a session cookie on auth.test.
+func (s *Server) HandleHeader(method, key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.headers[method] == nil {
+		s.headers[method] = make(http.Header)
+	}
+	s.headers[method].Add(key, value)
 }
 
 // Calls reports how many times an endpoint was requested. Use it to assert the
@@ -218,6 +232,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.calls[method]++
 	s.inflight++
 	h := s.handlers[method]
+	header := s.headers[method].Clone()
 	channels := append([]slack.Channel(nil), s.channels...)
 	users := append([]slack.User(nil), s.users...)
 	s.mu.Unlock()
@@ -237,6 +252,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		body = defaultFixture(method, s.URL, channels, users)
 	}
 
+	for k, vs := range header {
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
 }
