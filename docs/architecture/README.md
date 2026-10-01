@@ -68,8 +68,8 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 | [010](010-batch-executor.md) | The Batch Executor | Accepted | One-shot read batches + saved playbooks + the frequency hint |
 | [011](011-time-flows-down-the-page.md) | Time Flows Down the Page | Accepted | Every rendered message list is oldest-first; fetches stay newest-first so caps keep the newest |
 | [012](012-exchange-directory.md) | The Exchange Directory | Accepted, amended 2026-09-30 | **Not started** — `download` still takes `destDir`; `say files=` (#92) builds on it; graph reports (#61) stay outside it |
-| [013](013-outbound-safety.md) | Outbound Safety | Accepted, amended 2026-09-30 | **Not started** — lands with ADR-012's implementation and `say files=` (#92) |
-| [014](014-identity-and-safety-posture.md) | Account Identity and Safety Posture | Accepted | **Not started** — `SLACK_MCP_IDENTITY` and `SLACK_MCP_SAFETY`; lands with ADR-013 |
+| [013](013-outbound-safety.md) | Outbound Safety | Accepted, amended 2026-09-30, 2026-10-01 | **Not started** — lands with ADR-012's implementation and `say files=` (#92) |
+| [014](014-identity-and-safety-posture.md) | Account Identity and Safety Posture | Accepted, amended 2026-10-01 | **Not started** — `SLACK_MCP_IDENTITY` and `SLACK_MCP_SAFETY`; lands with ADR-013 |
 
 ### Auth — how tokens are obtained
 

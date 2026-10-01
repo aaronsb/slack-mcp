@@ -21,7 +21,9 @@ the implementation. The sections below carry the rules.
   webhooks, model-provider keys, PuTTY keys, and credential URLs added;
   base64 alignment and line rejoining, hex, URL-encoding, and gzip at
   any offset; a fixed decoder order with no precedence; depth 3 and a
-  32 MiB budget, breadth-first, so a match within budget always blocks;
+  32 MiB budget, breadth-first, so a match within budget always blocks
+  (outside parsed pixel data, which the 2026-10-01 zlib amendment
+  exempts from inflation);
   the env-secret name words and value test, identifier-shaped values
   excluded, with must-match and must-not-match tables; the cost of
   base64-heavy files.
@@ -40,6 +42,21 @@ the implementation. The sections below carry the rules.
   gate step.
 - Banner: wording, and placement once at the top of a result, batch
   included.
+
+Amendment (2026-10-01): trusted destinations. A persistent list the
+operator keeps, the inverse of the quarantine, of destinations that skip
+the approval gate for gate cases 1 and 2. Trust never skips the floor
+or case 3, and quarantine wins over it. Added at an approval (`soft`
+only) or with `slack-mcp trust add`; stored beside the quarantine file;
+never listed to the agent. Under Trusted destinations.
+
+Amendment (2026-10-01): zlib. The scanner also inflates every valid
+zlib header at any offset, so text in PDF `FlateDecode` streams and PNG
+`zTXt` and `iTXt` chunks is read. Every gzip or zlib attempt charges
+the input it consumes and the output it produces to the budget, which
+replaces the attempt cap. Pixel data the scanner has parsed in a
+well-formed PNG or PDF is exempt from inflation; nothing else is. Under
+Decoding.
 
 ## Context
 
@@ -91,7 +108,8 @@ quarantine, the scanner, the approval gate. The first two are local and
 make no Slack call, so ADR-012's rule that a bad name or file fails with
 zero Slack calls holds; the quarantine step is the first that may call
 Slack. The scanner runs before the gate, so approval is never a route
-for content the scanner refuses.
+for content the scanner refuses. A trusted destination is checked inside
+the gate step, so trust is never a route past any earlier step either.
 
 ### Layer 2: the scanner
 
@@ -240,21 +258,80 @@ through the full pattern set and the decoders again.
   bytes, including the bytes a glued base64 prefix of four or more
   characters decodes to, is still inflated. An attempt that fails
   (a bad header, a bad checksum, a missing trailer) still has whatever
-  it inflated before failing scanned. Each attempt counts the header
-  bytes it reads, as well as its output, against the budget, and a
-  buffer starts at most 1024 attempts, so a buffer of repeated
-  `1f 8b 08` costs bounded work.
+  it inflated before failing scanned.
+- **Zlib.** Every valid zlib header in a file's bytes or in any decoded
+  output starts an inflate attempt, on the same terms as gzip: glued
+  streams are found, and an attempt that fails (a bad block, a bad
+  Adler-32 checksum, a missing trailer) still has whatever it inflated
+  scanned. A valid header is two bytes `CMF FLG` with compression
+  method 8 (the low four bits of `CMF`), a window field `CINFO` (its
+  high four bits) of at most 7, `FDICT` (bit 5 of `FLG`) clear, and
+  `CMF * 256 + FLG` a multiple of 31. Every window size counts, not only
+  the common `78 01`, `78 5e`, `78 9c`, and `78 da`: libpng writes
+  smaller windows for small text chunks. PDF content and object streams
+  (`FlateDecode`) and PNG `zTXt` and `iTXt` chunks are zlib streams, and
+  the text in them is otherwise opaque.
+
+Every gzip or zlib attempt, successful or failed, charges the budget for
+the input bytes it consumes and the output it produces. There is no
+attempt cap; the budget bounds the work. In random bytes about one
+offset in 2,000 is a valid zlib header: 8 of 256 `CMF` values, and about
+4 of 256 `FLG` values for each. Inflating random bytes fails within a
+few to a few tens of bytes, on an invalid block type, a stored length
+that fails its check, an invalid code, or a distance reaching behind
+the start of the output, so a false header costs tens of bytes of
+budget. A high-entropy file (a zip, an MP4, a JPEG, the compressed
+bytes of a `.tar.gz`) pays a few percent of its size in false attempts.
+Text full of `x^` (`78 5e`) pays the same per occurrence and is
+scanned, not refused.
+
+**Pixel data.** One kind of span is exempt from inflate attempts: pixel
+data the scanner has parsed in a well-formed container. Nothing else is
+exempt. A magic number alone exempts nothing, and JPEG, GIF, WebP, and
+every other format get attempts at every offset, as any buffer does.
+Matching and the base64, hex, and URL decoders read every byte, exempt
+spans included.
+
+- **PNG.** A buffer that starts with the signature `89 50 4e 47 0d 0a
+  1a 0a` is walked chunk by chunk: a 4-byte length that keeps the chunk
+  inside the buffer, a 4-byte type of ASCII letters, the data, and a
+  CRC-32 that verifies. The walk ends at `IEND`. When every chunk up to
+  and including `IEND` passes, the data of each `IDAT` and `fdAT` chunk
+  is exempt. A walk that fails anywhere exempts nothing. Bytes after
+  `IEND` are scanned as any buffer.
+- **PDF.** A buffer with `%PDF-` in its first 1024 bytes is read for
+  streams. A `stream` keyword is a token when it starts a line or
+  follows `>>`, with or without whitespace between, outside a literal
+  string and outside a comment. Its dictionary is the `<<…>>` that ends, with only whitespace
+  after it, at that keyword, found within 4 KiB before it, nesting
+  counted. The stream's data runs from the end of the keyword's line to
+  the next `endstream` token, at a line start or after whitespace. The
+  data is exempt when the dictionary holds `/Subtype /Image` (an image
+  XObject or its soft mask), or a `/Filter`, by name or in an array, of
+  `/DCTDecode`, `/JPXDecode`, `/CCITTFaxDecode`, or `/JBIG2Decode`;
+  whitespace between a name and its value is optional. A stream whose
+  dictionary cannot be read that way, or with no `endstream`, has no
+  exempt span.
+
 
 There is no precedence between decoders. A span more than one decoder
 recognizes (every hex run is also a base64 run) is decoded by each, in a
 fixed order: base64 at alignments 0 to 3, then hex at alignments 0 and
-1, then URL-decoding; gzip occurrences inside each output follow in
-offset order. A match through any of them blocks.
+1, then URL-decoding; gzip and zlib occurrences inside each output
+follow in offset order (a gzip and a zlib header never start at the same
+offset). A match through any of them blocks.
 
 Decoding goes to depth 3: the content as sent is depth 0, and output at
-depth 3 is matched but not decoded again. A budget of 32 MiB of decoded
-output per call covers every field and depth together. It is counted on
-the output as it is produced, so inflation stops at the budget whatever
+depth 3 is matched but not decoded again. A budget of 32 MiB per call
+covers every field and depth together. It counts decoded output, and
+the input each inflate attempt consumes; matching the bytes as sent is
+scan time and is not charged to it. Input consumed is the inflater's
+real position in the stream: the implementation feeds each attempt
+through a reader with no read-ahead (a `bytes.Reader`, which
+`compress/flate` uses as its `io.ByteReader` without wrapping it in a
+`bufio.Reader`), so a false attempt charges the bytes it read, not a
+buffer. The budget is counted as the output is
+produced, so inflation stops at the budget whatever
 the stream claims. The scan runs breadth-first: every field at depth 0
 (the text forms, the file names, each file's bytes, in that order), then
 all of depth 1, and so on, with spans in offset order and decoders in
@@ -279,6 +356,24 @@ enough to decode again. A `.har` also carries the request headers and
 cookies it captured, and blocks on them, correctly. The budget is sized
 for these files: at 8 MiB, under 3 MiB of base64 would already be
 unscannable.
+
+Inflation costs the input and output of every stream inflated. Scan
+time grows with a file's size; the budget grows only with what is
+decoded. A well-formed PNG costs a scan of its bytes, and against the
+budget only its small inflated text chunks and its false headers
+outside the pixel chunks. JPEG, GIF, and WebP compress pixels with
+schemes the scanner does not decode, so they cost a scan of their bytes,
+and against the budget only their false headers, a few percent of their
+size, at any resolution. A PDF's parsed image streams cost scan time
+and nothing against the budget; its other streams cost their inflated
+size: page content, object streams,
+embedded fonts, embedded files, and inline images, which sit inside
+content streams. A TIFF or ICO with deflate-compressed pixels, a PNG
+that fails its walk, and an image stream in a PDF whose dictionary
+cannot be read have their pixels inflated, at width times height times
+bytes per pixel; a 3840x2160 RGBA image inflates to about 31.6 MiB and
+is likely refused as unscannable. A `.tar.gz` is inflated whole and is
+scannable while its contents fit the budget.
 
 No model is in the loop. The patterns are compiled into the binary, and
 the same input gives the same answer. A match on any class is a
@@ -419,9 +514,15 @@ outbound-safety: BLOCKED say to=#general (C0123ABCD) class=private-key location=
 ```
 
 The record the agent cannot suppress through any tool is the quarantine
-file. The log is not that record: on stdio it goes to
-`/tmp/slack-mcp.log`, created at 0666 and shared by every user and
-process on the host. Tightening that mode is issue #118.
+file. The log is the operator's notice, not that record. On stdio it
+goes to `$XDG_STATE_HOME/slack-mcp/slack-mcp.log` (default
+`~/.local/state/slack-mcp/`), in a directory at 0700 and a file at
+0600, or to `SLACK_MCP_LOG_FILE` when the client environment sets it;
+on SSE it goes to stderr, whose privacy depends on the deployment. When
+the stdio log cannot be opened, the server writes one line to stderr
+and discards its log output. Every log output passes through a writer
+that redacts credentials (#118). Before #118 the stdio log was
+`/tmp/slack-mcp.log` at 0666, shared by every user on the host.
 
 Two surfaces carry the state to the agent:
 
@@ -533,7 +634,8 @@ and risky enough that the scanner's silence is not consent:
 3. Lifting a quarantine or the strike lock.
 
 ADR-014's posture decides which cases are gated; everything else relies
-on the scanner.
+on the scanner. A trusted destination (below) skips cases 1 and 2 for
+the cases it is trusted for.
 
 For case 1, the server decides at gate time from data fetched then, not
 from its caches, which a channel's sharing can outrun. The own
@@ -597,9 +699,12 @@ outbound-safety: PENDING p7k2 case=file-move say to=#general (C0123ABCD) files=1
 ```
 
 It names the ID, the gate cases, the destination, and the counts, never
-the text or file names, since the stdio log is readable by every user
-on the host (#118); case 1's content is read through `slack-mcp
-approve`. `slack-mcp approve` with no ID lists every pending request
+the text or file names. The stdio log is a private file (#118), but on
+SSE it is stderr, it is discarded when it cannot be opened, and it
+outlives the request; case 1's content is held only in the pending
+file, which deletes it on expiry, and is read through `slack-mcp
+approve`. The log line is a notice, not the record: `slack-mcp approve`
+lists every pending request whatever happened to the log. `slack-mcp approve` with no ID lists every pending request
 with its age and expiry. The agent's result names the ID and tells it
 to tell the operator. No other channel is added: no desktop
 notification, no outbound message. A desktop notifier would make the
@@ -665,13 +770,189 @@ approve. A state from another call, past its expiry, or from before a
 restart fails verification and counts as no answer; the CLI path
 survives a restart.
 
-Accept lets the call proceed through the rest of the order. Decline
-marks the request denied. No answer, a cancel, or a failed verification
-leaves it pending for the CLI.
+The form offers approve once and deny, and in `soft` also approve and
+trust this destination (Trusted destinations). The request state binds
+which choices were offered. Approve once lets the call proceed through
+the rest of the order. Approve and trust does the same and appends a
+trust entry. Deny marks the request denied. No answer, a cancel, a
+choice the form did not offer, or a failed verification leaves it
+pending for the CLI.
 
 Elicitation is not relied on alone. Client support is uneven, a host may
 answer for the user or let the model answer, and nothing requires a
 client to answer at all. MCP sampling is not used as a guard.
+
+### Trusted destinations
+
+An operator who approves every send to the same Slack Connect partner,
+or every file moved into the same team channel, stops reading the
+requests. Trusted destinations are a persistent list the operator keeps
+of destinations that skip the approval gate. They are the inverse of
+the quarantine: a quarantine closes a destination to the agent's
+writes, and trust opens one past the gate.
+
+#### What trust skips
+
+Trust skips the approval gate only, per destination and per gate case:
+
+- **Case 1** (external destination): a call to a destination trusted
+  for case 1 issues no pending request for case 1.
+- **Case 2** (cross-conversation file move): a call attaching a moved
+  file to a destination trusted for case 2 issues no pending request for
+  case 2. The destination is the receiving conversation; where the file
+  came from does not matter. In `soft` case 2 is not gated, so a case 2
+  entry takes effect only in `strict`.
+
+A call that hits both cases is let through only when the destination is
+trusted for both; otherwise it issues a pending request for the cases
+not trusted.
+
+Trust never skips the floor. Every send to a trusted destination runs
+the full order: the strike lock, ADR-012's name and file checks, the
+quarantine, and the scanner, before the gate step where trust is
+consulted. Trust never applies to case 3: lifting a quarantine or the
+lock stays CLI-only.
+
+Quarantine wins over trust. A block on a trusted destination
+quarantines it as any block would under the posture, and a quarantined
+destination refuses `say` and `mark-read` whatever the trust list says.
+The trust entry stays recorded and has no effect while the quarantine
+holds; when the operator clears the quarantine, it applies again, and
+`slack-mcp quarantine clear` says so when it clears a trusted
+destination. The strike lock refuses every write, trusted or not. A block on a
+trusted external destination posts no notice, as on any external
+destination.
+
+#### What is trusted
+
+Entries key on IDs: a person by user ID, anything else by conversation
+ID.
+
+- **A person** (`@handle`): their DM. A group DM is covered for a case
+  when every member other than the account is trusted for that case,
+  and, for case 1 only, when every such member is trusted or internal.
+  Internal stands in for trust in case 1 alone, because being internal
+  is what case 1 tests; it says nothing about where a moved file came
+  from.
+- **A conversation** (`#channel`, a group DM's `#mpdm-…` name, or a
+  conversation ID): that conversation only. For case 1 the entry
+  records the external parties the gate finds when it is added, and at
+  gate time trust applies only when every external party the gate finds
+  is among those recorded. A channel shared with a new organization
+  after it was trusted is gated again.
+  - A channel's parties are the team IDs in `conversations.info`'s
+    `shared_team_ids`, `connected_team_ids`, and `pending_shared`
+    (slack-go's `SharedTeamIDs`, `ConnectedTeamIDs`, `PendingShared`),
+    less the own team and, when the own `enterprise_id` is non-empty,
+    the Grid siblings the channel lists in `internal_team_ids`. A
+    pending share counts as a party.
+  - A group DM's parties are its external members, from
+    `conversations.members`; a DM's is its other member.
+  - When the gate cannot enumerate the parties (a failed fetch, or an
+    external flag with no party left after the subtraction), the entry
+    does not apply and the call is gated.
+
+The self-DM is never external, so it needs no case 1 entry.
+
+#### Adding trust
+
+At an approval, the choices are approve once, approve and trust this
+destination, and deny.
+
+- **Elicitation**: approve and trust is offered only in `soft`, the
+  attended posture. In `strict` the form offers approve once and deny,
+  and trust is added only through the CLI. The entry covers the cases of
+  the request answered and has no expiry. It is keyed as the
+  destination was named: `@person` by user ID, a channel by
+  conversation ID, a group DM by conversation ID with its external
+  members recorded as its parties. A server in `strict` ignores entries added by
+  elicitation, so an entry a `soft` session added does not carry into a
+  `strict` deployment on the same data directory. An ignored entry
+  replaces nothing: in `strict`, an earlier CLI entry for the same key
+  stays in effect.
+- **CLI**: `slack-mcp trust add <destination> [--case
+  external|cross-conversation|all] [--for <duration>]`, where
+  `<destination>` is `@handle`, `#channel`, or a conversation ID, and
+  `--case` defaults to `all`. Like `approve`, `deny`, and `quarantine
+  clear`, it requires an interactive terminal on stdin, shows the
+  destination's resolved name, kind, and external parties, and asks the
+  operator to type the destination back. `--for` takes a duration such
+  as `12h` or `30d`; without it the entry has no expiry. It works in
+  both postures.
+- `slack-mcp approve <id>` approves once. Trust from the CLI is always a
+  separate `trust add`.
+
+A later add for the same key replaces the earlier one's cases and
+expiry, so an add can narrow trust as well as widen it. An add approves
+nothing already pending: requests issued before it still need `approve`
+or `deny`, and the next call to the destination passes the gate by
+trust.
+
+`slack-mcp trust remove <destination>` ends every case for that key. It
+needs no terminal and no typed confirmation: removal only reduces
+privilege, and an agent that runs it only puts its own sends back
+behind the gate. It works in both postures.
+
+`slack-mcp trust list` shows each entry with the destination's current
+name, resolved at list time with the configured tokens (else the name
+recorded at add time, marked as such), its ID and kind, its cases, when
+and how it was added, its expiry, and its state: in effect, expired,
+quarantined, or ignored in `strict`. The CLI takes the posture from
+`SLACK_MCP_SAFETY` in its own environment, default `strict`, prints the
+posture it assumed, and labels entries by it.
+
+#### The trust file
+
+Trust state is an append-only JSON-lines file per workspace, keyed by
+team ID, beside the quarantine file in the data directory at mode 0600.
+Each entry records:
+
+- when, and the kind: an add, a removal, or a use;
+- the key (user ID or conversation ID), its kind, and the name it had
+  then;
+- for an add, the cases, how it was added (`cli` or `elicitation`, with
+  the posture and the pending ID it answered), the expiry if any, and
+  for a conversation's case 1 the external parties recorded;
+- for a use, the destination's ID and the cases trust let through, and
+  nothing of the content. Use entries are a history; they change no
+  trust state.
+
+Writing follows the quarantine file's rule: an advisory lock, a newline
+first if the last byte is not one, the entry in one write.
+
+Reading follows the quarantine file's rules too. The server reads it on
+every gated call, with the same size, modification time, and identity
+check, reading on from its last offset or from 0 when the file shrank,
+was replaced, or was modified in place. An unterminated final line is
+ignored; a complete line that does not parse is skipped and named in the
+log and in `trust list`. A missing file is empty: nothing is trusted,
+which fails safe. A file that exists but cannot be read is also treated
+as nothing trusted, named in the log and in `trust list`; unlike the
+quarantine file, it engages no lock, since an unreadable trust list can
+only gate more.
+
+#### What the agent sees
+
+Trusted destinations are not listed to the agent: not in the server
+instructions, the banner, a tool description, or any result. A send
+that trust let through returns the same result as a send no case gated.
+The agent can still infer trust: a send it can tell is external that
+passes without a pending request was trusted. Not listing the
+destinations keeps that knowledge to what the agent has already sent;
+a list of the external destinations that skip the gate would be a list
+of where an attacker would ask the agent to send.
+
+The operator sees each send trust let through in a log line, private
+on stdio and subject to the same limits as the `PENDING` line:
+
+```
+outbound-safety: TRUSTED say to=#partner-acme (C0456EFGH) case=external entry=cli
+```
+
+Like the `PENDING` line it names the destination and case, never the
+text or file names. Each such send also appends a `used` entry to the
+trust file, so a trusted send leaves a record that does not depend on
+the log.
 
 ## Consequences
 
@@ -679,12 +960,16 @@ client to answer at all. MCP sampling is not used as a guard.
 
 - A secret in a recognized format cannot reach Slack through any `say`,
   however the agent was persuaded to send it, and an encoding the
-  decoders know does not hide it.
+  decoders know does not hide it outside parsed pixel data. The scanner
+  is a net, not a boundary against deliberate evasion (Exempt pixel
+  data, under Risks).
 - Escalation is bounded: a few blocks lock all writes until the
   operator acts.
 - Every block leaves a record in the quarantine file that no tool can
   remove.
 - No new tool; the surface stays at nine.
+- A destination the operator has vetted stops costing an approval on
+  every send, without loosening the scanner or the quarantine there.
 
 ### Negative
 
@@ -696,21 +981,37 @@ client to answer at all. MCP sampling is not used as a guard.
   enough matches and the strike lock engages. ADR-014's soft posture
   raises the count, and the clear path ends the freeze.
 - A large compressed upload can exhaust the decode budget and be refused
-  as unscannable.
+  as unscannable: a gzip whose contents pass the budget, a PDF whose
+  non-image streams do, or a TIFF, ICO, or malformed PNG whose pixels
+  are deflate-compressed. A well-formed PNG, a PDF's parsed image
+  streams, and JPEG, GIF, and WebP files cost scan time in proportion to
+  their size and little of the budget, whatever their resolution.
 - The notice tells a requester their request was caught.
 - Gated calls wait on the operator, and the operator learns of them
   only from the log or `slack-mcp approve`. Unattended, they wait up to
   24 hours and then expire.
+- A trusted external destination receives whatever passes the scanner
+  without a person reading it first. Text copied from a private
+  conversation to a trusted partner is stopped only by the scanner.
 
 ### Risks and limits
 
 - **Encodings the decoders miss.** A determined agent can still get a
   secret past layer 2: an encoding the scanner does not decode, a
-  secret split across calls, a format no pattern names, or a zip
-  container, Office documents included, which the scanner does not
-  open, or a zlib or raw deflate stream, which the scanner does not
-  inflate. The layers raise the cost; they do not make exfiltration
+  secret split across calls, a format no pattern names, a zip
+  container (`.zip`, `.docx`, `.xlsx`, `.pptx`, and other Office
+  documents), which the scanner does not open, a raw deflate stream
+  with no zlib or gzip header, which it does not inflate, text drawn in
+  an image, which it does not OCR, or text a PDF draws through a font
+  with a custom encoding, which inflates to glyph codes rather than
+  characters. The layers raise the cost; they do not make exfiltration
   impossible.
+- **Exempt pixel data.** A secret deliberately compressed into the
+  pixel chunks of a well-formed PNG, or into a PDF stream whose
+  dictionary marks it as an image, is not found: the scanner parsed
+  that span as pixel data and does not inflate it. The scanner is a net
+  for content sent without intent to evade, not a boundary against an
+  agent that sets out to evade it.
 - **Provenance is by hash.** A one-byte edit with the client's file
   tools gives a downloaded file a new hash and no record, and case 2
   no longer applies to it. This is accepted: case 2 is a speed bump for
@@ -729,13 +1030,18 @@ client to answer at all. MCP sampling is not used as a guard.
   `SLACK_MCP_SERVER_CA_INSECURE`, which routes token-bearing requests
   through an unverified proxy; ADR-014's `.env` allowlist closes the
   `.env` path to those settings.
-- **The server's own state.** The quarantine, pending, and provenance
-  files are in the data directory, and the `slack-mcp` binary is on the
+- **The server's own state.** The quarantine, pending, provenance, and
+  trust files are in the data directory, and the `slack-mcp` binary is on the
   path. An agent with unrestricted file or shell access can edit or
   delete the files, which a running server now honors, or drive the CLI
   through a pseudo-terminal. The client's permissions should deny the
   agent writes to the data directory and execution of `slack-mcp`
-  subcommands.
+  subcommands. A forged trust entry skips the approval gate only; the
+  scanner and the quarantine still run.
+- **Trust added by elicitation.** In `soft` a host that lets the model
+  answer elicitation lets the agent add trust. `soft` is the attended
+  posture, and `strict` both refuses to offer trust by elicitation and
+  ignores entries added that way.
 - **The server instructions are static.** They are built once at
   startup and read by the client when it connects, so a quarantine set
   later, or a workspace loaded by `auth` mid-session, reaches the agent
@@ -750,8 +1056,11 @@ client to answer at all. MCP sampling is not used as a guard.
 Removing the layers is not local to `say`. `download` would stop
 recording provenance, the read nouns would drop the banner, `mark-read`
 would drop its quarantine checks, and the CLI subcommands would go.
-Removing them gives back the four routes in Context. The quarantine file
-outlives a removal; restoring the layers restores its state.
+Removing the layers gives back the four routes in Context. The
+quarantine file outlives a removal; restoring the layers restores its
+state. Removing trusted destinations alone puts every gated call back
+behind the gate, the fail-safe direction; the trust file is then
+unread.
 
 ## Alternatives Considered
 
@@ -797,6 +1106,25 @@ outlives a removal; restoring the layers restores its state.
   added by a code change.
 - **Failing closed on any unparseable line.** One torn write from a
   crash would lock every write until someone edited the file by hand.
+- **Trust that skips the scanner.** The scanner is the floor every
+  posture keeps. A trusted destination is where an attacker who knows
+  the list would route a secret, and the scanner is what stops it there.
+- **Trust added by elicitation in `strict`.** A host may let the model
+  answer an elicitation, and `strict` is the posture with no one
+  attending. Trust there would let the agent under attack open a
+  destination for every later call. Elicitation in `strict` approves one
+  send.
+- **An allowlist that replaces the gate.** Sending only to listed
+  destinations, or gating only unlisted ones with no per-case scope,
+  either turns every new external conversation into a configuration
+  change or lets a listed channel's later sharing, or a file from any
+  conversation, through unasked. Trust is per destination, per case, and
+  bound to the external parties recorded when it was added.
+- **Listing trusted destinations to the agent.** It would tell the agent,
+  and anyone steering it, which external destinations skip the gate.
+- **Typed confirmation for `trust remove`.** Removal only reduces
+  privilege; friction on it would only slow an operator closing a
+  destination in a hurry.
 
 ## Related
 

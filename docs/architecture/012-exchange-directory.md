@@ -369,7 +369,9 @@ client's job, as above. The operator may revisit this.
   `say files=` to a public one. This ADR bounds where files live, not
   where they go. ADR-013 decides where they go: a secret scan on every
   `say`, quarantine of the destination on a match, and operator approval
-  for a file that moves between conversations.
+  for a file that moves between conversations in `strict`, unless the
+  destination is trusted for cross-conversation moves; in `soft` a move
+  is a warning.
 - Some filesystems report a link count of 1 for every file, which
   disables the hard-link rule on them.
 - On Windows the override guard is only the refusal list. It misses

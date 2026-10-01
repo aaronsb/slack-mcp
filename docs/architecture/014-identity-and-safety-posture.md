@@ -10,6 +10,9 @@ its rule: declared in the MCP client config, never detected. Limits
 `.env` to an allowlist of settings with no security effect. Lands with
 ADR-013.
 
+Amended 2026-10-01: the posture table carries how each posture adds
+ADR-013's trusted destinations.
+
 ## Context
 
 Everything this server posts is attributed to the account whose session
@@ -136,6 +139,7 @@ gets a notice.
 | Gated: external destination | yes | yes |
 | Gated: cross-conversation file move | yes | no; a warning in the result |
 | Gated: lifting a quarantine or the lock | yes | yes |
+| Trusted destinations added by | `slack-mcp trust add` only; elicitation approves once, and entries added by elicitation are ignored | `slack-mcp trust add`, or approve and trust at an elicitation |
 
 Every block counts a strike in both postures. A soft first block is
 recorded as a block entry marked `posture=soft, quarantined=false`, so
