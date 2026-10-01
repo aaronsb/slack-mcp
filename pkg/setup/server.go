@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -53,9 +52,8 @@ type setupResult struct {
 // CallbackServer is a non-blocking localhost HTTP server that receives tokens
 // from browser snippets, Firefox extensions, or the manual setup page.
 type CallbackServer struct {
-	server   *http.Server
-	listener net.Listener
-	port     int
+	local *LocalServer
+	port  int
 
 	mu        sync.Mutex
 	result    *TokenResult
@@ -68,9 +66,8 @@ type CallbackServer struct {
 // Call Start() to begin serving.
 func NewCallbackServer(listener net.Listener, port int) *CallbackServer {
 	cs := &CallbackServer{
-		listener: listener,
-		port:     port,
-		done:     make(chan struct{}),
+		port: port,
+		done: make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
@@ -101,7 +98,7 @@ func NewCallbackServer(listener net.Listener, port int) *CallbackServer {
 		}
 	})
 
-	cs.server = &http.Server{Handler: mux}
+	cs.local = NewLocalServer(listener, port, mux)
 	return cs
 }
 
@@ -205,13 +202,7 @@ func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request)
 }
 
 // Start begins serving in the background. Non-blocking.
-func (cs *CallbackServer) Start() {
-	go func() {
-		if err := cs.server.Serve(cs.listener); err != nil && err != http.ErrServerClosed {
-			log.Printf("Callback server error: %v", err)
-		}
-	}()
-}
+func (cs *CallbackServer) Start() { cs.local.Start() }
 
 // Port returns the port the server is listening on
 func (cs *CallbackServer) Port() int {
@@ -231,11 +222,7 @@ func (cs *CallbackServer) Done() <-chan struct{} {
 }
 
 // Stop shuts down the callback server
-func (cs *CallbackServer) Stop() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cs.server.Shutdown(ctx)
-}
+func (cs *CallbackServer) Stop() { cs.local.Stop() }
 
 // RunSetup starts the local HTTP server for token extraction (CLI entry point)
 func RunSetup() error {
