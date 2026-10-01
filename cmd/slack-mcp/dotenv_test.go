@@ -71,6 +71,20 @@ func TestLoadDotEnvRefusesDisallowedKey(t *testing.T) {
 	}
 }
 
+// The log path decides where credentials-adjacent output lands, so only the
+// client environment may move it; .env may not.
+func TestLoadDotEnvRefusesLogFile(t *testing.T) {
+	env := fakeEnv{}
+	path := writeDotEnv(t, "SLACK_MCP_LOG_FILE=/tmp/shared.log\n")
+	err := loadDotEnv(path, env.lookup, env.setenv)
+	if err == nil || !strings.Contains(err.Error(), "SLACK_MCP_LOG_FILE") {
+		t.Fatalf("got %v, want an error naming SLACK_MCP_LOG_FILE", err)
+	}
+	if _, set := env["SLACK_MCP_LOG_FILE"]; set {
+		t.Fatal("refused load still set SLACK_MCP_LOG_FILE")
+	}
+}
+
 func TestLoadDotEnvIgnoresDisallowedKeyAlreadySet(t *testing.T) {
 	env := fakeEnv{"SLACK_MCP_XOXC_TOKEN": "client"}
 	path := writeDotEnv(t, "SLACK_MCP_XOXC_TOKEN=dotenv\n")

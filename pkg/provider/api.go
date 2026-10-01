@@ -180,6 +180,10 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
+			// The result is used for its URL only and is never logged: it
+			// carries the HTTP response headers, and Slack's Set-Cookie
+			// holds a live session cookie. captureIdentity logs who
+			// authenticated, by named field.
 			res, err := api.AuthTestContext(ctx)
 			if err != nil {
 				log.Printf("ERROR: Slack authentication failed: %v", err)
@@ -187,14 +191,10 @@ func NewWithTokens(token, cookie string, opts ...Option) *ApiProvider {
 				return api
 			}
 
-			log.Printf("Authenticated as: %s\n", res)
-
-			api = slack.New(token,
+			return slack.New(token,
 				withHTTPClientOption(cookie),
 				withTeamEndpointOption(res.URL),
 			)
-
-			return api
 		},
 		internalClient:      internal,
 		users:               make(map[string]slack.User),
@@ -265,6 +265,8 @@ func (ap *ApiProvider) captureIdentity() {
 	ap.selfUser = res.User
 	ap.selfTeam = res.Team
 	ap.selfTeamID = res.TeamID
+	// Named fields only; see boot on why the response is never logged whole.
+	log.Printf("Authenticated: team=%s user=%s", res.Team, res.User)
 }
 
 func (ap *ApiProvider) bootstrapDependencies(ctx context.Context) error {
