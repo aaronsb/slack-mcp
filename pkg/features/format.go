@@ -387,7 +387,7 @@ func formatMentions(result *FeatureResult) string {
 			tag = " [?]"
 		}
 
-		b.WriteString(fmt.Sprintf("#%s | %s | %s%s%s\n  %s\n\n", channel, author, ts, tag, responded, text))
+		b.WriteString(fmt.Sprintf("%s | %s | %s%s%s\n  %s\n\n", channel, author, ts, tag, responded, text))
 	}
 
 	b.WriteString(footer(result))

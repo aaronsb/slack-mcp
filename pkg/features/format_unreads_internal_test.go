@@ -36,3 +36,18 @@ func TestUnreadsShowNewestDMsAndLabeledConversations(t *testing.T) {
 		}
 	}
 }
+
+// Mention rows carry their own label, so a group DM is never shown as
+// "#group: …" or by Slack's mpdm-… wire name.
+func TestMentionsRenderTheConversationLabel(t *testing.T) {
+	res := &FeatureResult{Success: true, Data: map[string]interface{}{
+		"mentions": []map[string]interface{}{
+			{"channel": "group: alice, bockeliea", "author": "Alice", "message": "hi", "timestamp": "now"},
+			{"channel": "#eng", "author": "Bo", "message": "yo", "timestamp": "now"},
+		},
+	}}
+	out := formatMentions(res)
+	if !strings.Contains(out, "group: alice, bockeliea | Alice") || !strings.Contains(out, "#eng | Bo") || strings.Contains(out, "##eng") || strings.Contains(out, "#group") {
+		t.Errorf("mention labels wrong:\n%s", out)
+	}
+}

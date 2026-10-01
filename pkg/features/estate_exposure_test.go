@@ -283,3 +283,18 @@ func TestChannelSearchHonorsAnExplicitFilter(t *testing.T) {
 		t.Errorf("search=deploy without a filter listed %v, want both channels", got)
 	}
 }
+
+// The channel listing names a group DM by its people.
+func TestChannelListingNamesAGroupDMByItsPeople(t *testing.T) {
+	srv := slacktest.New(t)
+	var mpim slack.Channel
+	mpim.ID, mpim.Name, mpim.IsMpIM, mpim.IsMember = "G7", "mpdm-alice--bockeliea-1", true, true
+	srv.SeedChannels(mpim)
+	ap := bootedProvider(t, srv)
+
+	res := listChannels(t, ap, map[string]any{"filter": "group-dm"})
+	channels := dataOf(t, res)["channels"].([]map[string]interface{})
+	if len(channels) != 1 || channels[0]["displayName"] != "group: alice, bockeliea" {
+		t.Errorf("group DM listed as %+v", channels)
+	}
+}

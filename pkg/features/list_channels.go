@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 )
 
 // ListChannels provides channel listing with smart caching
@@ -198,7 +199,7 @@ func listChannelsHandler(ctx context.Context, params map[string]interface{}) (*F
 			}
 		} else if ch.IsMpIM {
 			channelType = "group-dm"
-			displayName = fmt.Sprintf("Group: %s", ch.Name)
+			displayName = text.GroupDMName(ch.Name, nil)
 		} else if ch.IsPrivate {
 			channelType = "private"
 			displayName = fmt.Sprintf("🔒#%s", ch.Name)

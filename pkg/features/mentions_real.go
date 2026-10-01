@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
+	"github.com/aaronsb/slack-mcp/pkg/text"
 	"github.com/slack-go/slack"
 	"strings"
 )
@@ -139,10 +140,10 @@ func checkMentionsReal(ctx context.Context, params map[string]interface{}) (*Fea
 				continue
 			}
 
-			// Get channel name
-			channelName := channel.Name
-			if channelName == "" {
-				channelName = channel.ID
+			// Name the conversation, never by its ID.
+			channelName := "a conversation"
+			if channel.Name != "" {
+				channelName = text.ChannelLabel(channel.Name, channel.IsMpIM)
 			}
 			channelSet[channelName] = true
 
