@@ -390,3 +390,36 @@ func TestMissingMessageSaysSoWithoutANilError(t *testing.T) {
 		t.Errorf("message describes the request rather than the result: %q", res.Message)
 	}
 }
+
+// A bare channel ID reads like it does in say and since=, cached or not,
+// rather than being fuzzy-matched against names and missing.
+func TestReadTakesABareChannelID(t *testing.T) {
+	for _, tc := range []struct{ id, where string }{
+		{"C0SMOKE1TEST", "#smoke-test"},
+		{"C0NOTCACHED9", "C0NOTCACHED9"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			srv := slacktest.New(t)
+			srv.SeedChannels(channel("C0SMOKE1TEST", "smoke-test"))
+			var asked string
+			srv.Handle("conversations.history", func(r *http.Request) any {
+				asked = r.FormValue("channel")
+				return map[string]any{
+					"ok": true, "has_more": false,
+					"messages": []any{slacktest.Message("U2", "posted", "1782246118.543969")},
+				}
+			})
+
+			res := read(t, srv, map[string]any{"handle": tc.id})
+			if !res.Success {
+				t.Fatalf("read %s failed: %s", tc.id, res.Message)
+			}
+			if asked != tc.id {
+				t.Errorf("history asked for %q, want %q", asked, tc.id)
+			}
+			if got := res.Data.(map[string]any)["where"]; got != tc.where {
+				t.Errorf("where = %v, want %v", got, tc.where)
+			}
+		})
+	}
+}
