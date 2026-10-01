@@ -304,9 +304,23 @@ func FindPort() (int, net.Listener, error) {
 
 // ValidateTokens checks tokens against Slack's auth.test API
 func ValidateTokens(xoxc, xoxd string) (team, user, userID string, err error) {
+	a, err := AuthTest(xoxc, xoxd)
+	return a.Team, a.User, a.UserID, err
+}
+
+// Account is what auth.test reports about the tokens' account.
+type Account struct {
+	Team, User, UserID string
+	// TeamID keys the workspace's state (estate ledger, safety files);
+	// EnterpriseID is the Enterprise Grid organization, empty outside Grid.
+	TeamID, EnterpriseID string
+}
+
+// AuthTest runs auth.test with the tokens and returns the account.
+func AuthTest(xoxc, xoxd string) (Account, error) {
 	req, err := http.NewRequest("POST", "https://slack.com/api/auth.test", nil)
 	if err != nil {
-		return "", "", "", err
+		return Account{}, err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+xoxc)
@@ -315,32 +329,37 @@ func ValidateTokens(xoxc, xoxd string) (team, user, userID string, err error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "", "", fmt.Errorf("network error: %w", err)
+		return Account{}, fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", "", "", fmt.Errorf("failed to read response: %w", err)
+		return Account{}, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var authResult struct {
-		OK     bool   `json:"ok"`
-		Error  string `json:"error"`
-		Team   string `json:"team"`
-		User   string `json:"user"`
-		UserID string `json:"user_id"`
+		OK           bool   `json:"ok"`
+		Error        string `json:"error"`
+		Team         string `json:"team"`
+		User         string `json:"user"`
+		UserID       string `json:"user_id"`
+		TeamID       string `json:"team_id"`
+		EnterpriseID string `json:"enterprise_id"`
 	}
 
 	if err := json.Unmarshal(body, &authResult); err != nil {
-		return "", "", "", fmt.Errorf("invalid response: %w", err)
+		return Account{}, fmt.Errorf("invalid response: %w", err)
 	}
 
 	if !authResult.OK {
-		return "", "", "", fmt.Errorf("Slack API error: %s", authResult.Error)
+		return Account{}, fmt.Errorf("Slack API error: %s", authResult.Error)
 	}
 
-	return authResult.Team, authResult.User, authResult.UserID, nil
+	return Account{
+		Team: authResult.Team, User: authResult.User, UserID: authResult.UserID,
+		TeamID: authResult.TeamID, EnterpriseID: authResult.EnterpriseID,
+	}, nil
 }
 
 // NoBrowserEnv suppresses browser launching when set to any non-empty value.

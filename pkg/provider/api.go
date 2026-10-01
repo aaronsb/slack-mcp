@@ -59,6 +59,9 @@ type ApiProvider struct {
 	selfUser   string
 	selfTeam   string
 	selfTeamID string
+	// selfEnterpriseID is the Enterprise Grid organization, or empty
+	// outside Grid (ADR-013, gate case 1).
+	selfEnterpriseID string
 
 	// Cache persistence
 	store *cache.Store
@@ -276,6 +279,7 @@ func (ap *ApiProvider) captureIdentity() {
 	ap.selfUser = res.User
 	ap.selfTeam = res.Team
 	ap.selfTeamID = res.TeamID
+	ap.selfEnterpriseID = res.EnterpriseID
 	// Named fields only; see boot on why the response is never logged whole.
 	log.Printf("Authenticated: team=%s user=%s", res.Team, res.User)
 }
@@ -927,7 +931,7 @@ func (ap *ApiProvider) fetchAndCacheChannel(ctx context.Context, channelID strin
 		return nil, err
 	}
 
-	info, err := client.GetConversationInfo(&slack.GetConversationInfoInput{
+	info, err := client.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
 		ChannelID: channelID,
 	})
 	if err != nil {
@@ -1232,4 +1236,49 @@ func (ap *ApiProvider) CheckUploadURL(raw string) error {
 		return fmt.Errorf("refusing upload address: %w", err)
 	}
 	return nil
+}
+
+// Organization returns the account's team ID, Enterprise Grid ID (empty
+// outside Grid), and own user ID, as auth.test reported them at boot. All
+// three are empty until the provider has booted.
+func (ap *ApiProvider) Organization() (teamID, enterpriseID, userID string) {
+	return ap.selfTeamID, ap.selfEnterpriseID, ap.selfUserID
+}
+
+// FetchConversationInfo calls conversations.info for id, whatever the
+// cache holds, and patches the cache with the answer: the outbound-safety
+// gate decides from data fetched at gate time (ADR-013).
+func (ap *ApiProvider) FetchConversationInfo(ctx context.Context, id string) (*slack.Channel, error) {
+	return ap.fetchAndCacheChannel(ctx, id)
+}
+
+// FetchUserInfo calls users.info for id, whatever the cache holds.
+func (ap *ApiProvider) FetchUserInfo(ctx context.Context, id string) (*slack.User, error) {
+	client, err := ap.Provide()
+	if err != nil {
+		return nil, err
+	}
+	return client.GetUserInfoContext(ctx, id)
+}
+
+// ConversationMembers returns every member of a conversation, all pages,
+// from conversations.members.
+func (ap *ApiProvider) ConversationMembers(ctx context.Context, id string) ([]string, error) {
+	client, err := ap.Provide()
+	if err != nil {
+		return nil, err
+	}
+	var all []string
+	cursor := ""
+	for {
+		ids, next, err := client.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{ChannelID: id, Cursor: cursor, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, ids...)
+		if next == "" {
+			return all, nil
+		}
+		cursor = next
+	}
 }
