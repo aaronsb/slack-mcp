@@ -37,14 +37,18 @@ type uploadFake struct {
 	mu         sync.Mutex
 	urlForms   []url.Values
 	uploads    map[string][]byte // file ID -> bytes received
-	completion url.Values
+	completion url.Values        // the last completion form
+	// completions is every completion form, in order.
+	completions []url.Values
 
 	// uploadURL builds the upload_url returned for a file ID.
 	uploadURL func(id string) string
 	// uploadResp, when set for a file ID, replaces the upload response.
 	uploadResp map[string]slacktest.Response
-	// completeResp, when set, replaces the completion response.
-	completeResp any
+	// completeResp, when set, replaces the completion response;
+	// completeQueue, while non-empty, answers first, one response per call.
+	completeResp  any
+	completeQueue []any
 	// shareConv/sharePrivate/shareTS describe the share files.info reports;
 	// an empty shareTS reports none.
 	shareConv    string
@@ -112,7 +116,11 @@ func newUploadFake(t *testing.T, seed ...slack.Channel) (*uploadFake, *provider.
 		_ = r.ParseForm()
 		f.mu.Lock()
 		f.completion = r.PostForm
+		f.completions = append(f.completions, r.PostForm)
 		resp := f.completeResp
+		if len(f.completeQueue) > 0 {
+			resp, f.completeQueue = f.completeQueue[0], f.completeQueue[1:]
+		}
 		f.mu.Unlock()
 		if resp != nil {
 			return resp
@@ -198,8 +206,11 @@ func TestSayFilesOneFileWithTextSharesOneMessage(t *testing.T) {
 	if c.Get("channel_id") != "C1" {
 		t.Fatalf("completion channel_id = %q", c.Get("channel_id"))
 	}
-	if c.Get("initial_comment") != "Revised *PDF* attached" {
-		t.Fatalf("initial_comment not normalized: %q", c.Get("initial_comment"))
+	if _, ok := c["initial_comment"]; ok {
+		t.Fatalf("a comment that went as blocks also sent initial_comment %q, which makes Slack ignore the blocks", c.Get("initial_comment"))
+	}
+	if got := completionBlocks(t, c); !strings.Contains(got, `"text":"PDF","style":{"bold":true}`) {
+		t.Fatalf("comment block lacks the bold run:\n%s", got)
 	}
 	if !strings.Contains(c.Get("files"), `"id":"F1"`) {
 		t.Fatalf("completion files = %q", c.Get("files"))
@@ -223,6 +234,79 @@ func TestSayFilesOneFileWithTextSharesOneMessage(t *testing.T) {
 	if f.srv.Calls("conversations.mark") != 0 {
 		t.Fatalf("upload fired a read receipt")
 	}
+}
+
+// completionBlocks returns the blocks form value of a completion, failing
+// unless it is one rich_text block.
+func completionBlocks(t *testing.T, c url.Values) string {
+	t.Helper()
+	raw := c.Get("blocks")
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(raw), &blocks); err != nil || len(blocks) != 1 || blocks[0]["type"] != "rich_text" {
+		t.Fatalf("completion blocks = %q (%v), want one rich_text block", raw, err)
+	}
+	return raw
+}
+
+// A list in the comment arrives as a rich_text_list, as the composer sends
+// it, not as dash lines in mrkdwn, which has no list syntax.
+func TestSayFilesCommentListGoesAsRichTextList(t *testing.T) {
+	f, ap := newUploadFake(t)
+	putExchange(t, "card.png", []byte("png-bytes"))
+
+	out := runTool(t, features.Say, ap, map[string]any{
+		"to": "#eng", "files": []any{"card.png"},
+		"text": "**What changed**\n- one\n- two",
+	})
+	if n := f.srv.Calls("files.completeUploadExternal"); n != 1 {
+		t.Fatalf("completions = %d, want 1\n%s", n, out)
+	}
+	got := completionBlocks(t, f.completion)
+	if !strings.Contains(got, `"type":"rich_text_list"`) || !strings.Contains(got, `"style":"bullet"`) {
+		t.Fatalf("comment list did not become a bullet rich_text_list:\n%s", got)
+	}
+	mustContain(t, out, "Shared 1 file to #eng with your comment:")
+	if strings.Contains(out, "mrkdwn text") {
+		t.Fatalf("reported a fallback that did not happen:\n%s", out)
+	}
+}
+
+// A comment block Slack refuses at validation shared nothing, so the
+// completion is retried exactly once with the mrkdwn comment, and the
+// result says the lists may be plain lines.
+func TestSayFilesRejectedCommentBlockRetriesOnceAsMrkdwn(t *testing.T) {
+	f, ap := newUploadFake(t)
+	f.completeQueue = []any{map[string]any{"ok": false, "error": "invalid_blocks"}}
+	putExchange(t, "a.txt", []byte("a"))
+
+	out := runTool(t, features.Say, ap, map[string]any{
+		"to": "#eng", "files": []any{"a.txt"}, "text": "Revised **PDF** attached",
+	})
+	if n := f.srv.Calls("files.completeUploadExternal"); n != 2 {
+		t.Fatalf("completions = %d, want 2 (blocks, then mrkdwn)\n%s", n, out)
+	}
+	first, second := f.completions[0], f.completions[1]
+	completionBlocks(t, first)
+	if second.Get("blocks") != "" {
+		t.Fatalf("retry sent blocks again: %q", second.Get("blocks"))
+	}
+	if second.Get("initial_comment") != "Revised *PDF* attached" {
+		t.Fatalf("retry initial_comment not normalized mrkdwn: %q", second.Get("initial_comment"))
+	}
+	mustContain(t, out, "Shared 1 file to #eng with your comment:", "Comment posted as mrkdwn text")
+}
+
+// Any refusal other than the blocks themselves is not retried.
+func TestSayFilesCommentRefusedOtherwiseIsNotRetried(t *testing.T) {
+	f, ap := newUploadFake(t)
+	f.completeResp = map[string]any{"ok": false, "error": "not_in_channel"}
+	putExchange(t, "a.txt", []byte("a"))
+
+	out := runTool(t, features.Say, ap, map[string]any{"to": "#eng", "files": []any{"a.txt"}, "text": "hi"})
+	if n := f.srv.Calls("files.completeUploadExternal"); n != 1 {
+		t.Fatalf("completions = %d, want 1\n%s", n, out)
+	}
+	mustContain(t, out, "Slack refused to share them", "not_in_channel")
 }
 
 func TestSayFilesTwoFilesCompleteOnce(t *testing.T) {
@@ -252,6 +336,9 @@ func TestSayFilesTwoFilesCompleteOnce(t *testing.T) {
 	}
 	if _, ok := f.completion["initial_comment"]; ok {
 		t.Fatalf("files alone sent an initial_comment: %v", f.completion)
+	}
+	if _, ok := f.completion["blocks"]; ok {
+		t.Fatalf("files alone sent blocks: %v", f.completion)
 	}
 	mustContain(t, out, "Shared 2 files to #eng:", "fileId F2")
 	if f.srv.Calls("conversations.mark") != 0 {
