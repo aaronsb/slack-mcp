@@ -47,7 +47,7 @@ func remoteChannelDestination(ctx context.Context, ap *provider.ApiProvider, inp
 		}
 	case len(look.Hits) > 0:
 		return nil, &targetError{
-			Message:  fmt.Sprintf("No channel is named exactly '#%s', so nothing was done. Slack's channel search found %s.", name, namedHits(look, name)),
+			Message:  fmt.Sprintf("%s, so nothing was done. Slack's channel search found %s.", noExactName(look, "'#"+name+"'"), namedHits(look, name)),
 			Guidance: fmt.Sprintf("Name one of them exactly: %s='#name'", param),
 		}
 	}
@@ -55,6 +55,15 @@ func remoteChannelDestination(ctx context.Context, ap *provider.ApiProvider, inp
 		Message:  fmt.Sprintf("No channel named '#%s' is visible to you: Slack's channel search found none, so nothing was done.", name),
 		Guidance: guidance,
 	}
+}
+
+// noExactName says no hit is named exactly so, and, when Slack had more
+// hits than one page, that only the top page was checked.
+func noExactName(look provider.ChannelLookup, quoted string) string {
+	if look.Total > len(look.Hits) {
+		return fmt.Sprintf("No channel among the top %d of %d search hits is named exactly %s", len(look.Hits), look.Total, quoted)
+	}
+	return fmt.Sprintf("No channel is named exactly %s", quoted)
 }
 
 // namedHits renders switcher hits inline: '#name', with a note when the
@@ -79,8 +88,8 @@ func namedHits(look provider.ChannelLookup, name string) string {
 // its name, or archived.
 func hitNote(h provider.SwitcherChannel, name string) string {
 	var notes []string
-	if !strings.Contains(strings.ToLower(h.Name), strings.ToLower(name)) {
-		notes = append(notes, "matched its purpose")
+	if m := matchedOn(h, name); m != "" {
+		notes = append(notes, "matched its "+m)
 	}
 	if h.IsArchived {
 		notes = append(notes, "archived")
@@ -91,18 +100,36 @@ func hitNote(h provider.SwitcherChannel, name string) string {
 	return " (" + strings.Join(notes, ", ") + ")"
 }
 
+// matchedOn names what a hit matched when its name does not contain the
+// query: its purpose when the purpose does, else empty, since Slack's
+// match reason is not reported.
+func matchedOn(h provider.SwitcherChannel, name string) string {
+	q := strings.ToLower(name)
+	if strings.Contains(strings.ToLower(h.Name), q) {
+		return ""
+	}
+	if strings.Contains(strings.ToLower(h.Purpose.Value), q) {
+		return "purpose"
+	}
+	return ""
+}
+
 // switcherCandidates is a read-path miss's hits in the candidate shape
 // resolveAndRead returns for local matches.
 func switcherCandidates(look provider.ChannelLookup, name string) []map[string]interface{} {
-	options := make([]map[string]interface{}, 0, len(look.Hits))
-	for _, h := range look.Hits {
+	hits := look.Hits
+	if len(hits) > maxCandidates {
+		hits = hits[:maxCandidates]
+	}
+	options := make([]map[string]interface{}, 0, len(hits))
+	for _, h := range hits {
 		option := map[string]interface{}{
 			"handle": handle.Conversation(h.ID),
 			"where":  "#" + h.Name,
 			"kind":   "channel",
 		}
-		if !strings.Contains(strings.ToLower(h.Name), strings.ToLower(name)) {
-			option["matchedOn"] = "purpose, not the name"
+		if m := matchedOn(h, name); m != "" {
+			option["matchedOn"] = m + ", not the name"
 		}
 		if h.IsArchived {
 			option["archived"] = true

@@ -1,6 +1,7 @@
 package features_test
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/aaronsb/slack-mcp/pkg/features"
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/aaronsb/slack-mcp/pkg/slacktest"
+	"github.com/slack-go/slack"
 )
 
 // A channel name the cache does not hold is asked of Slack's channel search
@@ -82,7 +84,7 @@ func TestChannelMissResolvesAUniqueExactNameAndCachesIt(t *testing.T) {
 		t.Fatalf("searches=%d info=%d, want 1 and 1\n%s", f.searches(), f.srv.Calls("conversations.info"), out)
 	}
 	form := f.forms[0]
-	if form.Get("query") != "launch" || form.Get("module") != "channels" || form.Get("sort") != "score" {
+	if form.Get("query") != "launch" || form.Get("module") != "channels" || form.Get("sort") != "score" || form.Get("count") != "100" {
 		t.Fatalf("search form = %v", form)
 	}
 	if strings.Contains(out, "No channel") {
@@ -202,5 +204,97 @@ func TestCachedChannelDoesNotSearch(t *testing.T) {
 	runTool(t, features.Messages, ap, map[string]any{"target": "#eng", "since": "1d"})
 	if f.searches() != 0 {
 		t.Fatalf("a cached channel reached the channel search")
+	}
+}
+
+// When Slack has more hits than one page and none on it is named exactly,
+// the miss says only the top page was checked.
+func TestChannelMissSaysWhenOnlyTheTopPageWasChecked(t *testing.T) {
+	f, ap := newSwitcherFake(t)
+	f.resp = map[string]any{"ok": true, "items": []map[string]any{hit("C9", "sales-east", false, "")},
+		"pagination": map[string]any{"total_count": 940}}
+
+	out := runTool(t, features.Say, ap, map[string]any{"to": "#sales", "text": "q3"})
+	mustContain(t, out, "No channel among the top 1 of 940 search hits is named exactly '#sales', so nothing was done.")
+	if f.srv.Calls("chat.postMessage") != 0 {
+		t.Fatalf("posted on a truncated inexact answer")
+	}
+}
+
+// A '#' target that cannot be a channel name is refused locally: nothing
+// the caller typed reaches Slack's search.
+func TestChannelMissOfANonChannelNameMakesNoSearch(t *testing.T) {
+	f, ap := newSwitcherFake(t)
+	for _, to := range []string{"#", "#two words", "#" + strings.Repeat("x", 81), "#xoxb-not-a-name!"} {
+		out := runTool(t, features.Say, ap, map[string]any{"to": to, "text": "hi"})
+		mustContain(t, out, "is known, so nothing was done.")
+	}
+	if f.searches() != 0 {
+		t.Fatalf("a non-channel name reached the search %d times", f.searches())
+	}
+}
+
+// A rate limit that names no wait pauses for the default.
+func TestChannelMissRateLimitWithoutRetryAfterPausesForTheDefault(t *testing.T) {
+	f, ap := newSwitcherFake(t)
+	f.resp = slacktest.Response{Status: http.StatusTooManyRequests, Body: "{}"}
+
+	out := runTool(t, features.Messages, ap, map[string]any{"target": "#launch", "since": "1d"})
+	mustContain(t, out, "rate-limited for another 30s")
+	if f.searches() != 1 {
+		t.Fatalf("searches = %d, want 1", f.searches())
+	}
+}
+
+// An exact hit whose record cannot be read is reported, not resolved.
+func TestChannelMissWhoseRecordCannotBeReadIsReported(t *testing.T) {
+	f, ap := newSwitcherFake(t)
+	f.items = []map[string]any{hit("C9", "launch", false, "")}
+
+	out := runTool(t, features.Say, ap, map[string]any{"to": "#launch", "text": "go"})
+	mustContain(t, out, "Slack's channel search found #launch, but reading it failed")
+	if f.srv.Calls("chat.postMessage") != 0 {
+		t.Fatalf("posted to a channel whose record failed to load")
+	}
+}
+
+// mark-read on an inexact name marks nothing.
+func TestMarkReadOnAnInexactNameMarksNothing(t *testing.T) {
+	f, ap := newSwitcherFake(t)
+	f.items = []map[string]any{hit("C9", "deploy-prod", true, "")}
+
+	out := runTool(t, features.MarkAsRead, ap, map[string]any{"channel": "#deploy"})
+	mustContain(t, out, "No channel is named exactly '#deploy'")
+	if n := f.srv.Calls("conversations.mark"); n != 0 {
+		t.Fatalf("marked %d times on an inexact name", n)
+	}
+}
+
+// A destination found through the search still passes the scanner and the
+// quarantine: a token to it is blocked and nothing reaches the channel.
+func TestRemotelyResolvedDestinationIsStillScanned(t *testing.T) {
+	f := newSafetyFakeWith(t, strictHuman(), func(srv *slacktest.Server) {
+		srv.Handle("search.modules.channels", func(*http.Request) any {
+			return map[string]any{"ok": true, "items": []map[string]any{hit("C9", "launch", true, "")}}
+		})
+	})
+	f.srv.Handle("conversations.info", func(r *http.Request) any {
+		_ = r.ParseForm()
+		if r.Form.Get("channel") == "C9" {
+			return map[string]any{"ok": true, "channel": slack.Channel{GroupConversation: slack.GroupConversation{
+				Name: "launch", Conversation: slack.Conversation{ID: "C9"}}, IsChannel: true, IsMember: true}}
+		}
+		return map[string]any{"ok": false, "error": "channel_not_found"}
+	})
+
+	res := f.say(t, context.Background(), map[string]any{"to": "#launch", "text": "key " + fakeToken()})
+	if res.Success {
+		t.Fatalf("token sent to a remotely resolved channel: %+v", res)
+	}
+	wantIn(t, res.Message, "BLOCKED: nothing was sent", "Quarantined until the operator clears it: #launch")
+	for _, p := range f.posted() {
+		if p.Get("channel") == "C9" && strings.Contains(p.Get("text"), "key") {
+			t.Fatalf("the agent's text reached the channel: %v", p)
+		}
 	}
 }

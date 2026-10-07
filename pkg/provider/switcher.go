@@ -18,15 +18,17 @@ import (
 // thin hits never reach the cache or the estate. No sweep calls this.
 
 const (
-	// switcherCount is how many hits one lookup asks for.
-	switcherCount = 25
+	// switcherCount is how many hits one lookup asks for: Slack's largest
+	// honored page (ADR-003), so the exact-name scan sees as much as one
+	// call can return.
+	switcherCount = 100
 	// switcherMissTTL is how long a name that found nothing is not asked
 	// again, so an agent retrying a typo does not repeat the call.
 	switcherMissTTL = 10 * time.Minute
 	// switcherDefaultPause applies when a rate-limit answer names no wait.
 	switcherDefaultPause = 30 * time.Second
-	// switcherMemoCap bounds the miss memo; expired entries are pruned
-	// past it.
+	// switcherMemoCap bounds the miss memo: past it, expired entries are
+	// pruned, then the oldest goes.
 	switcherMemoCap = 256
 )
 
@@ -36,7 +38,8 @@ type ChannelLookup struct {
 	// observed into the estate; nil when no hit is named exactly so.
 	Channel *slack.Channel
 	// Hits are the matches in Slack's order when none resolved, for the
-	// caller to offer as candidates; Total counts them before the cap.
+	// caller to offer as candidates; Total counts them before the page cap,
+	// so Total > len(Hits) means the exact-name scan saw one page only.
 	Hits  []SwitcherChannel
 	Total int
 	// Unavailable says why the search could not answer; empty when it did.
@@ -44,13 +47,27 @@ type ChannelLookup struct {
 }
 
 // switcherState serializes lookups and holds the miss memo and the
-// rate-limit pause. The mutex is held across the call, so at most one
-// switcher request is in flight.
+// rate-limit pause. The one-slot semaphore is held across the call, so at
+// most one switcher request is in flight, and a waiter whose request ends
+// gives up its place.
 type switcherState struct {
-	mu          sync.Mutex
+	once        sync.Once
+	sem         chan struct{}
 	misses      map[string]time.Time
 	pausedUntil time.Time
 }
+
+func (sw *switcherState) acquire(ctx context.Context) error {
+	sw.once.Do(func() { sw.sem = make(chan struct{}, 1) })
+	select {
+	case sw.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (sw *switcherState) release() { <-sw.sem }
 
 // LookupChannelRemote asks Slack's quick switcher for a channel name the
 // cache does not hold. A leading '#' is ignored.
@@ -61,8 +78,15 @@ func (ap *ApiProvider) LookupChannelRemote(ctx context.Context, name string) Cha
 		return ChannelLookup{}
 	}
 	sw := &ap.switcher
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
+	if err := sw.acquire(ctx); err != nil {
+		return ChannelLookup{Unavailable: "Slack's channel search was not asked: the request ended first."}
+	}
+	defer sw.release()
+
+	// A lookup that waited may find the name cached by the one before it.
+	if ch, ok := ap.LookupChannelName(key); ok && ch.ID != "" {
+		return ChannelLookup{Channel: &ch}
+	}
 
 	now := time.Now()
 	if now.Before(sw.pausedUntil) {
@@ -83,7 +107,7 @@ func (ap *ApiProvider) LookupChannelRemote(ctx context.Context, name string) Cha
 			if wait <= 0 {
 				wait = switcherDefaultPause
 			}
-			sw.pausedUntil = now.Add(wait)
+			sw.pausedUntil = time.Now().Add(wait)
 			log.Printf("channel lookup: switcher rate-limited for %s", wait)
 			return ChannelLookup{Unavailable: fmt.Sprintf("Slack's channel search is rate-limited for another %s.", wait.Round(time.Second))}
 		}
@@ -125,10 +149,16 @@ func (sw *switcherState) remember(key string, at time.Time) {
 		sw.misses = make(map[string]time.Time)
 	}
 	if len(sw.misses) >= switcherMemoCap {
+		oldest, oldestAt := "", at
 		for k, t := range sw.misses {
 			if at.Sub(t) >= switcherMissTTL {
 				delete(sw.misses, k)
+			} else if t.Before(oldestAt) {
+				oldest, oldestAt = k, t
 			}
+		}
+		if len(sw.misses) >= switcherMemoCap {
+			delete(sw.misses, oldest)
 		}
 	}
 	sw.misses[key] = at

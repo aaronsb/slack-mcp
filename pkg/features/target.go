@@ -119,8 +119,9 @@ func openDestination(ctx context.Context, ap *provider.ApiProvider, dest *resolv
 }
 
 // locateTarget finds what a reference names from the caches and the
-// identity ladder. Its one Slack call is a '#name' miss's channel search
-// (ADR-015), which sends only the name; it never opens a conversation.
+// identity ladder. Its one Slack call is a channel search for a '#name'
+// miss that could be a channel name (ADR-015), which sends only the name;
+// it never opens a conversation.
 func locateTarget(ctx context.Context, ap *provider.ApiProvider, input string, policy provider.Policy, param string) (*resolvedDestination, *targetError) {
 	in := strings.TrimSpace(input)
 	switch {
@@ -130,7 +131,13 @@ func locateTarget(ctx context.Context, ap *provider.ApiProvider, input string, p
 		if ch, ok := ap.LookupChannelName(name); ok {
 			return channelDestination(ap, input, ch), nil
 		}
-		return remoteChannelDestination(ctx, ap, input, name, param)
+		if bare, ok := channelShaped(name); ok {
+			return remoteChannelDestination(ctx, ap, input, bare, param)
+		}
+		return nil, &targetError{
+			Message:  fmt.Sprintf("No channel named '%s' is known, so nothing was done.", in),
+			Guidance: fmt.Sprintf("See available channels: estate view='channels' — for a person, use %s='@handle'", param),
+		}
 	case provider.LooksLikeChannelID(in):
 		if ch, ok := ap.LookupChannel(in); ok && ch.ID == in {
 			return channelDestination(ap, input, ch), nil

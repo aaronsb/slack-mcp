@@ -332,7 +332,13 @@ func (c *InternalClient) send(req *http.Request, result interface{}) error {
 		return &slack.RateLimitedError{RetryAfter: time.Duration(wait) * time.Second}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+		// A bounded excerpt: the error reaches log sites, which never print
+		// a whole response.
+		excerpt := body
+		if len(excerpt) > 200 {
+			excerpt = excerpt[:200]
+		}
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(excerpt))
 	}
 	if err := json.Unmarshal(body, result); err != nil {
 		return fmt.Errorf("parsing response: %w", err)

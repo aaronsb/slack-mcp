@@ -302,9 +302,9 @@ func readMiss(ctx context.Context, apiProvider *provider.ApiProvider, api *slack
 			return readRef(ctx, apiProvider, api, handle.Ref{Kind: handle.KindConversation, Channel: look.Channel.ID}, limit)
 		case len(look.Hits) > 0:
 			options := switcherCandidates(look, name)
-			message := fmt.Sprintf("No channel is named exactly %q; Slack's channel search found %d.", name, look.Total)
+			message := fmt.Sprintf("%s; Slack's channel search found %d.", noExactName(look, fmt.Sprintf("%q", name)), look.Total)
 			if look.Total > len(options) {
-				message = fmt.Sprintf("No channel is named exactly %q; Slack's channel search found %d, showing %d.", name, look.Total, len(options))
+				message = fmt.Sprintf("%s; showing %d.", noExactName(look, fmt.Sprintf("%q", name)), len(options))
 			}
 			return &FeatureResult{
 				Success:     true,

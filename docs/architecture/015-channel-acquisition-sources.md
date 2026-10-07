@@ -37,8 +37,8 @@ token:
 - It matches names and purposes alike.
 - Its default order puts an exact name late: `#marketing` was 35th of 37
   hits, and `#sales` was absent from the first 100 of 940. With
-  `sort=score`, the exact name came first in two of four checks and third in
-  another.
+  `sort=score`, the exact name came first in two of four checks, second in
+  one, and third in one.
 - Each item is a thin hit: id, name, membership, privacy, archive state,
   purpose, member count. It has no topic, no creation time, and no kind
   flags, so it is not a conversation record.
@@ -60,8 +60,10 @@ token:
 ### A name miss asks the switcher once
 
 When someone names a channel the cache does not hold, the server makes one
-`search.modules.channels` call with that name and `sort=score`, before
-answering that the channel is unknown. Two paths count as naming a channel:
+`search.modules.channels` call with that name, `sort=score`, and a page of
+100 hits, before answering that the channel is unknown. Two paths count as
+naming a channel, and both require the name to be one Slack could hold
+(lowercase letters, digits, hyphens, underscores):
 
 - a `#name` target on any tool that takes a conversation, and
 - a `messages target=` description that is a single channel-shaped word and
@@ -81,7 +83,8 @@ thin record would read as a change against the full one already folded.
 
 Anything else is an answer, not a resolution. The hits come back as
 candidates, named by `#name` and never by ID, with a note on each that
-matched on its purpose rather than its name. This holds for reads and writes
+matched on its purpose rather than its name. When Slack reports more hits
+than the page held, the answer says only the top page was checked. This holds for reads and writes
 alike. A read loses one round trip. A write never posts to a channel the
 agent did not name exactly.
 
@@ -90,14 +93,18 @@ agent did not name exactly.
 For a write, the lookup runs where the destination is located: after the
 strike lock and ADR-012's local checks, and before the destination's
 quarantine (ADR-013). It sends Slack only the name the agent typed, and no
-content. A write the strike lock refuses makes no lookup.
+content. A write the strike lock refuses makes no lookup, and every other
+local refusal (a malformed emoji name, a file outside the exchange
+directory) comes first too. One window is narrower: before the account's
+workspace is identified the lock cannot be read, so a lookup may run, and
+the gate checks the lock again before anything is sent.
 
 ### One call per miss, at a human's pace
 
 - At most one switcher call is in flight.
 - A name that found nothing is not asked again for ten minutes.
-- A rate-limit answer pauses every lookup for the time Slack names, and the
-  miss says so.
+- A rate-limit answer pauses every lookup for the time Slack names, or 30
+  seconds when it names none, and the miss says so.
 - Any failure falls back to today's "no channel named X" with a line saying
   Slack's channel search could not be reached.
 
@@ -151,7 +158,8 @@ complete walk confirms it. No envelope change is needed.
 - Visibility of the queries to the person or an admin, such as entries in the
   switcher's recent searches, was not established by the probe.
 - `sort=score` is not documented. If Slack drops it, the exact-name scan still
-  finds the hit when it falls within the first page, and misses it beyond.
+  finds the hit when it falls within the first 100, and misses it beyond;
+  the answer then says only the top page was checked.
 
 ## Related
 
