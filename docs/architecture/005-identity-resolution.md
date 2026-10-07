@@ -250,14 +250,14 @@ directory search.
 
 The surface stays at ADR-003's eleven tools.
 
-### Open probe
+### Probe result
 
-Slack's own composer performs live partial matching on `@` input, which implies a
-server-side autocomplete endpoint. ADR-003's endpoint-findings table was produced by probing a
-live workspace before deciding, and the same is owed here. If such an endpoint answers, it
-supplies ring-3 matching with Slack's own ranking and the local cache becomes a fast path. If
-it returns `unknown_method`, cache plus recency is the answer on evidence rather than
-assumption.
+Slack's own composer performs live partial matching on `@` input, which implied a
+server-side autocomplete endpoint. Probed 2026-10-07 (ADR-003's endpoint table):
+`search.modules` with `module=people` answers on `slack.com` and matches partial names,
+handles, and titles, so ring-3 matching with Slack's own ranking is available without a
+second host. Taking it is a separate decision from discovering it; the `@` ladder stays
+cache-only, as decided above. ADR-015 takes the channel-side endpoint for name misses.
 
 ## Consequences
 

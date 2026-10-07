@@ -113,6 +113,21 @@ func TestASweepSeedsTheLedgerWithTheDirectory(t *testing.T) {
 	}
 }
 
+// The channel search is a lookup source, never a sweep source (ADR-015):
+// its ranked, capped results cannot prove completeness.
+func TestASweepNeverCallsTheChannelSearch(t *testing.T) {
+	srv, p := sweptProvider(t)
+	if err := p.RunEstateSweep(context.Background()); err != nil {
+		t.Fatalf("RunEstateSweep: %v", err)
+	}
+	if srv.Calls("conversations.list") == 0 {
+		t.Fatalf("the sweep made no channel walk, so this test proves nothing")
+	}
+	if n := srv.Calls("search.modules.channels"); n != 0 {
+		t.Fatalf("the sweep called the channel search %d times", n)
+	}
+}
+
 func TestAnUnchangedWorkspaceAppendsOnlyTheSweepEvent(t *testing.T) {
 	_, p := sweptProvider(t)
 

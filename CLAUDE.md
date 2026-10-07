@@ -57,4 +57,5 @@ Binding to loopback is not the same as local-only: set the key whenever a tunnel
 - Outbound safety (ADR-013/014) — every `say` runs the strike lock, ADR-012's local checks, the destination's quarantine, the secret scanner, and the approval gate, in that order, before any content reaches Slack or any DM is opened (`pkg/features/safety_gate.go` over `pkg/safety` and `pkg/scanner`). The operator answers from the CLI: `slack-mcp quarantine list|clear`, `slack-mcp approve [id]`, `slack-mcp deny id`, `slack-mcp trust add|list|remove`; quarantines and the strike lock also clear on the `unlock` page (`pkg/unlock`, served by `pkg/setup`'s loopback `LocalServer`)
 - Channel names over IDs — never expose internal IDs to AI
 - Two-phase caching — fast startup with member channels, background load all
+- Channel-name misses ask Slack's quick switcher once (ADR-015) — a unique exact name resolves through `conversations.info` and is cached; anything else returns candidates by `#name`; never a sweep source (`pkg/provider/switcher.go`)
 - Setup command uses embedded web server (go:embed) — tokens never leave localhost

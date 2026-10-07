@@ -9,8 +9,11 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/slack-go/slack"
 )
 
 // InternalClient provides access to Slack's internal/undocumented endpoints
@@ -236,6 +239,52 @@ func (c *InternalClient) SearchMessages(ctx context.Context, query string, extra
 	return result, err
 }
 
+// SwitcherChannel is one hit from Slack's quick-switcher search. It is a
+// thin record, not a conversation: no topic, creation time, or kind flags
+// (ADR-003's endpoint table), so it is never cached or observed as one.
+type SwitcherChannel struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IsMember   bool   `json:"is_member"`
+	IsPrivate  bool   `json:"is_private"`
+	IsArchived bool   `json:"is_archived"`
+	Purpose    struct {
+		Value string `json:"value"`
+	} `json:"purpose"`
+}
+
+// SearchChannelsResponse is /api/search.modules.channels.
+type SearchChannelsResponse struct {
+	OK         bool              `json:"ok"`
+	Error      string            `json:"error,omitempty"`
+	Items      []SwitcherChannel `json:"items"`
+	Pagination struct {
+		TotalCount int `json:"total_count"`
+	} `json:"pagination"`
+}
+
+// SearchChannels asks Slack's quick switcher for channels matching query,
+// ranked by score: the default order buries an exact name, sort=score puts
+// it first or near it. It returns channels the person has not joined, but
+// never DMs or group DMs (ADR-015). A 429 comes back as
+// *slack.RateLimitedError.
+func (c *InternalClient) SearchChannels(ctx context.Context, query string, count int) (*SearchChannelsResponse, error) {
+	form := url.Values{
+		"module": {"channels"},
+		"query":  {query},
+		"count":  {strconv.Itoa(count)},
+		"sort":   {"score"},
+	}
+	result := &SearchChannelsResponse{}
+	if err := c.PostFormInternalAPI(ctx, "/api/search.modules.channels", form, result); err != nil {
+		return nil, err
+	}
+	if !result.OK {
+		return nil, fmt.Errorf("search.modules.channels: %s", result.Error)
+	}
+	return result, nil
+}
+
 // callInternalAPI is a helper to call internal Slack endpoints
 func (c *InternalClient) callInternalAPI(ctx context.Context, endpoint string, params url.Values, result interface{}) error {
 	// Build URL
@@ -277,6 +326,10 @@ func (c *InternalClient) send(req *http.Request, result interface{}) error {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("reading response: %w", err)
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		wait, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
+		return &slack.RateLimitedError{RetryAfter: time.Duration(wait) * time.Second}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
