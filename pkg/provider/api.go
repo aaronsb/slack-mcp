@@ -93,6 +93,9 @@ type ApiProvider struct {
 	refreshResetTime   time.Time
 	backfillDone       bool
 	backfillMutex      sync.Mutex
+
+	// switcher is the channel-name-miss lookup's state (ADR-015).
+	switcher switcherState
 }
 
 // New creates a provider from environment variables (backward compatible)

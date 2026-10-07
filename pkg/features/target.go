@@ -61,8 +61,8 @@ func personMissResult(res *provider.PersonResolution) *FeatureResult {
 const namedByCaller = "the conversation you named"
 
 // resolvedDestination is where a conversation reference points, found from
-// held state alone: no Slack call has been made to find it, and no DM has
-// been opened for it. ConvID is empty when the target is a person with no
+// held state or a channel search that sent only the name: no content has
+// gone to Slack to find it, and no DM has been opened for it. ConvID is empty when the target is a person with no
 // DM yet; openDestination opens one, and only then.
 type resolvedDestination struct {
 	// Typed is the reference as the caller wrote it.
@@ -92,9 +92,9 @@ func resolveTarget(ctx context.Context, ap *provider.ApiProvider, input string, 
 }
 
 // resolveWriteDestination locates a write's destination under the write
-// policy without any Slack call: a person with no DM comes back with an
-// empty ConvID and their UserID, for the pre-send checks to judge before
-// openDestination opens anything (ADR-013).
+// policy, calling Slack only for a '#name' miss's channel search: a person
+// with no DM comes back with an empty ConvID and their UserID, for the
+// pre-send checks to judge before openDestination opens anything (ADR-013).
 func resolveWriteDestination(ctx context.Context, ap *provider.ApiProvider, to, param string) (*resolvedDestination, *targetError) {
 	return locateTarget(ctx, ap, to, provider.WritePolicy, param)
 }
@@ -119,7 +119,9 @@ func openDestination(ctx context.Context, ap *provider.ApiProvider, dest *resolv
 }
 
 // locateTarget finds what a reference names from the caches and the
-// identity ladder, never calling Slack.
+// identity ladder. Its one Slack call is a channel search for a '#name'
+// miss that could be a channel name (ADR-015), which sends only the name;
+// it never opens a conversation.
 func locateTarget(ctx context.Context, ap *provider.ApiProvider, input string, policy provider.Policy, param string) (*resolvedDestination, *targetError) {
 	in := strings.TrimSpace(input)
 	switch {
@@ -128,6 +130,9 @@ func locateTarget(ctx context.Context, ap *provider.ApiProvider, input string, p
 		name := strings.TrimSpace(strings.TrimPrefix(in, "#"))
 		if ch, ok := ap.LookupChannelName(name); ok {
 			return channelDestination(ap, input, ch), nil
+		}
+		if bare, ok := channelShaped(name); ok {
+			return remoteChannelDestination(ctx, ap, input, bare, param)
 		}
 		return nil, &targetError{
 			Message:  fmt.Sprintf("No channel named '%s' is known, so nothing was done.", in),

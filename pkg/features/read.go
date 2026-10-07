@@ -242,16 +242,7 @@ func resolveAndRead(ctx context.Context, apiProvider *provider.ApiProvider, api 
 	candidates, total := resolveCandidates(apiProvider, description)
 
 	if len(candidates) == 0 {
-		return &FeatureResult{
-			Success: false,
-			Message: fmt.Sprintf("Nothing here matches %q.", description),
-			Data: map[string]interface{}{
-				"found":    false,
-				"searched": "names of channels, people, and group DMs you are in",
-			},
-			Guidance: "Name a channel, a person, or use a handle from a poll event. " +
-				"For message text rather than a place, use search.",
-		}, nil
+		return readMiss(ctx, apiProvider, api, description, limit)
 	}
 
 	// A single match resolves only if the description matched a NAME. A match
@@ -295,6 +286,54 @@ func resolveAndRead(ctx context.Context, apiProvider *provider.ApiProvider, api 
 			"truncated":    total > len(options),
 		},
 		Guidance: "Read one by passing its handle.",
+	}, nil
+}
+
+// readMiss answers a description nothing cached matched. One channel-shaped
+// word is asked of Slack's channel search (ADR-015): a unique exact name is
+// read, other hits are candidates. Anything else is a miss.
+func readMiss(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.Client, description string, limit int) (*FeatureResult, error) {
+	searched := "the names, topics, and purposes of every conversation the server has cached"
+	note := ""
+	if name, ok := channelShaped(description); ok {
+		look := apiProvider.LookupChannelRemote(ctx, name)
+		switch {
+		case look.Channel != nil:
+			return readRef(ctx, apiProvider, api, handle.Ref{Kind: handle.KindConversation, Channel: look.Channel.ID}, limit)
+		case len(look.Hits) > 0:
+			options := switcherCandidates(look, name)
+			message := fmt.Sprintf("%s; Slack's channel search found %d.", noExactName(look, fmt.Sprintf("%q", name)), look.Total)
+			if look.Total > len(options) {
+				message = fmt.Sprintf("%s; showing %d.", noExactName(look, fmt.Sprintf("%q", name)), len(options))
+			}
+			return &FeatureResult{
+				Success:     true,
+				ResultCount: len(options),
+				Message:     message,
+				Data: map[string]interface{}{
+					"ambiguous":    true,
+					"candidates":   options,
+					"totalMatches": look.Total,
+					"truncated":    look.Total > len(options),
+					"source":       "Slack's channel search",
+				},
+				Guidance: "Read one by passing its handle.",
+			}, nil
+		case look.Unavailable != "":
+			note = " " + look.Unavailable
+		default:
+			searched += ", and Slack's channel search"
+		}
+	}
+	return &FeatureResult{
+		Success: false,
+		Message: fmt.Sprintf("Nothing here matches %q.%s", description, note),
+		Data: map[string]interface{}{
+			"found":    false,
+			"searched": searched,
+		},
+		Guidance: "Name a channel, a person, or use a handle from a poll event. " +
+			"For message text rather than a place, use search.",
 	}, nil
 }
 

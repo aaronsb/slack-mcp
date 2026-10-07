@@ -76,6 +76,17 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 		}, nil
 	}
 
+	// The emoji name is checked first: every local refusal comes before
+	// the destination lookup, which may ask Slack's channel search
+	// (ADR-015).
+	emojiName := strings.Trim(emoji, ":")
+	if !emojiNamePattern.MatchString(emojiName) {
+		return &FeatureResult{
+			Success: false,
+			Message: "emoji must be an emoji name: lowercase letters, digits, and _ + ' -, optionally ::skin-tone-2 to ::skin-tone-6 ('thumbsup'). Nothing was sent.",
+		}, nil
+	}
+
 	// A reaction is a write: route by prefix, a person only exactly
 	// (ADR-005), then through preSend like any say (ADR-013). A reaction
 	// lands on a message that exists, so a person with no DM has nothing
@@ -88,15 +99,6 @@ func reactHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 		return &FeatureResult{
 			Success: false,
 			Message: fmt.Sprintf("There is no DM with %s, so there is no message there to react to. Nothing was sent.", dest.Name),
-		}, nil
-	}
-
-	// Normalize emoji name - strip colons if provided
-	emojiName := strings.Trim(emoji, ":")
-	if !emojiNamePattern.MatchString(emojiName) {
-		return &FeatureResult{
-			Success: false,
-			Message: "emoji must be an emoji name: lowercase letters, digits, and _ + ' -, optionally ::skin-tone-2 to ::skin-tone-6 ('thumbsup'). Nothing was sent.",
 		}, nil
 	}
 

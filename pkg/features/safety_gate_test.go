@@ -193,6 +193,9 @@ func TestSafetyAgentNoticeAndNoNoticeToExternal(t *testing.T) {
 	locked := f.say(t, context.Background(), map[string]any{"to": "#eng", "text": "hello"})
 	wantIn(t, locked.Message, "strike lock is engaged (2 of 2)", "pending p")
 	wantIn(t, runTool(t, features.MarkAsRead, f.ap, map[string]any{"channel": "#eng"}), "strike lock is engaged")
+	// A name the cache lacks would be looked up (ADR-015); the lock refuses
+	// first, so not even the lookup runs.
+	wantIn(t, f.say(t, context.Background(), map[string]any{"to": "#not-cached", "text": "hello"}).Message, "strike lock is engaged")
 	if n := f.srv.TotalCalls(); n != 0 {
 		t.Fatalf("locked writes made %d Slack calls", n)
 	}

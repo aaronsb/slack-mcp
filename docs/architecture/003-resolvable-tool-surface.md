@@ -88,6 +88,8 @@ Probed against a live workspace before deciding:
 | `users.conversations` | 30 member channels, no pagination cursor, identical set to `client.counts`. |
 | `activity.feed` | Exists, requires an undiscovered `mode` enum. |
 | `subscriptions.list`, `activity.list`, `activity.count` | `unknown_method`. |
+| `search.modules.channels` (2026-10-07) | Works as POST form or GET, token in the body or the bearer header; `search.modules module=channels` answers the same. Returns non-member public, archived, and member private channels; never DMs or group DMs. Matches names and purposes. Items are thin: `id`, `name`, `is_member`, `is_private`, `is_archived`, `purpose`, `member_count`, `timestamp`; no topic, creation time, or kind flags. Pages by `page`/`count` (count honored at 100). Default order buries exact names (`#marketing` 35th of 37); `sort=score` puts them first or near it. 30 calls at up to 3/s drew no 429. Visibility in the switcher's recent searches: not established. ADR-015. |
+| `search.modules module=people` (2026-10-07) | Works on `slack.com`. Matches partial names, first names, handles, and titles (`Chanc`, `Clay`, `chanceyc`, and `Head of AI` all found the same person). Items carry `id`, `username`, a full `profile`, and restriction flags. `search.modules.people` returns `invalid_arguments`; `users.search` and `search.users` return `unknown_method`. `edgeapi.slack.com/cache/<team>/users/search` also answers, so a second host is not needed. ADR-005. |
 
 Two consequences follow directly. `client.counts` returns **read and unread conversations
 alike, each with a `latest` timestamp** — so change detection independent of the human's
