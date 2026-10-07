@@ -681,3 +681,32 @@ func TestCheckUploadURLAcceptsOnlySlackHosts(t *testing.T) {
 		}
 	}
 }
+
+// When the mrkdwn retry is refused too, the result names both refusals and
+// still says nothing was posted.
+func TestSayFilesRetryRefusedNamesBothRefusals(t *testing.T) {
+	f, ap := newUploadFake(t)
+	f.completeQueue = []any{map[string]any{"ok": false, "error": "invalid_blocks"}}
+	f.completeResp = map[string]any{"ok": false, "error": "not_in_channel"}
+	putExchange(t, "a.txt", []byte("a"))
+
+	out := runTool(t, features.Say, ap, map[string]any{"to": "#eng", "files": []any{"a.txt"}, "text": "hi"})
+	if n := f.srv.Calls("files.completeUploadExternal"); n != 2 {
+		t.Fatalf("completions = %d, want 2\n%s", n, out)
+	}
+	mustContain(t, out, "rejected the comment's rich-text block, and the mrkdwn retry failed too", "not_in_channel", "Nothing was posted")
+}
+
+// A transport error on the retry leaves the outcome unknown, and says so.
+func TestSayFilesRetryTransportErrorSaysOutcomeUnknown(t *testing.T) {
+	f, ap := newUploadFake(t)
+	f.completeQueue = []any{map[string]any{"ok": false, "error": "invalid_blocks"}}
+	f.completeResp = slacktest.Response{Status: http.StatusOK, Body: "not json"}
+	putExchange(t, "a.txt", []byte("a"))
+
+	out := runTool(t, features.Say, ap, map[string]any{"to": "#eng", "files": []any{"a.txt"}, "text": "hi"})
+	mustContain(t, out, "rejected the comment's rich-text block, and the mrkdwn retry failed too", "unknown", "messages target='#eng' since='5m'")
+	if strings.Contains(out, "Nothing was posted") {
+		t.Fatalf("claimed nothing was posted on an unknown outcome:\n%s", out)
+	}
+}

@@ -304,11 +304,15 @@ func shareFiles(ctx context.Context, ap *provider.ApiProvider, api *slack.Client
 		err = complete(false)
 	}
 	if err != nil {
+		first := ""
+		if blocksRejected {
+			first = "Slack rejected the comment's rich-text block, and the mrkdwn retry failed too. "
+		}
 		var se slack.SlackErrorResponse
 		if errors.As(err, &se) {
-			return nil, false, fmt.Errorf("Uploaded %d file(s), but Slack refused to share them: %v. Nothing was posted; the uploads were not shared.", len(summaries), err)
+			return nil, false, fmt.Errorf("%sUploaded %d file(s), but Slack refused to share them: %v. Nothing was posted; the uploads were not shared.", first, len(summaries), err)
 		}
-		return nil, false, fmt.Errorf("Uploaded %d file(s), but the request to share them failed (%v), so whether the message was posted is unknown. Check with messages target='%s' since='5m' before retrying.", len(summaries), err, to)
+		return nil, false, fmt.Errorf("%sUploaded %d file(s), but the request to share them failed (%v), so whether the message was posted is unknown. Check with messages target='%s' since='5m' before retrying.", first, len(summaries), err, to)
 	}
 
 	ids := make([]string, len(summaries))

@@ -44,9 +44,9 @@ type outbound struct {
 	Thread    string
 	Broadcast bool
 	// Text is the message or comment as the caller supplied it; Fallback is
-	// the mrkdwn text as it will be sent (NormalizeMrkdwn): the message
-	// text of a post, or the initial_comment of an upload. Both are empty
-	// for files alone.
+	// the mrkdwn text (NormalizeMrkdwn): the text a post sends beside its
+	// block, or the initial_comment an upload sends when it has no block
+	// or Slack rejected it. Both are empty for files alone.
 	Text     string
 	Fallback string
 	// RichText is the rich_text block a text post sends beside Fallback,
