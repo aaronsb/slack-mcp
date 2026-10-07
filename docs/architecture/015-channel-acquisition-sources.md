@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 Widens ADR-005's resolution discipline from people to channels and adds one
 network step on a channel-name miss. Leaves ADR-007's completeness rule
