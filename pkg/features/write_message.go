@@ -180,7 +180,9 @@ func writeMessageHandler(ctx context.Context, params map[string]interface{}) (*F
 }
 
 // blockRejections are the chat.postMessage errors that mean Slack refused
-// the blocks themselves at validation, before posting anything.
+// the blocks themselves at validation, before posting anything. An upload's
+// completion retries on the same set; of these, only invalid_blocks has been
+// probed there (#139), and it left the files unshared.
 var blockRejections = map[string]bool{
 	"invalid_blocks":        true,
 	"invalid_blocks_format": true,

@@ -168,8 +168,8 @@ the gate step, so trust is never a route past any earlier step either.
 
 The scanner reads everything a `say` would send, as the server builds
 it: each attached file's name and bytes, a reaction's emoji name, any
-title or initial comment an upload carries (#92), and the message text
-in three forms. The text is scanned as the agent supplied it, as the
+title an upload carries (#92), and the message text or an upload's
+comment in three forms (#139). The text is scanned as the agent supplied it, as the
 fallback text the server posts (`NormalizeMrkdwn`), and as the plain
 text of each section, list item, quote, and preformatted element of the
 `rich_text` block the server builds (`ToRichText`), its inline

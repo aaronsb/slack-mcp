@@ -718,6 +718,9 @@ func formatSayFiles(result *FeatureResult) string {
 	for _, f := range files {
 		fmt.Fprintf(&b, "- %s (%s, %s) — fileId %s\n", str(f, "name"), humanSize(int64(num(f, "size"))), str(f, "type"), str(f, "fileId"))
 	}
+	if r, _ := data["blocksRejected"].(bool); r {
+		b.WriteString("Comment posted as mrkdwn text: Slack rejected the rich-text block, so lists may render as plain lines.\n")
+	}
 	if ts := str(data, "ts"); ts != "" {
 		fmt.Fprintf(&b, "Message ts %s.", ts)
 	} else {

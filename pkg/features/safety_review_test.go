@@ -343,3 +343,24 @@ func TestSafetyStrikesClearReleasesTheHold(t *testing.T) {
 		t.Fatalf("clear strikes did not release the hold")
 	}
 }
+
+// A token split by formatting in an upload's comment is caught in the
+// comment's joined rich_text form and named as the upload's comment, not as
+// message text (#139).
+func TestSafetyBlocksASplitTokenInAnUploadCommentAsTheComment(t *testing.T) {
+	f := newSafetyFake(t, strictHuman())
+	attachUploads(t, f)
+	putExchange(t, "notes.txt", []byte("operator's own notes"))
+	tok := fakeToken()
+
+	res := f.say(t, context.Background(), map[string]any{
+		"to": "#eng", "files": []any{"notes.txt"}, "text": "- key: `" + tok[:8] + "`" + tok[8:],
+	})
+	if res.Success {
+		t.Fatalf("token sent: %+v", res)
+	}
+	wantIn(t, res.Message, "BLOCKED: nothing was sent", "a Slack token", "the upload's title or comment")
+	if strings.Contains(res.Message, "the message text") {
+		t.Fatalf("an upload comment was named as message text:\n%s", res.Message)
+	}
+}

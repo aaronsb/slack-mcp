@@ -42,7 +42,7 @@ const (
 	FieldEmoji
 	// FieldTitle is an upload's title.
 	FieldTitle
-	// FieldComment is an upload's initial comment.
+	// FieldComment is an upload's comment, in any of its scanned forms.
 	FieldComment
 	// FieldFileName is an attached file's name; Index is its position.
 	FieldFileName

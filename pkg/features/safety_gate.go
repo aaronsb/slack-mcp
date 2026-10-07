@@ -414,7 +414,7 @@ func scanFields(out *outbound) []scanner.Field {
 		fields = append(fields, scanner.Field{Kind: textKind, Index: 1, Data: []byte(out.Fallback)})
 	}
 	for i, f := range richTextForms(out.RichText) {
-		fields = append(fields, scanner.Field{Kind: scanner.FieldText, Index: 2 + i, Data: f.data, ElementStarts: f.starts})
+		fields = append(fields, scanner.Field{Kind: textKind, Index: 2 + i, Data: f.data, ElementStarts: f.starts})
 	}
 	if out.Emoji != "" {
 		fields = append(fields, scanner.Field{Kind: scanner.FieldEmoji, Data: []byte(out.Emoji)})

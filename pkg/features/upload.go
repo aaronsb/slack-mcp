@@ -31,7 +31,8 @@ import (
 //  6. per file, files.getUploadURLExternal, a host check on the URL it
 //     returns, and a multipart POST of the bytes read in step 2;
 //  7. one files.completeUploadExternal carrying every file, so N files
-//     arrive as one message;
+//     arrive as one message, the text as a rich_text block (or as mrkdwn
+//     when Slack rejects the block);
 //  8. a bounded files.info poll for the message ts.
 //
 // Steps 1 to 4 make no Slack call, so any refusal there sends nothing, the
@@ -206,6 +207,9 @@ func sayFilesHandler(ctx context.Context, params map[string]interface{}, names [
 	if strings.TrimSpace(supplied) != "" {
 		out.Text = supplied
 		out.Fallback = text.NormalizeMrkdwn(supplied)
+		if rt := text.ToRichText(supplied); len(rt.Elements) > 0 {
+			out.RichText = rt
+		}
 	}
 	if refusal := preSend(ctx, apiProvider, dest, out); refusal != nil {
 		return refusal, nil
@@ -216,20 +220,22 @@ func sayFilesHandler(ctx context.Context, params map[string]interface{}, names [
 		return terr.result(), nil
 	}
 
-	ids, err := shareFiles(ctx, apiProvider, api, channelID, out, to)
+	ids, blocksRejected, err := shareFiles(ctx, apiProvider, api, channelID, out, to)
 	if err != nil {
 		return fail(err.Error(), "")
 	}
 
 	ts := shareTS(ctx, api, ids[0], channelID)
-	res := sayFilesResult(dest, out, ids, ts)
+	res := sayFilesResult(dest, out, ids, ts, blocksRejected)
 	res.Guidance = strings.Join(append([]string{fmt.Sprintf("The files were %s.", sentPhrase(apiProvider))}, out.Warnings...), "\n")
 	return res, nil
 }
 
 // shareFiles uploads every file and completes them together, so they
-// arrive as one message. It returns the Slack file IDs in order.
-func shareFiles(ctx context.Context, ap *provider.ApiProvider, api *slack.Client, channelID string, out *outbound, to string) ([]string, error) {
+// arrive as one message. It returns the Slack file IDs in order, and
+// whether Slack refused the comment's rich_text block so it went out as
+// mrkdwn text.
+func shareFiles(ctx context.Context, ap *provider.ApiProvider, api *slack.Client, channelID string, out *outbound, to string) ([]string, bool, error) {
 	summaries := make([]slack.FileSummary, 0, len(out.Files))
 	unshared := func() string {
 		if len(summaries) == 0 {
@@ -244,44 +250,76 @@ func shareFiles(ctx context.Context, ap *provider.ApiProvider, api *slack.Client
 			FileSize: len(f.Data),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("Slack refused an upload slot for %s: %v. %s", f.Name, err, unshared())
+			return nil, false, fmt.Errorf("Slack refused an upload slot for %s: %v. %s", f.Name, err, unshared())
 		}
 		if err := ap.CheckUploadURL(u.UploadURL); err != nil {
 			log.Printf("say files: refused upload URL for %s: %v", f.Name, err)
-			return nil, fmt.Errorf("Slack returned an upload address for %s that is not a Slack host (%v); no bytes were sent to it. %s", f.Name, err, unshared())
+			return nil, false, fmt.Errorf("Slack returned an upload address for %s that is not a Slack host (%v); no bytes were sent to it. %s", f.Name, err, unshared())
 		}
 		if err := api.UploadToURL(ctx, slack.UploadToURLParameters{
 			UploadURL: u.UploadURL,
 			Reader:    bytes.NewReader(f.Data),
 			Filename:  f.Name,
 		}); err != nil {
-			return nil, fmt.Errorf("Uploading %s failed: %v. %s", f.Name, err, unshared())
+			return nil, false, fmt.Errorf("Uploading %s failed: %v. %s", f.Name, err, unshared())
 		}
 		summaries = append(summaries, slack.FileSummary{ID: u.FileID, Title: f.Name})
 	}
 
-	// initial_comment, not blocks: slack-go sends blocks only without an
-	// initial_comment, so a rich_text comment would carry no mrkdwn
-	// fallback, and whether completeUploadExternal honours blocks from a
-	// session token is unverified (#92 step 0).
-	if _, err := api.CompleteUploadExternalContext(ctx, slack.CompleteUploadExternalParameters{
-		Files:           summaries,
-		Channel:         channelID,
-		InitialComment:  out.Fallback,
-		ThreadTimestamp: out.Thread,
-	}); err != nil {
+	// The comment goes as a rich_text block, as Slack's composer shares a
+	// file with a typed message, so lists arrive as lists; mrkdwn has no
+	// list syntax. completeUploadExternal ignores blocks beside an
+	// initial_comment (slack-go sends one or the other), so the block goes
+	// alone and Slack derives the message text from it, bullets as "•".
+	// Probed with a session token on 2026-10-07: the block is stored as
+	// sent.
+	complete := func(withBlocks bool) error {
+		p := slack.CompleteUploadExternalParameters{
+			Files:           summaries,
+			Channel:         channelID,
+			ThreadTimestamp: out.Thread,
+		}
+		if withBlocks {
+			p.Blocks = slack.Blocks{BlockSet: []slack.Block{out.RichText}}
+		} else {
+			p.InitialComment = out.Fallback
+		}
+		_, err := api.CompleteUploadExternalContext(ctx, p)
+		return err
+	}
+
+	// A block validation error means Slack shared nothing (probed: an
+	// invalid_blocks completion leaves the file unshared), so one retry with
+	// the mrkdwn comment cannot share the files twice.
+	blocksRejected := false
+	var err error
+	if out.RichText != nil {
+		err = complete(true)
+		if rejected, detail := blocksRejection(err); rejected {
+			log.Printf("say files: Slack rejected the comment's rich_text block (%v %v); retrying once as mrkdwn", err, detail)
+			blocksRejected = true
+			err = complete(false)
+		}
+	} else {
+		err = complete(false)
+	}
+	if err != nil {
+		first := ""
+		if blocksRejected {
+			first = "Slack rejected the comment's rich-text block, and the mrkdwn retry failed too. "
+		}
 		var se slack.SlackErrorResponse
 		if errors.As(err, &se) {
-			return nil, fmt.Errorf("Uploaded %d file(s), but Slack refused to share them: %v. Nothing was posted; the uploads were not shared.", len(summaries), err)
+			return nil, false, fmt.Errorf("%sUploaded %d file(s), but Slack refused to share them: %v. Nothing was posted; the uploads were not shared.", first, len(summaries), err)
 		}
-		return nil, fmt.Errorf("Uploaded %d file(s), but the request to share them failed (%v), so whether the message was posted is unknown. Check with messages target='%s' since='5m' before retrying.", len(summaries), err, to)
+		return nil, false, fmt.Errorf("%sUploaded %d file(s), but the request to share them failed (%v), so whether the message was posted is unknown. Check with messages target='%s' since='5m' before retrying.", first, len(summaries), err, to)
 	}
 
 	ids := make([]string, len(summaries))
 	for i, s := range summaries {
 		ids[i] = s.ID
 	}
-	return ids, nil
+	return ids, blocksRejected, nil
 }
 
 // shareTS polls files.info for the ts of the message that shared fileID in
@@ -313,7 +351,7 @@ func shareTS(ctx context.Context, api *slack.Client, fileID, channelID string) s
 	return ""
 }
 
-func sayFilesResult(dest *resolvedDestination, out *outbound, ids []string, ts string) *FeatureResult {
+func sayFilesResult(dest *resolvedDestination, out *outbound, ids []string, ts string, blocksRejected bool) *FeatureResult {
 	listed := make([]map[string]interface{}, len(out.Files))
 	for i, f := range out.Files {
 		listed[i] = map[string]interface{}{
@@ -329,6 +367,9 @@ func sayFilesResult(dest *resolvedDestination, out *outbound, ids []string, ts s
 		"thread":      out.Thread,
 		"comment":     out.Fallback != "",
 		"ts":          ts,
+		// blocksRejected marks a comment Slack refused as a rich_text block
+		// and took as mrkdwn text on the retry.
+		"blocksRejected": blocksRejected,
 	}
 
 	to := dest.Typed
