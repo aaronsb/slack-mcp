@@ -156,7 +156,9 @@ complete walk confirms it. No envelope change is needed.
 ### Risks
 
 - Visibility of the queries to the person or an admin, such as entries in the
-  switcher's recent searches, was not established by the probe.
+  switcher's recent searches, was not established by the probe. The operator
+  accepts a visible trace: a lookup the person's own client could show is
+  within the quiet posture.
 - `sort=score` is not documented. If Slack drops it, the exact-name scan still
   finds the hit when it falls within the first 100, and misses it beyond;
   the answer then says only the top page was checked.
