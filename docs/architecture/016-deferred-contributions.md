@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 Amends ADR-009: the surface stays at its registered eleven tools. Extends
 ADR-003's endpoint findings with the drafts API, and ADR-013's binding with
