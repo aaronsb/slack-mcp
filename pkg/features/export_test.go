@@ -97,3 +97,12 @@ func SetPutWriteForTest(fn func(w io.Writer, b []byte) (int, error)) func() {
 	putWrite = fn
 	return func() { putWrite = prev }
 }
+
+// SetScheduleClockForTest pins scheduled send's clock and the server's
+// local zone. It returns a restore func.
+func SetScheduleClockForTest(now time.Time, system *time.Location) func() {
+	prevNow, prevZone := scheduleNow, systemZone
+	scheduleNow = func() time.Time { return now }
+	systemZone = func() *time.Location { return system }
+	return func() { scheduleNow, systemZone = prevNow, prevZone }
+}

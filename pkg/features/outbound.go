@@ -2,6 +2,7 @@ package features
 
 import (
 	"context"
+	"time"
 
 	"github.com/aaronsb/slack-mcp/pkg/provider"
 	"github.com/slack-go/slack"
@@ -61,6 +62,9 @@ type outbound struct {
 	Emoji     string
 	Remove    bool
 	MessageTs string
+	// At is a scheduled send's time (ADR-016), zero for an immediate one.
+	// It is part of what an approval binds to.
+	At time.Time
 
 	// Warnings are what preSend let through but the result must say: in
 	// the soft posture, a file moved between conversations.
