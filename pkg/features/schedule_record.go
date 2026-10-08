@@ -28,6 +28,9 @@ type scheduledRecord struct {
 	LastUpdatedTS string `json:"last_updated_ts"`
 	DateScheduled int64  `json:"date_scheduled"`
 	BlocksSHA     string `json:"blocks_sha"`
+	// Recorded is when the record was written, so a prune working from a
+	// list fetched earlier leaves it alone.
+	Recorded int64 `json:"recorded"`
 }
 
 var scheduledMu sync.Mutex
@@ -64,9 +67,20 @@ func saveScheduled(path string, recs map[string]scheduledRecord) {
 		err = os.MkdirAll(filepath.Dir(path), 0o700)
 	}
 	if err == nil {
-		tmp := path + ".tmp"
-		if err = os.WriteFile(tmp, raw, 0o600); err == nil {
-			err = os.Rename(tmp, path)
+		// A unique temp file per write: two server processes never share
+		// one, and CreateTemp makes it 0600.
+		var tmp *os.File
+		if tmp, err = os.CreateTemp(filepath.Dir(path), scheduledFile+".*"); err == nil {
+			_, err = tmp.Write(raw)
+			if cerr := tmp.Close(); err == nil {
+				err = cerr
+			}
+			if err == nil {
+				err = os.Rename(tmp.Name(), path)
+			}
+			if err != nil {
+				os.Remove(tmp.Name())
+			}
 		}
 	}
 	if err != nil {
@@ -96,7 +110,7 @@ func recordScheduled(ap *provider.ApiProvider, d provider.Draft) {
 	scheduledMu.Lock()
 	defer scheduledMu.Unlock()
 	recs := loadScheduled(path)
-	recs[d.ID] = scheduledRecord{LastUpdatedTS: d.LastUpdatedTS, DateScheduled: d.DateScheduled, BlocksSHA: blocksSHA(d.Blocks)}
+	recs[d.ID] = scheduledRecord{LastUpdatedTS: d.LastUpdatedTS, DateScheduled: d.DateScheduled, BlocksSHA: blocksSHA(d.Blocks), Recorded: time.Now().UnixNano()}
 	saveScheduled(path, recs)
 }
 
@@ -111,8 +125,9 @@ func scheduledRecords(ap *provider.ApiProvider) map[string]scheduledRecord {
 }
 
 // pruneScheduled drops records whose drafts are no longer pending. Call it
-// only with a complete list.
-func pruneScheduled(ap *provider.ApiProvider, active []provider.Draft) {
+// only with a complete list; listedAt is when the list was requested, and a
+// record written after it is kept.
+func pruneScheduled(ap *provider.ApiProvider, active []provider.Draft, listedAt time.Time) {
 	path := scheduledPath(ap)
 	if path == "" {
 		return
@@ -128,7 +143,7 @@ func pruneScheduled(ap *provider.ApiProvider, active []provider.Draft) {
 	recs := loadScheduled(path)
 	changed := false
 	for id := range recs {
-		if !live[id] {
+		if !live[id] && recs[id].Recorded < listedAt.UnixNano() {
 			delete(recs, id)
 			changed = true
 		}

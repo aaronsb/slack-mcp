@@ -34,6 +34,9 @@ type draftsFake struct {
 	// createErr and deleteErrs make the next calls fail with Slack errors.
 	createErr  string
 	deleteErrs []string
+	// onDelete runs inside each delete, under the lock: a test changes
+	// what the next list returns, as Slack would after an edit or a send.
+	onDelete func(d *draftsFake)
 }
 
 func (d *draftsFake) install(srv *slacktest.Server) {
@@ -64,6 +67,9 @@ func (d *draftsFake) install(srv *slacktest.Server) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		d.deletes = append(d.deletes, r.PostForm)
+		if d.onDelete != nil {
+			d.onDelete(d)
+		}
 		if len(d.deleteErrs) > 0 {
 			code := d.deleteErrs[0]
 			d.deleteErrs = d.deleteErrs[1:]
@@ -199,6 +205,10 @@ func TestSayAtRefusalsSendNothing(t *testing.T) {
 		{"files", map[string]any{"to": "#eng", "text": "x", "files": []any{"a.pdf"}, "at": "2027-01-15T14:00:00Z"}, "at can't be combined with files"},
 		{"cancel with text", map[string]any{"cancel": handle.Scheduled("C1", "Dr1"), "text": "x"}, "cancel= stands alone"},
 		{"no destination", map[string]any{"text": "x", "at": "2027-01-15T14:00:00Z"}, "say needs to="},
+		// A blank at= is refused, never read as "send now".
+		{"blank at", map[string]any{"to": "#eng", "text": "x", "at": ""}, "at= is empty"},
+		{"spaces at", map[string]any{"to": "#eng", "text": "x", "at": "   "}, "at= is empty"},
+		{"DST gap", map[string]any{"to": "#eng", "text": "x", "at": "2027-03-14T02:30"}, "daylight-saving change"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -317,25 +327,73 @@ func TestMessagesScheduledReportsAnEditMadeInSlack(t *testing.T) {
 	}
 }
 
-func TestSayCancelDeletesWithPaddedTimestampAndOneRetry(t *testing.T) {
+func TestSayCancelDeletesWithThePaddedTimestamp(t *testing.T) {
+	_, ap, d := scheduleSetup(t)
+	d.list = []map[string]any{draftItem("Dr1", "C1", "", scheduleNow.Add(time.Hour).Unix(), "hi")}
+
+	out := runTool(t, features.Say, ap, map[string]any{"cancel": handle.Scheduled("C1", "Dr1")})
+	if len(d.deletes) != 1 || d.deletes[0].Get("draft_id") != "Dr1" {
+		t.Fatalf("deletes: %v\n%s", d.deletes, out)
+	}
+	if got := d.deletes[0].Get("client_last_updated_ts"); got != "1700000000.1234560" {
+		t.Fatalf("ts %q", got)
+	}
+	wantIn(t, out, "Cancelled the message scheduled for", "to #eng", "> hi")
+}
+
+// A conflict means the draft changed since it was listed. Cancel lists
+// again and retries once with the fresh timestamp while it is still
+// pending.
+func TestSayCancelRetriesAConflictWithTheFreshTimestamp(t *testing.T) {
 	_, ap, d := scheduleSetup(t)
 	d.list = []map[string]any{draftItem("Dr1", "C1", "", scheduleNow.Add(time.Hour).Unix(), "hi")}
 	d.deleteErrs = []string{"draft_has_conflict"}
+	d.onDelete = func(d *draftsFake) {
+		edited := draftItem("Dr1", "C1", "", scheduleNow.Add(time.Hour).Unix(), "hi, edited")
+		edited["last_updated_ts"] = "1700000500.5"
+		d.list = []map[string]any{edited}
+		d.onDelete = nil
+	}
 
 	out := runTool(t, features.Say, ap, map[string]any{"cancel": handle.Scheduled("C1", "Dr1")})
 	if len(d.deletes) != 2 {
-		t.Fatalf("drafts.delete calls: %d\n%s", len(d.deletes), out)
+		t.Fatalf("deletes: %d\n%s", len(d.deletes), out)
 	}
-	if got := d.deletes[0].Get("client_last_updated_ts"); got != "1700000000.1234560" {
-		t.Fatalf("first attempt ts %q", got)
+	if got := d.deletes[1].Get("client_last_updated_ts"); got != "1700000500.5000000" {
+		t.Fatalf("retry ts %q is not the re-listed one", got)
 	}
-	if d.deletes[0].Get("draft_id") != "Dr1" || d.deletes[1].Get("draft_id") != "Dr1" {
-		t.Fatalf("deleted the wrong draft: %v", d.deletes)
+	wantIn(t, out, "Cancelled", "hi, edited")
+}
+
+// The draft fired between the list and the delete: the conflict's re-list
+// finds it sent, and nothing more is deleted.
+func TestSayCancelNeverDeletesADraftThatFiredMeanwhile(t *testing.T) {
+	_, ap, d := scheduleSetup(t)
+	d.list = []map[string]any{draftItem("Dr1", "C1", "", scheduleNow.Add(time.Hour).Unix(), "hi")}
+	d.deleteErrs = []string{"draft_has_conflict"}
+	d.onDelete = func(d *draftsFake) {
+		sent := draftItem("Dr1", "C1", "", scheduleNow.Add(time.Hour).Unix(), "hi")
+		sent["is_sent"] = true
+		d.list = []map[string]any{sent}
 	}
-	if second := d.deletes[1].Get("client_last_updated_ts"); second <= "1700000000.1234560" || len(second) != len("1700000000.1234560") {
-		t.Fatalf("retry ts %q is not a later 7-decimal time", second)
+
+	out := runTool(t, features.Say, ap, map[string]any{"cancel": handle.Scheduled("C1", "Dr1")})
+	if len(d.deletes) != 1 {
+		t.Fatalf("deleted a sent draft: %d deletes", len(d.deletes))
 	}
-	wantIn(t, out, "Cancelled the message scheduled for", "to #eng", "> hi")
+	wantIn(t, out, "no longer pending", "Nothing was cancelled")
+}
+
+// Only draft_has_conflict is retried; any other refusal is reported once.
+func TestSayCancelReportsOtherRefusalsWithoutRetrying(t *testing.T) {
+	_, ap, d := scheduleSetup(t)
+	d.list = []map[string]any{draftItem("Dr1", "C1", "", scheduleNow.Add(time.Hour).Unix(), "hi")}
+	d.deleteErrs = []string{"invalid_draft"}
+	out := runTool(t, features.Say, ap, map[string]any{"cancel": handle.Scheduled("C1", "Dr1")})
+	if len(d.deletes) != 1 {
+		t.Fatalf("retried a non-conflict: %d deletes", len(d.deletes))
+	}
+	wantIn(t, out, "invalid_draft", "still scheduled")
 }
 
 // Cancel touches only a pending scheduled draft: a typed draft, a sent
@@ -346,7 +404,10 @@ func TestSayCancelRefusesAnythingButAPendingScheduledDraft(t *testing.T) {
 	sent["is_sent"] = true
 	d.list = []map[string]any{draftItem("Dr3", "C1", "", 0, "typed"), sent}
 
-	for _, h := range []string{handle.Scheduled("C1", "Dr3"), handle.Scheduled("C1", "Dr4"), handle.Scheduled("C1", "Dr9"), handle.Scheduled("C2", "Dr3"), handle.Message("C1", "1.1"), "nonsense"} {
+	// Dr5 is pending in C1: a handle naming it in C2 is refused.
+	d.list = append(d.list, draftItem("Dr5", "C1", "", scheduleNow.Add(time.Hour).Unix(), "pending"))
+
+	for _, h := range []string{handle.Scheduled("C1", "Dr3"), handle.Scheduled("C1", "Dr4"), handle.Scheduled("C1", "Dr9"), handle.Scheduled("C2", "Dr5"), handle.Message("C1", "1.1"), "nonsense"} {
 		out := runTool(t, features.Say, ap, map[string]any{"cancel": h})
 		wantIn(t, out, "Nothing was cancelled")
 	}
@@ -404,5 +465,53 @@ func TestScheduledSendIsScannedBeforeTheDraft(t *testing.T) {
 	res := f.say(t, context.Background(), map[string]any{"to": "#eng", "text": "token " + fakeToken(), "at": at})
 	if res.Success || len(d.creates) != 0 {
 		t.Fatalf("a secret was scheduled: %+v creates=%d", res, len(d.creates))
+	}
+}
+
+// A person target that does not resolve returns the candidates; it never
+// reads as "nothing scheduled".
+func TestMessagesScheduledPersonMissReturnsCandidates(t *testing.T) {
+	srv, ap, d := scheduleSetup(t)
+	d.list = []map[string]any{draftItem("Dr1", "C1", "", scheduleNow.Add(time.Hour).Unix(), "hi")}
+	out := runTool(t, features.Messages, ap, map[string]any{"scheduled": true, "target": "@zzzz"})
+	wantIn(t, out, "`messages scheduled=true target=@zzzz`", "Could not resolve")
+	if strings.Contains(out, "0 scheduled") {
+		t.Fatalf("a miss read as an empty list:\n%s", out)
+	}
+	noWrites(t, srv)
+}
+
+// The outbound steps run before a DM is opened: a blocked scheduled send
+// to a person with no DM opens nothing and creates nothing.
+func TestScheduledSendToAPersonOpensNothingWhenBlocked(t *testing.T) {
+	srv, ap, _ := scheduleSetup(t)
+	out := runTool(t, features.Say, ap, map[string]any{"to": "@schen", "text": "token " + fakeToken(), "at": "2027-01-15T14:00:00Z"})
+	if strings.Contains(out, "Scheduled for") {
+		t.Fatalf("a secret was scheduled:\n%s", out)
+	}
+	noWrites(t, srv)
+}
+
+// A prune works only from a complete list: when Slack cuts the list, a
+// record whose draft is missing from it is kept.
+func TestRecordSurvivesACutList(t *testing.T) {
+	_, ap, d := scheduleSetup(t)
+	runTool(t, features.Say, ap, map[string]any{"to": "#eng", "text": "hi", "at": "2027-01-15T14:00:00Z"})
+	var dests, blocks any
+	_ = json.Unmarshal([]byte(d.creates[0].Get("destinations")), &dests)
+	_ = json.Unmarshal([]byte(d.creates[0].Get("blocks")), &blocks)
+
+	d.list, d.hasMore = nil, true
+	runTool(t, features.Messages, ap, map[string]any{"scheduled": true})
+
+	d.list = []map[string]any{{
+		"id": "Dr0NEW", "date_scheduled": time.Date(2027, 1, 15, 14, 0, 0, 0, time.UTC).Unix(),
+		"last_updated_ts": "1786752114.508819", "destinations": dests, "blocks": blocks,
+	}}
+	d.hasMore = false
+	out := runTool(t, features.Messages, ap, map[string]any{"scheduled": true})
+	wantIn(t, out, "scheduled here")
+	if strings.Contains(out, "scheduled from Slack") {
+		t.Fatalf("the record was pruned from a cut list:\n%s", out)
 	}
 }

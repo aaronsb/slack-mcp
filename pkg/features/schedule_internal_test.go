@@ -154,3 +154,17 @@ func TestOriginOfReportsEditsWithoutBlocking(t *testing.T) {
 		t.Fatalf("unknown draft: %q", got)
 	}
 }
+
+// A wall-clock time a DST change skips or repeats is refused, not guessed.
+func TestParseAtRefusesDSTGapsAndRepeats(t *testing.T) {
+	now := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+	denver := mustZone(t, "America/Denver")
+	for _, in := range []string{"2027-03-14T02:30", "2027-11-07T01:30"} {
+		if _, err := parseAt(in, now, denver, denver); err == nil || !strings.Contains(err.Error(), "daylight-saving") {
+			t.Fatalf("%s: %v", in, err)
+		}
+	}
+	if _, err := parseAt("2027-03-14T03:30", now, denver, denver); err != nil {
+		t.Fatalf("a normal time beside the gap refused: %v", err)
+	}
+}

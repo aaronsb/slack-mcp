@@ -206,7 +206,9 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 		echo := echoLine("messages", "scheduled=true", params, "target")
 		res, err := listScheduled(ctx, ap, target)
 		if res != nil {
-			res.RenderAs = "messages-scheduled"
+			if res.RenderAs == "" {
+				res.RenderAs = "messages-scheduled"
+			}
 			res.Echo = echo
 		}
 		return res, err
@@ -345,16 +347,22 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 
 	broadcast, _ := params["broadcast"].(bool)
 	thread, _ := params["thread"].(string)
-	at := atString(params["at"])
+	// at= is decided by presence: a blank value must be refused by the
+	// parser, never fall through to an immediate post.
+	rawAt, hasAt := params["at"]
+	hasAt = hasAt && rawAt != nil
+	at := atString(rawAt)
 
 	if cancel, _ := params["cancel"].(string); cancel != "" {
 		_, hasFiles := params["files"]
-		if text != "" || emoji != "" || at != "" || (hasFiles && params["files"] != nil) {
+		if text != "" || emoji != "" || hasAt || (hasFiles && params["files"] != nil) {
 			return &FeatureResult{Success: false, Message: "cancel= stands alone: it withdraws a scheduled message and sends nothing, so it can't be combined with text, files, emoji, or at. Nothing was done."}, nil
 		}
 		res, err := cancelScheduled(ctx, ap, cancel)
 		if res != nil {
-			res.RenderAs = "say-cancelled"
+			if res.RenderAs == "" {
+				res.RenderAs = "say-cancelled"
+			}
 			res.Echo = "say cancel='" + cancel + "'"
 		}
 		return res, err
@@ -372,7 +380,7 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 		if emoji != "" {
 			return refuse("files attaches to a message; it can't be combined with emoji (a reaction). Send the reaction in its own say.")
 		}
-		if at != "" {
+		if hasAt {
 			return refuse("at can't be combined with files: Slack does not attach files to a scheduled message. Schedule the text alone, or share the files now.")
 		}
 		if broadcast {
@@ -406,7 +414,7 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 		}
 	}
 
-	if at != "" {
+	if hasAt {
 		if emoji != "" {
 			return &FeatureResult{Success: false, Message: "at schedules a message; it can't be combined with emoji (a reaction). Nothing was scheduled."}, nil
 		}
@@ -422,7 +430,9 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 		}
 		res, err := scheduleSend(ctx, ap, params, when, z)
 		if res != nil {
-			res.RenderAs = "say-scheduled"
+			if res.RenderAs == "" {
+				res.RenderAs = "say-scheduled"
+			}
 			res.Echo = echo
 		}
 		return res, err

@@ -24,11 +24,6 @@ func formatSayScheduled(result *FeatureResult) string {
 	fmt.Fprintf(&b, "Scheduled for %s — to %s.\n", str(data, "when"), where)
 	fmt.Fprintf(&b, "Slack sends it at that time (%s); nothing here needs to stay running.\n", str(data, "account"))
 	fmt.Fprintf(&b, "> %s\n", str(data, "preview"))
-	if w, ok := data["warnings"].([]string); ok {
-		for _, line := range w {
-			fmt.Fprintf(&b, "⚠️ %s\n", line)
-		}
-	}
 	fmt.Fprintf(&b, "Handle: %s", str(data, "handle"))
 	b.WriteString(footer(result))
 	return b.String()

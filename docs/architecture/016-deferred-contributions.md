@@ -105,7 +105,7 @@ conversation and the draft. Draft IDs never reach the agent.
 The person can edit or reschedule a scheduled message in Slack. That content
 is the person's, and blocking it would turn the agent's tool into a check on
 the person. The server records what it scheduled (the draft's last update, its
-time, its destination, and a hash of its blocks) in the workspace's state
+time, and a hash of its blocks; no message content) in the workspace's state
 directory. The list compares each pending draft against that record and says
 which of three it is: scheduled here and unchanged, scheduled here and edited
 in Slack since (naming whether the time or the content changed), or scheduled
@@ -160,6 +160,10 @@ always page; where the source cannot page, the output states the gap instead.
   into the draft later is never scanned.
 - The edit record is local. A draft scheduled through this server from
   another machine lists as scheduled from Slack.
+- The strike lock stops new sends; it does not reach drafts already
+  scheduled, which Slack sends on its own. The lock also refuses
+  `say cancel=`, so while it is engaged the operator cancels from Slack's
+  Scheduled list.
 
 ### Risks
 

@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -142,18 +141,12 @@ func (c *InternalClient) ListDrafts(ctx context.Context) ([]Draft, bool, error) 
 	return env.Drafts, env.HasMore, nil
 }
 
-// DeleteDraft deletes a draft given the last_updated_ts it was listed with.
-// drafts.delete wants that value padded to seven decimals; on
-// draft_has_conflict it is retried exactly once with the current time.
+// DeleteDraft deletes a draft given the last_updated_ts it was listed with,
+// padded to the seven decimals drafts.delete wants. It makes one attempt:
+// draft_has_conflict means the draft changed since it was listed, and the
+// caller decides whether to list again and retry.
 func (c *InternalClient) DeleteDraft(ctx context.Context, id, lastUpdatedTS string) error {
-	del := func(ts string) error {
-		_, err := c.drafts(ctx, "drafts.delete", url.Values{"draft_id": {id}, "client_last_updated_ts": {ts}})
-		return err
-	}
-	err := del(PadDraftTS(lastUpdatedTS))
-	if de := (*DraftError)(nil); errors.As(err, &de) && de.Code == "draft_has_conflict" {
-		return del(nowDraftTS(time.Now()))
-	}
+	_, err := c.drafts(ctx, "drafts.delete", url.Values{"draft_id": {id}, "client_last_updated_ts": {PadDraftTS(lastUpdatedTS)}})
 	return err
 }
 
@@ -165,8 +158,4 @@ func PadDraftTS(ts string) string {
 		frac += "0"
 	}
 	return whole + "." + frac
-}
-
-func nowDraftTS(t time.Time) string {
-	return fmt.Sprintf("%d.%07d", t.Unix(), t.Nanosecond()/100)
 }

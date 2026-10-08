@@ -831,9 +831,10 @@ func contentHash(out *outbound) string {
 		parts = append(parts, []byte(f.Name), f.Data)
 	}
 	// A scheduled send binds its time too; an immediate send's hash is
-	// unchanged by the field's existence.
+	// unchanged by the field's existence. The NUL marker keeps the pair from
+	// matching a file named "at" holding the same digits.
 	if !out.At.IsZero() {
-		parts = append(parts, []byte("at"), []byte(strconv.FormatInt(out.At.Unix(), 10)))
+		parts = append(parts, []byte("\x00at"), []byte(strconv.FormatInt(out.At.Unix(), 10)))
 	}
 	return safety.HashContent(parts...)
 }
