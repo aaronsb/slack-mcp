@@ -150,6 +150,13 @@ func readRef(ctx context.Context, apiProvider *provider.ApiProvider, api *slack.
 		msgs := resp.Messages
 		reverse(msgs)
 		return messagesResult(apiProvider, where, "conversation", ref.Channel, msgs, named, resp.HasMore)
+
+	case handle.KindScheduled:
+		return &FeatureResult{
+			Success:  false,
+			Message:  fmt.Sprintf("That handle is a message scheduled for %s; it has not been sent, so there is nothing to read there yet.", where),
+			Guidance: fmt.Sprintf("See what is scheduled: messages target='%s' scheduled=true", where),
+		}, nil
 	}
 
 	return &FeatureResult{Success: false, Message: "Unrecognised handle."}, nil

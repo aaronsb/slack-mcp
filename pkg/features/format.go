@@ -43,6 +43,12 @@ func formatResultBody(toolName string, result *FeatureResult) string {
 		return formatSendMessage(result)
 	case "say-files":
 		return formatSayFiles(result)
+	case "say-scheduled":
+		return formatSayScheduled(result)
+	case "say-cancelled":
+		return formatSayCancelled(result)
+	case "messages-scheduled":
+		return formatMessagesScheduled(result)
 	case "mark-read":
 		return formatMarkRead(result)
 	case "react":

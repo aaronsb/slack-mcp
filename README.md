@@ -135,10 +135,10 @@ The deployment is `local` unless you declare it. The server does not detect it: 
 | Tool | Kind | What it does |
 |------|------|-------------|
 | `inbox` | noun | What needs you: `view='new'` (since your last dismiss), `'unreads'`, `'mentions'` |
-| `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` raw Slack search syntax (passed as written) plus resolved filters `in`, `from`, `after`, `before`, `has` (link, pin, :emoji:), `thread` |
+| `messages` | noun | Conversation content: `target=` reads in full, `+around=` context, `+since=` time window, `query=` raw Slack search syntax (passed as written) plus resolved filters `in`, `from`, `after`, `before`, `has` (link, pin, :emoji:), `thread`; `scheduled=true` lists your pending scheduled messages, soonest first, and never your unsent composer drafts (ADR-016) |
 | `estate` | noun | Workspace shape and relationships: `view='about'\|'families'\|'person'\|'initiatives'\|'convergence'\|'people'\|'channels'`; `about`/`person` take `render='graph'` to also write a static HTML graph page (not in `batch`) |
 | `batch` | executor | Run a held plan of reads in one call: `commands=[{tool, params}...]`; playbooks via `save=`/`run=`/`list=`/`delete=` |
-| `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), files from the exchange directory (`files=['report.pdf']`, bare names, at most 10, shared as one message with `text` as the comment), or an emoji reaction; scanned for secrets and gated before anything is sent (ADR-013) |
+| `say` | verb | Contribute content (Slack-visible): a message (a thread reply can also go to the channel with `broadcast=true`), files from the exchange directory (`files=['report.pdf']`, bare names, at most 10, shared as one message with `text` as the comment), or an emoji reaction; `at=` schedules a message for Slack to send later (2 minutes to 120 days; a time with no offset is read in your Slack profile zone and refused if this machine's zone disagrees) and `cancel=<handle>` withdraws one (ADR-016); scanned for secrets and gated before anything is sent or scheduled, with the send time part of what an approval covers (ADR-013) |
 | `dismiss` | verb | Mark inbox items handled — private watermark, invisible to Slack |
 | `mark-read` | verb | Fire read receipts — the one visibly-public read signal; refused at a quarantined destination, and never opens a DM |
 | `auth` | verb | Interactive token setup (localhost only) |

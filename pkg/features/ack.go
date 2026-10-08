@@ -136,6 +136,12 @@ func ackHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 				"handle": h,
 				"reason": "a whole conversation; read it before dismissing",
 			})
+
+		case handle.KindScheduled:
+			rejected = append(rejected, map[string]interface{}{
+				"handle": h,
+				"reason": "a scheduled message, not an inbox item; to withdraw it use say cancel=",
+			})
 		}
 	}
 

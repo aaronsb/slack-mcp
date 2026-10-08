@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -829,6 +830,12 @@ func contentHash(out *outbound) string {
 	for _, f := range out.Files {
 		parts = append(parts, []byte(f.Name), f.Data)
 	}
+	// A scheduled send binds its time too; an immediate send's hash is
+	// unchanged by the field's existence. The NUL marker keeps the pair from
+	// matching a file named "at" holding the same digits.
+	if !out.At.IsZero() {
+		parts = append(parts, []byte("\x00at"), []byte(strconv.FormatInt(out.At.Unix(), 10)))
+	}
 	return safety.HashContent(parts...)
 }
 
@@ -847,6 +854,8 @@ func summary(gd *gateDest, out *outbound, from []string) string {
 		if len(from) > 0 {
 			what += " from " + strings.Join(from, ", ")
 		}
+	case !out.At.IsZero():
+		what = "message scheduled for " + out.At.UTC().Format("2006-01-02 15:04 UTC")
 	default:
 		what = "message"
 	}
@@ -962,6 +971,9 @@ func gate(ctx context.Context, ap *provider.ApiProvider, ws *safety.Workspace, g
 	}
 	if out.Emoji != "" {
 		req.Text = reactionText(out)
+	}
+	if !out.At.IsZero() {
+		req.Text = "[scheduled for " + out.At.UTC().Format(time.RFC3339) + "] " + out.Text
 	}
 	for _, f := range out.Files {
 		req.FileNames = append(req.FileNames, f.Name)

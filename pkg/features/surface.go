@@ -120,7 +120,7 @@ func inboxHandler(ctx context.Context, params map[string]interface{}) (*FeatureR
 
 var Messages = &Feature{
 	Name:        "messages",
-	Description: "Conversation content, addressed four ways (precedence: query and filters beat target-less modes and refuse target; around beats since): target alone reads it in full (a handle, '#channel', '@person', or a description); target+around fetches context around a timestamp; target+since renders a time window with triage; query searches (raw Slack syntax passes through as written; in=, from=, after=, before=, has=, thread= are resolved filters composed onto it). Read-only; never marks anything read.",
+	Description: "Conversation content, addressed four ways, plus scheduled=true for what you have scheduled to send (precedence: query and filters beat target-less modes and refuse target; around beats since): target alone reads it in full (a handle, '#channel', '@person', or a description); target+around fetches context around a timestamp; target+since renders a time window with triage; query searches (raw Slack syntax passes through as written; in=, from=, after=, before=, has=, thread= are resolved filters composed onto it). Read-only; never marks anything read.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -179,6 +179,10 @@ var Messages = &Feature{
 				"type":        "string",
 				"description": "search: how far back to search (default 1w); refused together with after=, before=, or a date operator (after:, before:, on:, during:) in query=",
 			},
+			"scheduled": map[string]interface{}{
+				"type":        "boolean",
+				"description": "List your pending scheduled messages, soonest first, with handles for say cancel=; target= narrows to one conversation. Your own unsent composer drafts are never shown.",
+			},
 		},
 		"required": []string{},
 	},
@@ -190,6 +194,25 @@ func messagesHandler(ctx context.Context, params map[string]interface{}) (*Featu
 	query, _ := params["query"].(string)
 	around, _ := params["around"].(string)
 	since, _ := params["since"].(string)
+
+	if scheduled, _ := params["scheduled"].(bool); scheduled {
+		if query != "" || hasFilter(params) || around != "" || since != "" {
+			return &FeatureResult{
+				Success: false,
+				Message: "scheduled=true lists scheduled messages; it takes only target= to narrow to one conversation, not query, filters, around, or since.",
+			}, nil
+		}
+		ap, _ := params["_provider"].(*provider.ApiProvider)
+		echo := echoLine("messages", "scheduled=true", params, "target")
+		res, err := listScheduled(ctx, ap, target)
+		if res != nil {
+			if res.RenderAs == "" {
+				res.RenderAs = "messages-scheduled"
+			}
+			res.Echo = echo
+		}
+		return res, err
+	}
 
 	switch {
 	case query != "" || hasFilter(params):
@@ -259,7 +282,7 @@ func conversationOf(target string) string {
 
 var Say = &Feature{
 	Name:        "say",
-	Description: "Contribute content, Slack-visible: text posts a message (to a channel, DM, or thread — a thread reply can also go to the channel); files attaches up to 10 files from the exchange directory to one message, with text as its comment; emoji+messageTs adds or removes a reaction — a reaction is a small say. This is a write; everything it posts is attributed to your user.",
+	Description: "Contribute content, Slack-visible: text posts a message (to a channel, DM, or thread — a thread reply can also go to the channel); text+at schedules it for Slack to send later, and cancel withdraws a scheduled one; files attaches up to 10 files from the exchange directory to one message, with text as its comment; emoji+messageTs adds or removes a reaction — a reaction is a small say. This is a write; everything it posts is attributed to your user.",
 	Schema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -298,8 +321,16 @@ var Say = &Feature{
 				"description": "Reaction mode: remove instead of add",
 				"default":     false,
 			},
+			"at": map[string]interface{}{
+				"type":        "string",
+				"description": "With text: schedule the message for Slack to send at this time instead of now, 2 minutes to 120 days out. RFC 3339 with an offset ('2026-10-02T09:00:00-06:00'), a date and time with no offset (read in your Slack profile zone; refused if this machine's zone disagrees), or Unix seconds. Not with files or emoji.",
+			},
+			"cancel": map[string]interface{}{
+				"type":        "string",
+				"description": "Withdraw a scheduled message: its handle from say at= or messages scheduled=true. On its own; to is not needed.",
+			},
 		},
-		"required": []string{"to"},
+		"required": []string{},
 	},
 	Handler: sayHandler,
 }
@@ -316,6 +347,29 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 
 	broadcast, _ := params["broadcast"].(bool)
 	thread, _ := params["thread"].(string)
+	// at= is decided by presence: a blank value must be refused by the
+	// parser, never fall through to an immediate post.
+	rawAt, hasAt := params["at"]
+	hasAt = hasAt && rawAt != nil
+	at := atString(rawAt)
+
+	if cancel, _ := params["cancel"].(string); cancel != "" {
+		_, hasFiles := params["files"]
+		if text != "" || emoji != "" || hasAt || (hasFiles && params["files"] != nil) {
+			return &FeatureResult{Success: false, Message: "cancel= stands alone: it withdraws a scheduled message and sends nothing, so it can't be combined with text, files, emoji, or at. Nothing was done."}, nil
+		}
+		res, err := cancelScheduled(ctx, ap, cancel)
+		if res != nil {
+			if res.RenderAs == "" {
+				res.RenderAs = "say-cancelled"
+			}
+			res.Echo = "say cancel='" + cancel + "'"
+		}
+		return res, err
+	}
+	if to == "" {
+		return &FeatureResult{Success: false, Message: "say needs to='#channel' or to='@handle' (or cancel='<handle>' to withdraw a scheduled message)."}, nil
+	}
 
 	// files= is checked first and whole: every refusal here and in the
 	// upload path's local checks happens before any Slack call.
@@ -325,6 +379,9 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 		}
 		if emoji != "" {
 			return refuse("files attaches to a message; it can't be combined with emoji (a reaction). Send the reaction in its own say.")
+		}
+		if hasAt {
+			return refuse("at can't be combined with files: Slack does not attach files to a scheduled message. Schedule the text alone, or share the files now.")
 		}
 		if broadcast {
 			return refuse("broadcast can't be combined with files: Slack's file share has no 'also send to the channel'. Share the files into the thread without broadcast, or broadcast a text reply on its own.")
@@ -355,6 +412,30 @@ func sayHandler(ctx context.Context, params map[string]interface{}) (*FeatureRes
 				Message: "broadcast needs thread='<ts>': it sends a thread reply to the channel too. A top-level message already reaches the channel.",
 			}, nil
 		}
+	}
+
+	if hasAt {
+		if emoji != "" {
+			return &FeatureResult{Success: false, Message: "at schedules a message; it can't be combined with emoji (a reaction). Nothing was scheduled."}, nil
+		}
+		if text == "" {
+			return &FeatureResult{Success: false, Message: "at needs text='...': the message to schedule. Nothing was scheduled."}, nil
+		}
+		params["at"] = at
+		echo := echoLine("say", "to='"+to+"'", params, "at", "thread", "broadcast")
+		z := zones{profile: profileZone(ctx, ap), system: systemZone()}
+		when, err := parseAt(at, scheduleNow(), z.profile, z.system)
+		if err != nil {
+			return &FeatureResult{Success: false, Message: err.Error() + " Nothing was scheduled.", Echo: echo}, nil
+		}
+		res, err := scheduleSend(ctx, ap, params, when, z)
+		if res != nil {
+			if res.RenderAs == "" {
+				res.RenderAs = "say-scheduled"
+			}
+			res.Echo = echo
+		}
+		return res, err
 	}
 
 	switch {

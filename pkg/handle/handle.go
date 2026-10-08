@@ -29,6 +29,9 @@ const (
 	KindThread Kind = "t"
 	// KindConversation is a whole channel, DM, or group DM.
 	KindConversation Kind = "c"
+	// KindScheduled is a pending scheduled message (ADR-016). TS holds the
+	// draft it is, which never reaches the agent any other way.
+	KindScheduled Kind = "s"
 )
 
 // Ref is what a handle decodes back to.
@@ -36,7 +39,8 @@ type Ref struct {
 	Kind Kind
 	// Channel is the Slack conversation ID.
 	Channel string
-	// TS is the message or thread-root timestamp. Empty for KindConversation.
+	// TS is the message or thread-root timestamp, or a scheduled message's
+	// draft. Empty for KindConversation.
 	TS string
 	// Through is how far the content behind this handle was shown. Thread
 	// handles carry it, because a thread's root timestamp says nothing about
@@ -83,6 +87,11 @@ func Conversation(channel string) string {
 	return Encode(Ref{Kind: KindConversation, Channel: channel})
 }
 
+// Scheduled builds a handle for a scheduled message in channel.
+func Scheduled(channel, draftID string) string {
+	return Encode(Ref{Kind: KindScheduled, Channel: channel, TS: draftID})
+}
+
 // Decode turns a handle back into a reference.
 func Decode(h string) (Ref, error) {
 	rest, ok := strings.CutPrefix(h, prefix)
@@ -105,7 +114,7 @@ func Decode(h string) (Ref, error) {
 		ref.Through = fields[3]
 	}
 	switch ref.Kind {
-	case KindMessage, KindThread:
+	case KindMessage, KindThread, KindScheduled:
 		if ref.Channel == "" || ref.TS == "" {
 			return Ref{}, ErrIncomplete
 		}

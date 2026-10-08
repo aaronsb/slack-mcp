@@ -1,6 +1,6 @@
 # Architecture Decisions
 
-Fifteen ADRs, and one argument running through the last twelve.
+Sixteen ADRs, and one argument running through the last twelve.
 
 ## What this corpus argues
 
@@ -57,6 +57,7 @@ ADR-005 supplies the resolver both depend on. ADR-006 supplies the state the res
 | [004](004-self-contained-payloads.md) | Self-Contained Payloads | Proposed | **Partial** — tag resolution on the render path (#59) and the renderMessage seam with its unresolved field (#73) shipped; unresolved tags are reported as data but still render raw in markdown |
 | [005](005-identity-resolution.md) | Identity Resolution | Proposed | **Partial** — the resolution ladder runs behind search from: (#56); rings, encounters, and the remaining person parameters are open |
 | [015](015-channel-acquisition-sources.md) | Channel Acquisition Sources | Accepted | One `search.modules.channels` call on a channel-name miss; a unique exact name resolves through `conversations.info`, anything else returns candidates; never a sweep source |
+| [016](016-deferred-contributions.md) | Deferred and Withdrawn Contributions | Proposed | `say at=` schedules through the drafts API after every ADR-013 step, the send time bound into approvals; `messages scheduled=true` lists; `say cancel=` withdraws; composer drafts never touched; edits made in Slack reported, never blocked |
 
 ### State — what persists and for how long
 
