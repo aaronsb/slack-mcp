@@ -169,10 +169,10 @@ always page; where the source cannot page, the output states the gap instead.
 
 - `drafts.delete`'s seven-digit padding is a quirk, not a contract; if Slack
   changes it, cancelling fails visibly.
-- Scheduling into a conversation where the person has an unsent composer
-  draft fails with `attached_draft_exists`. The probe could not run that case
-  without the person at the keyboard; the server reports the error and
-  suggests a thread.
+- A live run (2026-10-07) scheduled into a conversation holding the person's
+  unsent composer draft: the schedule succeeded, a cancel followed, and the
+  composer draft survived both unchanged. Should Slack ever answer
+  `attached_draft_exists`, the server reports it and suggests a thread.
 - Slack's real lead-time floor is near 60 seconds; the 2-minute bound sits
   above it, and a change on Slack's side surfaces as `time_in_past`.
 
