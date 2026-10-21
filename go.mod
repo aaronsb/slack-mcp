@@ -1,6 +1,6 @@
 module github.com/aaronsb/slack-mcp
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/bbalet/stopwords v1.0.0
